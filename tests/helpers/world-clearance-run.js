@@ -45,7 +45,12 @@ export async function rideAndGather(game, { id = 'tremola', search = '', fetchFn
         // The marker stones are put up on the nearest tiles and chosen nearest the bike first (Scenery.rankStones):
         // those drawn now, as the bike is here
         env.scenery.rankStones(env.lastBike);
-        for (const [key, held] of env.scenery.perTile) for (const mesh of held.group.children) if (mesh.name === 'stones') take(mesh, key);
+        // and the houses, boulders and tufts the window chooses for the bike here (Scenery.rankCaps), on every tile
+        env.scenery.rankCaps(env.lastBike);
+        for (const [key, held] of env.scenery.perTile) for (const mesh of held.group.children) if (/^(stones|tufts)$/.test(mesh.name)) take(mesh, key);
+        // (the window's boulders and houses are meshes over every tile: Scenery.drawBoulders, drawHouses)
+        for (const mesh of env.scenery.boulderGroup.children) if (mesh.count) take(mesh, 'window');
+        for (const mesh of env.scenery.houseGroup.children) take(mesh, 'window');
     }
     // The fixtures: the landmarks
     for (const t of sceneryOf(THREE, env.group)) if (t.type === 'landmark') things.push(t);

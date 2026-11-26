@@ -205,7 +205,9 @@ class Scenery {
     // (160 until a boulder was a broken block of 28 to 30 triangles, where it was 20: 110 of them cost what 160 did)
     static get BOULDER_CAP() { return 110; }
     // Of those, what the houses (4 000 triangles each, 5 parts) may take
-    static get HOUSE_TRIANGLES() { return 80000; }
+    // (77 000, what the windows spent while the tiles' build order chose the houses: chosen over the window, nearest
+    // first, they fill the cap to the last house, and at 80 000 drew about 10 fewer far trees on the Tremola's first km)
+    static get HOUSE_TRIANGLES() { return 77000; }
     // Marker stones: STONE_GAP_M apart along the road's edge, STONE_OUT_M past the verge, sunk STONE_SINK_M. Sawn
     // granite blocks stand along the edge of the pass roads in the photos, on a low kerb course of granite setts; no
     // yellow sign does. A block is STONE_WIDTH_M square and its top STONE_HEIGHT_M over its seat (in the photos
@@ -306,6 +308,8 @@ class Scenery {
     static get TUFT_TRIES() { return 6; }
     static get TUFT_SHARE() { return 0.5; }
     static get TUFT_SINK_M() { return 0.05; }
+    // How far the ground read with no road in mind may stand over a tuft's own: past it the place is another strand's
+    static get TUFT_UNDER_M() { return 0.3; }
     static get TREES_PER_TILE() { return 350; }
     // Metres of open ground a tree keeps from the road, the bench and any other road
     static get ROAD_CLEAR_M() { return 6; }
@@ -402,6 +406,13 @@ class Scenery {
         // Every tree of the window, at the level Scenery.rankTrees chose: an instanced mesh for each part of each
         // shape at each level, over all the tiles (WorldEnvironment puts the group under its scenery)
         this.forest = new THREE.Group();
+        // The window's boulders, one instanced mesh for each shape over every tile (Scenery.rankCaps): one for each
+        // tile with any put the window over its meshes' margin once the cap was shared over the window
+        this.boulderGroup = new THREE.Group();
+        this.boulderGroup.name = 'world-boulders';
+        // and its houses: one instanced mesh for each part of each model over every tile, and one mesh of their footings
+        this.houseGroup = new THREE.Group();
+        this.houseGroup.name = 'world-houses';
         this.forest.name = 'world-forest';
         this.forestMeshes = new Map();
         // The share of the window's trees drawn and the most drawn at the near level (the quality level: Game.thinTrees)
@@ -855,27 +866,22 @@ class Scenery {
 
     // The same in steps: a house, a row of tree cells, a stretch of marker stones, a tuft's row at a time
     *buildTileSteps(tile, cover, buildings, bike, markers = true) {
-        this.disposeTile(tile.key);
+        // (what the tile had stands until the new is made: disposeTile at the end)
         const group = new THREE.Group();
         group.name = `world-scenery-${tile.key}`;
         const rotation = new THREE.Quaternion();
         const up = new THREE.Vector3(0, 1, 0);
         const position = new THREE.Vector3();
         const scale = new THREE.Vector3();
-        const held = { trees: 0, house: 0, houseTriangles: 0 };
+        const held = { trees: 0, house: 0, houseTriangles: 0, boulders: 0, boulderTriangles: 0, tufts: 0, walls: [] };
 
-        // Trees take the triangles the houses leave, nearest first; the houses are the village and come first
-        const houseRoom = Math.max(0, Scenery.HOUSE_TRIANGLES - this.houseTriangles);
+        // The houses that may stand: every mapped building of the tile the ground takes, in the data's order. Which of
+        // them stand is the window's to choose (Scenery.rankCaps), not the order the tiles were built in
         const homes = this.set().houses;
-        const byHome = new Map();
-        const footings = [];
-        // The walls of the houses drawn, which the bike cannot ride through (houseAt)
-        const standing = [];
+        const houses = [];
         const footingCost = Scenery.FOOTING_TRIANGLES;
-        const nearest = buildings.slice().sort((p, q) => Math.hypot(p.x - bike.x, p.z - bike.z) - Math.hypot(q.x - bike.x, q.z - bike.z));
-        for (const b of nearest) {
+        for (const b of buildings) {
             yield;
-            if (Math.hypot(b.x - bike.x, b.z - bike.z) > Scenery.BUILDING_REACH_M) continue;
             if (this.ground.kindAt(b.x, b.z) !== 'runoff') continue;
             // The mapped footprint (b.w across its heading, b.d along it) stays off every road band
             if (this.roads && !this.roads.clearOfRoadBox(b.x, b.z, b.heading, b.d, b.w, Scenery.CLEAR_M.house)) continue;
@@ -884,7 +890,6 @@ class Scenery {
             const pose = this.housePose(b, homes[Math.floor(Scenery.hash(Math.round(b.x), Math.round(b.z), 8) * homes.length)]);
             const home = pose.home;
             const cost = Scenery.trianglesOf(home.parts) + footingCost;
-            if (this.houseInstances + held.house + home.parts.length > Scenery.BUILDING_CAP || held.houseTriangles + cost > houseRoom) continue;
             // The floor on the highest land under the walls, a footing down to the lowest (Scenery.footing)
             const walls = home.plain ? { x: b.x, z: b.z, heading: b.heading, along: b.d, across: b.w } : Scenery.wallRect(home, b.x, b.z, pose.turn, pose.scale[0], pose.centre);
             const foot = this.footing(walls);
@@ -896,17 +901,8 @@ class Scenery {
             position.x += b.x;
             position.z += b.z;
             position.y = foot.floor;
-            const list = byHome.get(home) || [];
-            list.push(new THREE.Matrix4().compose(position, rotation, scale));
-            byHome.set(home, list);
-            footings.push(foot);
-            standing.push(walls);
-            held.house += home.parts.length;
-            held.houseTriangles += cost;
+            houses.push({ x: b.x, z: b.z, home, matrix: new THREE.Matrix4().compose(position, rotation, scale), foot, walls, cost, parts: home.parts.length });
         }
-        for (const [home, matrices] of byHome) this.instanced(home.parts, matrices, `houses:${home.name}`, group);
-        // The footings of exactly the houses drawn, as one mesh in stone
-        if (footings.length) group.add(Scenery.footingMesh(footings, 'houses:footing'));
 
         // Every tree site of the tile is kept; Scenery.rankTrees chooses the ones drawn, over the whole window, nearest
         // the bike first. (The caps were taken here, in the order the tiles were built: a tile built while the far
@@ -922,43 +918,30 @@ class Scenery {
         held.treeSites = taken;
         held.trees = taken.length;
 
-        // Boulders on the rock and scree cells, as many as the cap leaves
-        const stones = this.boulderSites(tile, cover).sort((p, q) => Math.hypot(p.x - bike.x, p.z - bike.z) - Math.hypot(q.x - bike.x, q.z - bike.z)).slice(0, Math.max(0, Scenery.BOULDER_CAP - (this.boulderCount || 0)));
-        if (stones.length) {
-            // The tile's boulders are one of the shapes, by a hash of the tile, each turned and sized its own way: one
-            // instanced mesh for the tile, as before (a mesh for each shape put the window over its meshes' margin)
-            const matrices = stones.map((b) => {
-                rotation.setFromAxisAngle(up, b.turn);
-                position.set(b.x, b.y, b.z);
-                scale.set(b.size * 1.3, b.size * 0.8, b.size);
-                return new THREE.Matrix4().compose(position, rotation, scale);
-            });
-            const shape = Math.floor(Scenery.hash(tile.tx, tile.tz, 36) * Scenery.BOULDER_SHAPES);
-            this.instanced([Scenery.boulderPart(shape)], matrices, 'boulders', group);
-        }
-        held.boulders = stones.length;
-        held.boulderTriangles = stones.length * (stones.length ? Scenery.boulderPart(Math.floor(Scenery.hash(tile.tx, tile.tz, 36) * Scenery.BOULDER_SHAPES)).triangles : 0);
+        // The boulders on the rock and scree cells, each turned and sized its own way; the tile's are one of the
+        // shapes, by a hash of the tile (one instanced mesh for the tile: a mesh for each shape put the window over its
+        // meshes' margin). Which stand is the window's to choose (rankCaps)
+        const boulderShape = Math.floor(Scenery.hash(tile.tx, tile.tz, 36) * Scenery.BOULDER_SHAPES);
+        const boulders = this.boulderSites(tile, cover).map((b) => {
+            rotation.setFromAxisAngle(up, b.turn);
+            position.set(b.x, b.y, b.z);
+            scale.set(b.size * 1.3, b.size * 0.8, b.size);
+            return { x: b.x, z: b.z, matrix: new THREE.Matrix4().compose(position, rotation, scale) };
+        });
 
         // The marker stones of this tile, where it is near enough to have them
         held.stoneOn = markers;
         held.stoneSites = markers ? yield* this.plantStonesSteps(tile, group) : null;
         held.stones = 0;
 
-        // The tufts beside the ride, nearest the bike first
-        const tufts = (yield* this.tuftSitesSteps(tile)).sort((p, q) => Math.hypot(p.x - bike.x, p.z - bike.z) - Math.hypot(q.x - bike.x, q.z - bike.z)).slice(0, Math.max(0, Math.min(Scenery.TUFTS_PER_TILE, Scenery.TUFT_CAP - (this.tuftCount || 0))));
-        if (tufts.length) group.add(Scenery.tuftMesh(tufts));
-        held.tufts = tufts.length;
+        // The tufts beside the ride (the window chooses the ones drawn, nearest the bike first: rankCaps)
+        const tufts = yield* this.tuftSitesSteps(tile);
 
-        if (!group.children.length && !taken.length) return null;
-        this.boulderCount = (this.boulderCount || 0) + held.boulders;
-        this.tuftCount = (this.tuftCount || 0) + held.tufts;
-        this.triangles += held.boulderTriangles;
-        this.houseInstances += held.house;
-        this.houseTriangles += held.houseTriangles;
-        this.triangles += held.houseTriangles;
-        this.perTile.set(tile.key, { group, walls: standing, ...held });
-        // (counts every change of the houses that stand: WorldEnvironment.cameraFaces lists their walls)
-        this.stamp = (this.stamp || 0) + 1;
+        this.disposeTile(tile.key);
+        if (!group.children.length && !taken.length && !houses.length && !boulders.length && !tufts.length) return null;
+        this.perTile.set(tile.key, { group, ...held, candidates: { houses, boulders, boulderShape, tufts } });
+        this.capsDirty = true;
+        yield* this.rankCapsSteps(bike, true);
         if (held.stoneSites && held.stoneSites.length) this.rankStones(bike, true);
         if (taken.length) this.rankTrees(bike, true);
         return group;
@@ -1224,6 +1207,11 @@ class Scenery {
         this.tuftCount = (this.tuftCount || 0) - (held.tufts || 0);
         this.perTile.delete(key);
         this.stamp = (this.stamp || 0) + 1;
+        // (the room it gives up is the other tiles' again)
+        if (held.candidates) {
+            this.capsDirty = true;
+            this.rankCaps(this.capsBike, true);
+        }
         // The stones it gives up are another tile's to draw
         if (held.stones) this.rankStones(this.rankBike, true);
         if (held.trees) this.rankTrees(this.treeBike, true);
@@ -1290,6 +1278,229 @@ class Scenery {
         return mesh;
     }
 
+    // The middle of the TREE_RANK_M square a place is in: what the window's choices are measured from
+    static snapped(at) {
+        const m = Scenery.TREE_RANK_M;
+        return { x: (Math.floor(at.x / m) + 0.5) * m, z: (Math.floor(at.z / m) + 0.5) * m };
+    }
+
+    // The window's caps, chosen over every tile it holds, nearest the middle of the bike's square first: the houses
+    // within BUILDING_REACH_M while BUILDING_CAP and HOUSE_TRIANGLES have room, the BOULDER_CAP nearest boulders, and
+    // the tufts (the tiles nearest first, TUFTS_PER_TILE a tile at the most, TUFT_CAP in all). So the same window always holds the same
+    // houses, boulders and tufts, whatever order its tiles were built in (a tile built in steps finishes later than
+    // one built whole: WorldStreamer). Before, each tile took what room the tiles built before it had left. Read
+    // again when the tiles change and when the bike enters another square (rankTrees)
+    rankCaps(bike, force = false) {
+        // (a choice under way in steps finishes first: this one is made after it, capsDirty)
+        if (this.capsBusy) {
+            if (force) this.capsDirty = true;
+            return;
+        }
+        Scenery.drain(this.rankCapsSteps(bike, force));
+    }
+
+    // The same in steps, a tile's meshes at a time (a tile's scenery built in steps: buildTileSteps)
+    *rankCapsSteps(bike, force = false) {
+        if (!bike) return;
+        const at = Scenery.snapped(bike);
+        const cell = `${at.x},${at.z}`;
+        if (!force && !this.capsDirty && cell === this.capsCell) return;
+        this.capsCell = cell;
+        this.capsBike = at;
+        this.capsDirty = false;
+        const d = (x, z) => Math.hypot(x - at.x, z - at.z);
+        const order = (p, q) => p.d - q.d || p.x - q.x || p.z - q.z;
+        const tiles = [...this.perTile].filter(([, h]) => h.candidates);
+        const houses = [], boulders = [], tufts = [];
+        for (const [key, h] of tiles) {
+            yield;
+            h.candidates.houses.forEach((c, i) => houses.push({ key, i, c, x: c.x, z: c.z, d: d(c.x, c.z) }));
+            h.candidates.boulders.forEach((c, i) => boulders.push({ key, i, x: c.x, z: c.z, d: d(c.x, c.z) }));
+            h.candidates.tufts.forEach((c, i) => tufts.push({ key, i, x: c.x, z: c.z, d: d(c.x, c.z) }));
+        }
+        const chosen = new Map(tiles.map(([key]) => [key, { houses: [], boulders: [], tufts: [] }]));
+        yield;
+        houses.sort(order);
+        let instances = 0, triangles = 0;
+        for (const e of houses) {
+            if (e.d > Scenery.BUILDING_REACH_M) break;
+            if (instances + e.c.parts > Scenery.BUILDING_CAP || triangles + e.c.cost > Scenery.HOUSE_TRIANGLES) continue;
+            instances += e.c.parts;
+            triangles += e.c.cost;
+            chosen.get(e.key).houses.push(e.i);
+        }
+        yield;
+        boulders.sort(order);
+        for (const e of boulders.slice(0, Scenery.BOULDER_CAP)) chosen.get(e.key).boulders.push(e.i);
+        yield;
+        // (the tufts a tile at a time, its nearest tuft first: a tuft mesh for each tile a few were spread over put the
+        // window over its meshes' margin)
+        const tileNear = new Map();
+        for (const e of tufts) tileNear.set(e.key, Math.min(tileNear.has(e.key) ? tileNear.get(e.key) : Infinity, e.d));
+        tufts.sort((p, q) => tileNear.get(p.key) - tileNear.get(q.key) || (p.key < q.key ? -1 : p.key > q.key ? 1 : 0) || order(p, q));
+        let tuftsTaken = 0;
+        for (const e of tufts) {
+            if (tuftsTaken >= Scenery.TUFT_CAP) break;
+            const list = chosen.get(e.key).tufts;
+            if (list.length >= Scenery.TUFTS_PER_TILE) continue;
+            list.push(e.i);
+            tuftsTaken++;
+        }
+        let walls = false;
+        this.capsBusy = true;
+        try {
+            for (const [key, h] of tiles) {
+                // (a tile let go of meanwhile has nothing to draw)
+                if (this.perTile.get(key) !== h) continue;
+                if (this.applyCaps(h, chosen.get(key))) {
+                    walls = true;
+                    // (counts every change of the houses that stand: WorldEnvironment.cameraFaces lists their walls)
+                    this.stamp = (this.stamp || 0) + 1;
+                }
+                yield;
+            }
+        } finally {
+            this.capsBusy = false;
+        }
+        if (walls) this.stamp = (this.stamp || 0) + 1;
+        this.drawBoulders(boulders.slice(0, Scenery.BOULDER_CAP));
+        yield;
+        yield* this.drawHousesSteps(tiles, chosen);
+        // (the trees take the room the houses and boulders leave: Scenery.rankTrees)
+        this.treesDirty = true;
+    }
+
+    // One of each house model's parts, each boulder's shape and a tuft, as the window draws them (instanced, in their
+    // own materials), to compile their programs before the ride (Game.prewarmWorldScenery): the window's caps put a
+    // model in view first at any moment of a ride, and its program compiled then cost a frame of 230 ms (world-shot)
+    warmGroup() {
+        const group = new THREE.Group();
+        const far = new THREE.Matrix4().makeTranslation(0, -10000, 0);
+        // (and the plain hut and the block a big mapped wall is drawn as: Scenery.housePose, plain())
+        const homes = new Set([...this.set().houses, ...this.plain().houses, ...this.plain().walls]);
+        for (const home of homes) this.instanced(home.parts, [far], `warm:${home.name}`, group);
+        for (let shape = 0; shape < Scenery.BOULDER_SHAPES; shape++) this.instanced([Scenery.boulderPart(shape)], [far], 'warm:boulders', group);
+        group.add(Scenery.tuftMesh([{ x: 0, y: -10000, z: 0, size: 1, turn: 0, green: true }, { x: 0, y: -10000, z: 0, size: 1, turn: 0, green: false }]));
+        group.traverse((o) => { if (o.isMesh) { o.frustumCulled = false; o.castShadow = true; o.receiveShadow = true; } });
+        return group;
+    }
+
+    // The chosen houses of every tile into the window's meshes: a mesh for each part of each model, and one mesh of
+    // their footings in stone, made again when the houses drawn change (a mesh for each model of each tile with any put
+    // the window over its meshes' margin once the caps were shared over the window)
+    drawHouses(tiles, chosen) {
+        Scenery.drain(this.drawHousesSteps(tiles, chosen));
+    }
+
+    // The same in steps, a model at a time; the houses drawn stay until the new ones are made
+    *drawHousesSteps(tiles, chosen) {
+        const list = [];
+        for (const [key, h] of tiles) {
+            if (this.perTile.get(key) !== h || !h.candidates) continue;
+            for (const i of chosen.get(key).houses) list.push(h.candidates.houses[i]);
+        }
+        const sig = list.map(c => `${c.x},${c.z}`).join('|');
+        if (sig === this.housesSig) return;
+        const made = new THREE.Group();
+        const byHome = new Map();
+        for (const c of list) (byHome.get(c.home) || byHome.set(c.home, []).get(c.home)).push(c.matrix);
+        for (const [home, matrices] of byHome) {
+            this.instanced(home.parts, matrices, `houses:${home.name}`, made);
+            yield;
+        }
+        if (list.length) made.add(Scenery.footingMesh(list.map(c => c.foot), 'houses:footing'));
+        yield;
+        // (a choice made whole meanwhile is the one drawn)
+        if (sig === this.housesSig) {
+            made.traverse((o) => { if (o.isInstancedMesh) o.dispose(); else if (o.isMesh) o.geometry.dispose(); });
+            return;
+        }
+        this.housesSig = sig;
+        for (const mesh of [...this.houseGroup.children]) {
+            this.houseGroup.remove(mesh);
+            if (mesh.isInstancedMesh) mesh.dispose();
+            else mesh.geometry.dispose();
+        }
+        const meshes = [...made.children];
+        for (const mesh of meshes) {
+            mesh.castShadow = mesh.receiveShadow = true;
+            this.houseGroup.add(mesh);
+        }
+        if (meshes.length && this.onMeshes) this.onMeshes(meshes);
+    }
+
+    // The chosen boulders of every tile into the window's meshes, a mesh for each shape, nearest first
+    drawBoulders(chosen) {
+        const byShape = new Map();
+        for (const e of chosen) {
+            const h = this.perTile.get(e.key);
+            if (!h || !h.candidates) continue;
+            const shape = h.candidates.boulderShape;
+            (byShape.get(shape) || byShape.set(shape, []).get(shape)).push(h.candidates.boulders[e.i].matrix);
+        }
+        this.boulderMeshes = this.boulderMeshes || new Map();
+        const added = [];
+        for (let shape = 0; shape < Scenery.BOULDER_SHAPES; shape++) {
+            const list = byShape.get(shape) || [];
+            let mesh = this.boulderMeshes.get(shape);
+            if (!mesh && !list.length) continue;
+            if (!mesh) {
+                const part = Scenery.boulderPart(shape);
+                mesh = new THREE.InstancedMesh(part.geometry, part.material, Scenery.BOULDER_CAP);
+                mesh.name = 'boulders';
+                mesh.frustumCulled = false;
+                mesh.userData.world = 'scenery';
+                this.boulderMeshes.set(shape, mesh);
+                this.boulderGroup.add(mesh);
+                added.push(mesh);
+            }
+            list.forEach((m, i) => mesh.setMatrixAt(i, m));
+            mesh.count = list.length;
+            mesh.visible = list.length > 0;
+            mesh.instanceMatrix.needsUpdate = true;
+        }
+        if (added.length && this.onMeshes) this.onMeshes(added);
+    }
+
+    // A tile's chosen houses, boulders and tufts drawn, its meshes made again where the choice changed. True when its
+    // houses changed
+    applyCaps(h, pick) {
+        const sig = JSON.stringify(pick);
+        if (h.capSig === sig) return false;
+        const housesBefore = h.capSig ? JSON.stringify(JSON.parse(h.capSig).houses) : null;
+        h.capSig = sig;
+        const group = h.group;
+        for (const mesh of group.children.filter(o => /^tufts$/.test(o.name))) {
+            group.remove(mesh);
+            if (mesh.isInstancedMesh) mesh.dispose();
+            else mesh.geometry.dispose();
+        }
+        const added = [];
+        const c = h.candidates;
+        // The walls of the houses drawn, which the bike cannot ride through (houseAt; the houses themselves are drawn
+        // over the window: drawHouses)
+        const standing = [];
+        let parts = 0, houseTriangles = 0;
+        for (const i of pick.houses) {
+            const house = c.houses[i];
+            standing.push(house.walls);
+            parts += house.parts;
+            houseTriangles += house.cost;
+        }
+        const before = group.children.length;
+        if (pick.tufts.length) group.add(Scenery.tuftMesh(pick.tufts.map(i => c.tufts[i])));
+        added.push(...group.children.slice(before));
+        const boulderTriangles = pick.boulders.length ? pick.boulders.length * Scenery.boulderPart(c.boulderShape).triangles : 0;
+        this.houseInstances += parts - h.house;
+        this.houseTriangles += houseTriangles - h.houseTriangles;
+        this.triangles += houseTriangles + boulderTriangles - h.houseTriangles - (h.boulderTriangles || 0);
+        this.boulderCount = (this.boulderCount || 0) + pick.boulders.length - (h.boulders || 0);
+        this.tuftCount = (this.tuftCount || 0) + pick.tufts.length - (h.tufts || 0);
+        Object.assign(h, { house: parts, houseTriangles, walls: standing, boulders: pick.boulders.length, boulderTriangles, tufts: pick.tufts.length });
+        if (added.length && this.onMeshes) this.onMeshes(added);
+        return housesBefore !== JSON.stringify(pick.houses);
+    }
+
     // Draws the window's trees, each at its level. Of the trees of every tile, nearest the bike first: the share the
     // quality level draws, at most TREE_CAP, while the triangle cap has room for each at its far level after
     // TREE_NEAR_KEPT near trees' worth of it (the houses, the boulders and the stones come first). Then, out of the
@@ -1299,8 +1510,11 @@ class Scenery {
     // TREE_RANK_M the bike moves
     rankTrees(bike, force = false) {
         if (!bike) return;
+        // (from the middle of the bike's TREE_RANK_M square, so the trees drawn are the same whatever order the tiles
+        // came in and wherever in the square the bike was when they did)
+        bike = Scenery.snapped(bike);
         const last = this.treeBike;
-        if (!force && !this.treesDirty && last && Math.hypot(bike.x - last.x, bike.z - last.z) < Scenery.TREE_RANK_M) return;
+        if (!force && !this.treesDirty && last && last.x === bike.x && last.z === bike.z) return;
         this.treeBike = { x: bike.x, z: bike.z };
         this.treesDirty = false;
         // The tiles nearest first, and their trees until the cap is sure to be among them: a tile whose nearest point
@@ -1827,6 +2041,10 @@ class Scenery {
                     if (this.ground.kindAt(x, z) === 'road') continue;
                     const y = this.footY(x, z, near.segment.index);
                     if (y === null) continue;
+                    // Nor under another strand's shoulder or edge (a stacked hairpin's): the ground read with no road in
+                    // mind is that strand's there, over the tuft (tests/unit/world-clearance.test.js)
+                    const top = this.ground.groundY(x, z, null, false, this.tuftLoc || (this.tuftLoc = {}));
+                    if (Number.isFinite(top) && top - y > Scenery.TUFT_UNDER_M) continue;
                     sites.push({ x, y: y - Scenery.TUFT_SINK_M, z, size, turn: Scenery.hash(i, salt, 55) * Math.PI, green });
                 }
             }

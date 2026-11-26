@@ -2410,6 +2410,14 @@ class RoadMesh {
     // the sides with the bridge bit on every decked row, so the edge works leave those to the deck
     // `through` ([start, end]): the road goes on as a tube past its first or last row (no portal there)
     static sideStructures(sides, groundAt = null, roof = 6.5, footAt = null, guard = null, through = [false, false]) {
+        return RoadMesh.drain(RoadMesh.sideStructuresSteps(sides, groundAt, roof, footAt, guard, through));
+    }
+
+    // The same in steps: SIDE_STRUCTURE_STEP segments at a time, a tube's segment and its portals each one, then the
+    // parapets, the piers and each tube's lining (a long side road's structures took up to 16 ms in one)
+    static get SIDE_STRUCTURE_STEP() { return 12; }
+
+    static *sideStructuresSteps(sides, groundAt = null, roof = 6.5, footAt = null, guard = null, through = [false, false]) {
         const out = { positions: [], shades: [] };
         const colors = RoadMesh.COLORS;
         const drop = RoadMesh.PARAPET_DROP_M, D = RoadMesh.DECK_M, H = RoadMesh.PARAPET_H_M;
@@ -2444,8 +2452,10 @@ class RoadMesh {
         const runs = [];
         let run = null;
         for (let k = 0; k + 1 < sides.length; k++) {
+            if (k % RoadMesh.SIDE_STRUCTURE_STEP === RoadMesh.SIDE_STRUCTURE_STEP - 1) yield;
             const a = sides[k], b = sides[k + 1];
             if (a.bits & b.bits & 5) {
+                yield;
                 // The roof stays under any other road the tube passes beneath, by the deck's depth
                 const up = p => {
                     const over = guard ? guard.ceiling(p[0], p[2], p[1]) : null;
@@ -2489,7 +2499,9 @@ class RoadMesh {
         }
         RoadMesh.rails(out, rails.l, RoadMesh.PARAPET_W_M, H, colors.concrete);
         RoadMesh.rails(out, rails.r, RoadMesh.PARAPET_W_M, H, colors.concrete);
+        yield;
         const piers = RoadMesh.placePiers(out, runs, { groundAt, footAt, guard });
+        yield;
         // The lining of each tube run: metres along from the road's first row, metres in from its portals (none where
         // it goes on past the drawn rows), its rock on the side where the land outside stands higher. A side road is
         // seen from the ride, so it has its lining and no fittings
@@ -2515,6 +2527,7 @@ class RoadMesh {
                 };
                 const rock = sideRock(), gallery = (sides[first].bits & 5) === 4;
                 TubeLining.run(lining, rows, { gallery, rock, open: gallery ? -rock : 0, shotcrete: gallery, lod: 1, groundAt, run: [along[first], along[last]], fittings: false });
+                yield;
             }
         }
         return { parts: out.positions.length ? [out] : [], lining, piers, tubes, sides: sides.map((side, k) => (decked[k] ? { ...side, bits: side.bits | 2 } : side)) };

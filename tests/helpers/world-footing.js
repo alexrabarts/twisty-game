@@ -91,7 +91,8 @@ export function buildingsOf(things, { plinthOf = () => 0 } = {}) {
     for (const t of things) {
         if (t.type !== 'house' && t.type !== 'landmark') continue;
         if (t.name === 'houses:footing' || t.name.endsWith(':footing')) { footings.push(t); continue; }
-        const key = t.type === 'landmark' ? t.name : `${t.tile}|${t.name}|${t.index}`;
+        // (a house's parts share its place: an instance's index is the window's choice of the moment, Scenery.rankCaps)
+        const key = t.type === 'landmark' ? t.name : `${t.tile}|${t.name}|${t.x.toFixed(2)},${t.z.toFixed(2)}`;
         const g = groups.get(key) || { type: t.type, name: t.name, polys: [], low: Infinity, high: -Infinity };
         g.polys.push(t.poly);
         g.low = Math.min(g.low, t.y0);

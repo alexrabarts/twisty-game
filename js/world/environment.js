@@ -222,8 +222,15 @@ class WorldEnvironment {
         // (the stage's own share of the scenery's triangles: WorldLooks.viewOf `sceneryScale`)
         const view = stage && typeof WorldLooks !== 'undefined' ? WorldLooks.viewOf(stage.id) : {};
         this.scenery.stageScale = Number.isFinite(view.sceneryScale) ? view.sceneryScale : 1;
+        // (a mesh the window's caps add to a tile already drawn: Scenery.rankCaps)
+        this.scenery.onMeshes = meshes => meshes.forEach((mesh) => {
+            mesh.userData.skipCulling = true;
+            this.onMeshBuilt(mesh);
+        });
         this.scenery.landmarkModels = landmarks;
         this.sceneryGroup.add(this.scenery.forest);
+        this.sceneryGroup.add(this.scenery.boulderGroup);
+        this.sceneryGroup.add(this.scenery.houseGroup);
         this.triangleCount = 0;
         this.lastBike = { x: this.route.sample(this.startS, {}).x, z: this.route.sample(this.startS, {}).z };
 
@@ -241,7 +248,7 @@ class WorldEnvironment {
                 disposeTile: key => this.disposeTile(key),
                 buildRoad: (section, lod) => this.buildRoadSteps(section, lod),
                 disposeRoad: section => this.disposeRoad(section),
-                buildSide: (k, near) => this.buildSide(k, near),
+                buildSide: (k, near) => this.buildSideSteps(k, near),
                 sidePieces: k => this.sidePieces(k),
                 disposeSide: k => this.disposeSide(k)
             }
@@ -363,30 +370,39 @@ class WorldEnvironment {
     // mesh; the old mesh stays drawn until the new one replaces it
     *buildTileSteps(key, lod) {
         if (lod === 0 && this.data.tile(key)) {
+            // (the wall plans the cut reads made first, each in steps: wallPlansNear)
+            const [tx, tz] = key.split(',').map(Number), m = WorldData.TILE_M;
+            yield* this.wallPlansNear([tx * m, tz * m, (tx + 1) * m, (tz + 1) * m]);
             this.cutCache.delete(key);
             yield* this.cutsOfSteps(key);
             yield;
         }
-        this.buildTile(key, lod, lod === 0);
+        yield* this.landSteps(key, lod, lod === 0);
     }
 
     // `cutsMade`: the land's cut was made for this build already (buildTileSteps)
     buildTile(key, lod, cutsMade = false) {
+        return WorldStreamer.drain(this.landSteps(key, lod, cutsMade));
+    }
+
+    // The land's mesh in steps, a row of nodes at a time (TerrainMesh.buildSteps); the old mesh drawn until the new one
+    // replaces it
+    *landSteps(key, lod, cutsMade = false) {
         const tile = this.data.tile(key);
         const cover = this.data.cover(key);
+        // A carved cell inside the ride's band can hold a side road's height (a junction); drawn, it stays under the ride
+        // At full detail the land is cut to the retaining walls that cross the tile (cutsOf), made again with the tile
+        if (lod === 0 && !cutsMade) this.cutCache.delete(key);
+        const built = yield* TerrainMesh.buildSteps(tile, cover, lod, (x, y, z) => {
+            const low = this.rideSurfaceAt(x, z, y);
+            return low === null ? y : Math.min(y, low - TerrainMesh.SINK_M);
+        }, this.nearTile, lod === 0 ? this.cutsOf(key) : null, this.tubesNear(key));
         const old = this.tileMeshes.get(key);
         if (old) {
             this.tileGroup.remove(old.mesh);
             old.mesh.geometry.dispose();
             this.triangleCount -= old.triangles;
         }
-        // A carved cell inside the ride's band can hold a side road's height (a junction); drawn, it stays under the ride
-        // At full detail the land is cut to the retaining walls that cross the tile (cutsOf), made again with the tile
-        if (lod === 0 && !cutsMade) this.cutCache.delete(key);
-        const built = TerrainMesh.build(tile, cover, lod, (x, y, z) => {
-            const low = this.rideSurfaceAt(x, z, y);
-            return low === null ? y : Math.min(y, low - TerrainMesh.SINK_M);
-        }, this.nearTile, lod === 0 ? this.cutsOf(key) : null, this.tubesNear(key));
         built.mesh.userData.skipCulling = true;
         this.tileGroup.add(built.mesh);
         this.onMeshBuilt(built.mesh);
@@ -405,7 +421,7 @@ class WorldEnvironment {
             held.missing = held.missing.filter(m => m !== key);
             this.streamer.enqueue(`seam:${k}`, 0, () => {
                 const state = this.streamer.tiles.get(k);
-                if (state && this.tileMeshes.has(k) && this.data.tile(k)) this.buildTile(k, state.lod);
+                return state && this.tileMeshes.has(k) && this.data.tile(k) ? this.buildTileSteps(k, state.lod) : null;
             });
         }
         this.rebuildWaiting(key);
@@ -437,8 +453,7 @@ class WorldEnvironment {
                 if (kind === 'road' && held && this.roadMeshes.has(index)) return this.buildRoadSteps(this.streamer.sections[index], held.lod);
                 else if (kind === 'side' && this.sideMeshes.has(index)) {
                     const held = this.streamer.sides.get(index);
-                    this.disposeSide(index);
-                    this.buildSide(index, held ? held.near : '');
+                    return this.buildSideSteps(index, held ? held.near : '', true);
                 }
             });
         }
@@ -450,9 +465,11 @@ class WorldEnvironment {
         if (!old) return;
         this.rideWallCache.delete(index);
         this.faceStamp++;
-        this.streamer.enqueue(`walls:${index}`, 0, () => {
+        const env = this;
+        this.streamer.enqueue(`walls:${index}`, 0, function* () {
             const sign = runs => runs.map(run => run.key + run.points.map(p => `${Math.round(p[0] * 100)},${Math.round(p[2] * 100)}`).join(' ')).join('|');
-            if (sign(this.rideWalls(index).runs) !== sign(old.runs)) this.dropCuts(this.streamer.sections[index].bbox);
+            const plan = yield* env.rideWallsSteps(index);
+            if (sign(plan.runs) !== sign(old.runs)) env.dropCuts(env.streamer.sections[index].bbox);
         });
     }
 
@@ -468,7 +485,8 @@ class WorldEnvironment {
     }
 
     // The same in steps (Scenery.buildTileSteps, Scenery.setStonesSteps)
-    *buildScenerySteps(key, lod) {
+    // `again`: what stands on the tile is made again whole (restandScenery), not only its marker stones
+    *buildScenerySteps(key, lod, again = false) {
         if (lod > 1) {
             this.scenery.disposeTile(key);
             return;
@@ -477,7 +495,7 @@ class WorldEnvironment {
         if (!tile) return;
         // What stands is not built again when the tile's detail changes, but its marker stones stand on the nearest
         // tiles only (Scenery.setStones)
-        if (this.scenery.perTile.has(key)) {
+        if (this.scenery.perTile.has(key) && !again) {
             const [sx, sz] = key.split(',').map(Number), sm = WorldData.TILE_M;
             if (lod === 0) {
                 yield* this.wallPlansNear([sx * sm, sz * sm, (sx + 1) * sm, (sz + 1) * sm]);
@@ -522,6 +540,30 @@ class WorldEnvironment {
             this.sceneryGroup.add(group);
             this.onMeshBuilt(group);
         }
+    }
+
+    // What stands on the tiles round a box is made again, once, after what is still to arrive: it keeps clear of the
+    // side roads drawn and stands on the land as cut (Scenery.clear, WorldGround.kindAt, cutsOf), so a side road drawn
+    // or let go of, or the land cut again, after a tile's scenery was made changed what a tile would hold by the order
+    // they came in. Made again, the window holds the same whatever that order was
+    restandScenery(box, reach = 30) {
+        if (!box || !this.streamer) return;
+        const m = WorldData.TILE_M;
+        for (let tx = Math.floor((box[0] - reach) / m); tx <= Math.floor((box[2] + reach) / m); tx++) {
+            for (let tz = Math.floor((box[1] - reach) / m); tz <= Math.floor((box[3] + reach) / m); tz++) {
+                const key = `${tx},${tz}`;
+                if (!this.scenery.perTile.has(key)) continue;
+                this.streamer.enqueue(`scenery:${key}`, WorldEnvironment.LATER, () => {
+                    const current = this.streamer.tiles.get(key);
+                    return current && this.scenery.perTile.has(key) ? this.sceneryAgain(key, current.lod) : null;
+                });
+            }
+        }
+    }
+
+    *sceneryAgain(key, lod) {
+        yield* this.buildScenerySteps(key, lod, true);
+        if (!this.streamer.tiles.has(key)) this.scenery.disposeTile(key);
     }
 
     // Queues a tile's scenery step again (after it waited for side roads, or for a nearer tile that did)
@@ -618,14 +660,24 @@ class WorldEnvironment {
         }
     }
 
-    // Each row's gore read ahead, a row at a time, so rowsOf reads them kept (a road built in steps)
+    // Each row's gore read ahead, a row at a time, so rowsOf reads them kept (a road built in steps). The number of
+    // rows it read
     *goreRowsSteps(from, to) {
-        for (let i = Math.max(0, from - 1); i <= Math.min(this.route.points.length - 1, to + 1); i++) {
-            if (!this.goreRows || !this.goreRows.has(i)) {
-                yield* this.goreRowSteps(i);
-                yield;
-            }
+        const points = this.route.points;
+        let read = 0;
+        for (let i = Math.max(0, from - 1); i <= Math.min(points.length - 1, to + 1); i++) {
+            if (points[i].bits & 7 || (this.goreRows && this.goreRows.has(i))) continue;
+            yield* this.goreRowSteps(i);
+            read++;
+            yield;
         }
+        return read;
+    }
+
+    // The same until a pass reads none, so rowsOf follows with every row kept: a side road's chunk that arrives
+    // between two steps lets them all go (setSideEdges), and rowsOf then read a junction's row whole (20 ms)
+    *goreRowsKept(from, to) {
+        while ((yield* this.goreRowsSteps(from, to)) > 0);
     }
 
     rowsOf(from, to) {
@@ -818,8 +870,9 @@ class WorldEnvironment {
         while (b < last && S[b] - S[section.to] < WorldEnvironment.WALL_PLAN_M) b++;
         const missing = new Set();
         // The viaducts in these rows first (surveyViaducts): their rows are a structure's, and no wall stands on one
-        this.surveyViaducts(a, b, missing, index);
         yield* this.goreRowsSteps(a, b);
+        this.surveyViaducts(a, b, missing, index);
+        yield* this.goreRowsKept(a, b);
         const sides = RoadMesh.vergeSides(this.rowsOf(a, b), null, true);
         yield;
         const all = yield* RoadMesh.wallPlanSteps(sides, this.edgeFoot(missing), this.carriageways.guard(-1));
@@ -1434,6 +1487,8 @@ class WorldEnvironment {
         yield* this.goreRowsSteps(from, to);
         yield* this.wallPlansNear(section.bbox);
         yield* this.cutsNear(section.bbox);
+        // (again: a viaduct's survey in a plan made just now lets go of the rows next to it, surveyViaducts)
+        yield* this.goreRowsKept(from, to);
         const rows = this.tubeRows(this.rowsOf(from, to));
         const foot = this.edgeFoot(missing);
         yield;
@@ -1653,11 +1708,23 @@ class WorldEnvironment {
     // it goes on as: WorldEnvironment.sideOnward), read so a ramp that starts in one piece goes on in the next; only
     // this piece's own rows are returned
     holdSide(rows, before = [], after = []) {
+        return WorldStreamer.drain(this.holdSideSteps(rows, before, after));
+    }
+
+    // The same in steps, HOLD_SIDE_STEP rows at a time (a long side road's rows read whole took up to 38 ms)
+    static get HOLD_SIDE_STEP() { return 24; }
+
+    *holdSideSteps(rows, before = [], after = []) {
         if (before.length || after.length) {
             const ext = list => list.map(row => ({ ...row, ext: true }));
-            return this.holdSide([...ext(before), ...rows, ...ext(after)]).filter(row => !row.ext);
+            return (yield* this.holdSideSteps([...ext(before), ...rows, ...ext(after)])).filter(row => !row.ext);
         }
-        const under = rows.map(row => this.rideUnderRow(row));
+        const step = WorldEnvironment.HOLD_SIDE_STEP;
+        const under = [];
+        for (let i = 0; i < rows.length; i++) {
+            under.push(this.rideUnderRow(rows[i]));
+            if (i % step === step - 1) yield;
+        }
         if (under.every(y => y === null)) return rows;
         const lerp = (a, b, t) => {
             let turn = b.heading - a.heading;
@@ -1733,8 +1800,11 @@ class WorldEnvironment {
         // that leaves at a shallow angle has no verge toward the ride from the node on, and one that leaves square
         // keeps it; read row by row, the verge faded in over the row from the node and lay across the junction as a
         // pale strip)
-        const faces = out.map(row => {
-            if (!row.fill) return null;
+        const faces = [];
+        for (let i = 0; i < out.length; i++) {
+            const row = out[i];
+            if (i % step === step - 1) yield;
+            if (!row.fill) { faces.push(null); continue; }
             const flags = {};
             for (const [key, sign] of [['mouthL', -1], ['mouthR', 1]]) {
                 const ox = sign * Math.cos(row.heading), oz = -sign * Math.sin(row.heading);
@@ -1743,8 +1813,8 @@ class WorldEnvironment {
                 flags[key] = false;
                 for (let d = 0.5; d <= WorldEnvironment.SIDE_GORE_M; d += 0.5) if (inRide(x + ox * d, z + oz * d, row.y)) { flags[key] = true; break; }
             }
-            return flags;
-        });
+            faces.push(flags);
+        }
         const clear = (i, key) => {
             for (let d = 1; d < out.length; d++) for (const j of [i - d, i + d]) if (faces[j] && faces[j][key] !== null) return faces[j][key];
             return false;
@@ -2363,12 +2433,13 @@ class WorldEnvironment {
                 // After what is still to arrive (the chunks beside this one change the same tiles): once, at the end
                 this.streamer.enqueue(`cut:${key}`, WorldEnvironment.LATER, () => {
                     const state = this.streamer.tiles.get(key);
-                    if (state && state.lod === 0 && this.tileMeshes.has(key) && this.data.tile(key)) this.buildTile(key, 0);
+                    return state && state.lod === 0 && this.tileMeshes.has(key) && this.data.tile(key) ? this.buildTileSteps(key, 0) : null;
                 });
             }
         }
-        // and the ride's works that stand on that land (a slope's foot, a wall's)
+        // and the ride's works that stand on that land (a slope's foot, a wall's), and what stands on it
         this.reworkRoads(box, reach);
+        this.restandScenery(box, reach);
     }
 
     // The ride's sections within `reach` of a box are built again, once, after what is still to arrive
@@ -2688,17 +2759,71 @@ class WorldEnvironment {
     // pieces `near` names (WorldStreamer.sideNear: their indices in sidePieces, joined) at LOD0, the rest at LOD1
     // (drawSideRibbons)
     buildSide(k, near = '') {
+        return WorldStreamer.drain(this.buildSideSteps(k, near));
+    }
+
+    // The same in steps: each road's rows, each road, the edge works a row at a time; the old roads are let go and the
+    // new ones put in their place in the last step. `again`: the chunk is built
+    // again whole (its works, when a tile or a chunk under them came), its old roads drawn until then
+    *buildSideSteps(k, near = '', again = false) {
         // Only its LOD0 pieces changed (WorldStreamer.sideNear): its ribbons alone are built again
         const prior = this.sideMeshes.get(k);
-        if (prior && prior.userData.roads) {
+        if (prior && prior.userData.roads && !again) {
             this.drawSideRibbons(k, prior, near);
             return;
         }
-        this.disposeSide(k);
+        const stubEdges = this.graph.sideStubs();
+        // The rows of every road here, a road at a time (read before the chunk's old roads are let go: a chunk built
+        // again stays drawn until its new roads are ready)
+        const plans = [];
+        for (const edge of this.data.edges) {
+            yield;
+            if (edge.onRide || this.data.chunkOf(edge.first) !== k) continue;
+            const samples = this.graph.samples(edge.id);
+            if (!samples) continue;
+            let plain = WorldEnvironment.unwrap(Array.from(samples.x, (_, i) => ({ x: samples.x[i], y: samples.y[i], z: samples.z[i], heading: samples.heading[i], width: samples.width[i], bits: samples.flags[i], cls: edge.cls, i })));
+            if (plain.length < 2) continue;
+            plain = this.sideMouths(edge, plain);
+            const { rows, s0 } = this.fromRideEnd(edge, plain);
+            const node = stubEdges.get(edge.id);
+            const guard = this.carriageways.guard(edge.id);
+            let far = this.liftSide(rows);
+            let farS = s0;
+            if (node !== undefined) {
+                const stub = this.graph.stub(edge.id, node);
+                if (stub && stub.length > 1) {
+                    // The far ribbon goes on from the stub's last row: drawn under the stub as well, the two lay one
+                    // road twice in one plane (and its deck and parapets twice), which flickers
+                    const away = Math.hypot(far[0].x - stub[0].x, far[0].z - stub[0].z) <= Math.hypot(far[far.length - 1].x - stub[0].x, far[far.length - 1].z - stub[0].z);
+                    far = away ? far.slice(stub.length - 1) : far.slice(0, far.length - stub.length + 1);
+                    // (the rest of the edge and what it goes on as are read for the ramp past the ride's band)
+                    const flip = list => list.slice().reverse().map(row => ({ ...row, heading: row.heading + Math.PI }));
+                    const rest = away ? far.slice(1) : flip(far).slice(1);
+                    const onward = away ? this.sideOnward(edge, 'b') : flip(this.sideOnward(edge, 'a'));
+                    const stubPlain = this.sideMouths({ ...edge, a: node, b: -1 }, WorldEnvironment.unwrap(stub.map(p => ({ ...p, bits: p.flags, cls: edge.cls }))), true, false);
+                    const stubRows = yield* this.holdSideSteps(stubPlain, [], [...rest, ...onward]);
+                    let length = 0;
+                    for (let i = 1; i < stubRows.length; i++) length += Math.hypot(stubRows[i].x - stubRows[i - 1].x, stubRows[i].z - stubRows[i - 1].z);
+                    // The rest goes on from the stub's end, run away from the junction and measured from it
+                    if (!away) far = flip(far);
+                    farS = length;
+                    plans.push([stubRows, true, edge, guard, 0, [], [...rest, ...onward]]);
+                    if (far.length < 2) continue;
+                    plans.push([yield* this.holdSideSteps(far, stubPlain.slice(0, -1), onward), false, edge, guard, farS, stubPlain.slice(0, -1), onward]);
+                    continue;
+                }
+            }
+            if (far.length < 2) continue;
+            const before = this.sideOnward(edge, 'a'), after = this.sideOnward(edge, 'b');
+            plans.push([yield* this.holdSideSteps(far, before, after), false, edge, guard, farS, before, after]);
+        }
+        // (and the land's cut under the chunk, which its works read: cutsNear)
+        const chunkBox = this.data.manifest.chunks[k] && this.data.manifest.chunks[k].bbox;
+        yield* this.wallPlansNear(chunkBox);
+        yield* this.cutsNear(chunkBox);
         const group = new THREE.Group();
         group.name = `world-side-${k}`;
         const edgesHere = [];
-        const stubEdges = this.graph.sideStubs();
         let triangles = 0;
         const missing = new Set();
         const sides = [], structures = [];
@@ -2719,7 +2844,7 @@ class WorldEnvironment {
         // (the tubes' lining of every road here, one mesh: TubeLining)
         const lining = TubeLining.parts();
         // (`before` and `after`: the rows the road goes on as past its ends, so a tube that runs on past one has no portal there)
-        const draw = (rows, stub, edge, guard, s0 = 0, before = [], after = []) => {
+        const draw = function* (rows, stub, edge, guard, s0 = 0, before = [], after = []) {
             // Where the road goes on as another edge of another width, both end on one line at the node: its end row
             // takes the heading half way to the onward row's. Each ended square to its own heading, and at a node where
             // the road bends and narrows the two ribbons left a wedge open between them (the summit's hole, 0.5 m, where
@@ -2740,7 +2865,7 @@ class WorldEnvironment {
             const road = new THREE.Group();
             road.name = stub ? 'world-road-stub' : 'world-road-side';
             const through = [!!(before.length && before[before.length - 1].bits & 5), !!(after.length && after[0].bits & 5)];
-            const built = RoadMesh.sideStructures(RoadMesh.vergeSides(rows, this.sideHold(edge.id)), options.groundAt, options.roof, options.footAt, guard, through);
+            const built = yield* RoadMesh.sideStructuresSteps(RoadMesh.vergeSides(rows, this.sideHold(edge.id)), options.groundAt, options.roof, options.footAt, guard, through);
             Object.assign(road.userData, { sides: built.sides, structures: built.parts, piers: built.piers, tubes: built.tubes, through, rows, stub, edge: edge.id, s0 });
             // The physics rides the road as it is drawn (held at the ride's height in a junction, on its ramp past it)
             edgesHere.push({ x: rows.map(row => row.x), z: rows.map(row => row.z), y: rows.map(row => row.y), width: rows.map(row => row.width) });
@@ -2754,46 +2879,13 @@ class WorldEnvironment {
             group.add(road);
             roads.push(road);
         };
-        this.data.edges.forEach((edge) => {
-            if (edge.onRide || this.data.chunkOf(edge.first) !== k) return;
-            const samples = this.graph.samples(edge.id);
-            if (!samples) return;
-            let plain = WorldEnvironment.unwrap(Array.from(samples.x, (_, i) => ({ x: samples.x[i], y: samples.y[i], z: samples.z[i], heading: samples.heading[i], width: samples.width[i], bits: samples.flags[i], cls: edge.cls, i })));
-            if (plain.length < 2) return;
-            plain = this.sideMouths(edge, plain);
-            const { rows, s0 } = this.fromRideEnd(edge, plain);
-            const node = stubEdges.get(edge.id);
-            const guard = this.carriageways.guard(edge.id);
-            let far = this.liftSide(rows);
-            let farS = s0;
-            if (node !== undefined) {
-                const stub = this.graph.stub(edge.id, node);
-                if (stub && stub.length > 1) {
-                    // The far ribbon goes on from the stub's last row: drawn under the stub as well, the two lay one
-                    // road twice in one plane (and its deck and parapets twice), which flickers
-                    const away = Math.hypot(far[0].x - stub[0].x, far[0].z - stub[0].z) <= Math.hypot(far[far.length - 1].x - stub[0].x, far[far.length - 1].z - stub[0].z);
-                    far = away ? far.slice(stub.length - 1) : far.slice(0, far.length - stub.length + 1);
-                    // (the rest of the edge and what it goes on as are read for the ramp past the ride's band)
-                    const flip = list => list.slice().reverse().map(row => ({ ...row, heading: row.heading + Math.PI }));
-                    const rest = away ? far.slice(1) : flip(far).slice(1);
-                    const onward = away ? this.sideOnward(edge, 'b') : flip(this.sideOnward(edge, 'a'));
-                    const stubPlain = this.sideMouths({ ...edge, a: node, b: -1 }, WorldEnvironment.unwrap(stub.map(p => ({ ...p, bits: p.flags, cls: edge.cls }))), true, false);
-                    const stubRows = this.holdSide(stubPlain, [], [...rest, ...onward]);
-                    let length = 0;
-                    for (let i = 1; i < stubRows.length; i++) length += Math.hypot(stubRows[i].x - stubRows[i - 1].x, stubRows[i].z - stubRows[i - 1].z);
-                    // The rest goes on from the stub's end, run away from the junction and measured from it
-                    if (!away) far = flip(far);
-                    farS = length;
-                    draw(stubRows, true, edge, guard, 0, [], [...rest, ...onward]);
-                    if (far.length < 2) return;
-                    draw(this.holdSide(far, stubPlain.slice(0, -1), onward), false, edge, guard, farS, stubPlain.slice(0, -1), onward);
-                    return;
-                }
-            }
-            if (far.length < 2) return;
-            const before = this.sideOnward(edge, 'a'), after = this.sideOnward(edge, 'b');
-            draw(this.holdSide(far, before, after), false, edge, guard, farS, before, after);
-        });
+        // (the chunk's old roads stay drawn and ridden while the new ones are made, a road at a time; they are let go
+        // and the new ones put in their place in one step at the end, so neither the physics nor the eye ever meets the
+        // chunk without its roads)
+        for (const args of plans) {
+            yield* draw.call(this, ...args);
+            yield;
+        }
         // The edge works of every side road here, one mesh: its retaining walls, decks and tubes (a side road is seen
         // from afar at LOD1, and aprons for every one cost the window's meshes and the queue's time); built again when
         // a tile under them arrives
@@ -2804,8 +2896,10 @@ class WorldEnvironment {
         const foot = this.edgeFoot(missing, { aprons: false });
         const ends = box ? this.rideWallEnds(box, WorldEnvironment.WALL_JOIN_M + 60, missing) : [];
         foot.joined = (x, y, z) => ends.some(end => { const d = Math.hypot(end.p[0] - x, end.p[2] - z); return d < WorldEnvironment.WALL_JOIN_M && d > 0.05 && Math.abs(end.p[1] - y) <= 1; });
-        triangles += RoadMesh.addEdgeWorks(group, sides, foot, structures, this.carriageways, walls => this.wallJoins(walls, box, missing));
+        triangles += yield* RoadMesh.addEdgeWorksSteps(group, sides, foot, structures, this.carriageways, walls => this.wallJoins(walls, box, missing));
         triangles += TubeLining.addMeshes(group, lining);
+        yield;
+        this.disposeSide(k);
         // The land is cut to their walls (setSideWalls) and to their tubes (setSideTubes)
         this.setSideWalls(k, group.userData.walls || []);
         this.setSideTubes(k, roads.flatMap(road => road.userData.tubes || []));
@@ -2831,6 +2925,8 @@ class WorldEnvironment {
         // and those built before its roads were drawn pave the junctions with them now (edgeFoot `gore` reads the
         // side roads as they are drawn, which a section built first could not): the browser builds the ride first
         this.reworkRoads(box);
+        // and what stands beside them keeps clear of them
+        this.restandScenery(box);
     }
 
     // The ribbons of a side chunk's roads (buildSide): each road's rows in the pieces `near` names (WorldStreamer.sideNear:
@@ -2903,6 +2999,7 @@ class WorldEnvironment {
         this.ground.setSideEdges([...this.sideEdges.values()].flat());
         // (a tube no longer drawn cuts no land)
         this.setSideTubes(k, []);
+        this.restandScenery(this.data.manifest.chunks[k] && this.data.manifest.chunks[k].bbox);
     }
 
     // The boxes of the ride's tunnels and galleries (TerrainMesh.tubeBox), made once: each segment between two rows of
@@ -3018,8 +3115,11 @@ class WorldEnvironment {
             if (!this.tileMeshes.has(key) || !this.streamer) continue;
             this.streamer.enqueue(`tube:${key}`, WorldEnvironment.LATER, () => {
                 const state = this.streamer.tiles.get(key);
-                if (state && this.tileMeshes.has(key) && this.data.tile(key)) this.buildTile(key, state.lod);
+                return state && this.tileMeshes.has(key) && this.data.tile(key) ? this.buildTileSteps(key, state.lod) : null;
             });
+            // (and what stands on that land stands on it as it is now)
+            const [tx, tz] = key.split(',').map(Number);
+            this.restandScenery([tx * m + 1, tz * m + 1, (tx + 1) * m - 1, (tz + 1) * m - 1], 0);
         }
     }
 
@@ -3038,6 +3138,10 @@ class WorldEnvironment {
             this.placed = false;
             this.streamer.releasePlacing();
         }
+        // The window's caps chosen again when the bike enters another square or the tiles change, as a task in steps
+        // (Scenery.rankCapsSteps): made at once on the frame the square changed it took up to 110 ms
+        const square = Scenery.snapped(position), key = `${square.x},${square.z}`;
+        if (this.scenery.capsDirty || key !== this.scenery.capsCell) this.streamer.enqueue('caps:window', 0, () => this.scenery.rankCapsSteps(position, false));
         this.streamer.pump(budgetMs);
         this.scenery.rankStones(position);
         this.scenery.rankTrees(position);

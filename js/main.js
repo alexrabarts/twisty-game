@@ -460,6 +460,7 @@ class Game {
             weatherSystem: this.weatherSystem || null
         });
         this.prewarmWorldWeather();
+        this.prewarmWorldScenery();
 
         this.worldRun = new WorldRun(this.environment.route, this.environment.stationGates, this.environment.physics);
         // (a road overhead, and the roof of a tunnel or gallery: WorldEnvironment.tubeRoofY)
@@ -985,6 +986,35 @@ class Game {
     // The weather down the ride changes programs when it comes: its particles are new ones, and the headlight it
     // switches on is a light every lit material is compiled for. Both are compiled now, not on the frame it starts
     // to rain
+    // Every house model, boulder shape and tuft the window's caps may put in view later (Scenery.warmGroup), drawn once
+    // into the frame and the sun's shadow, behind the loading screen: a model first drawn in a ride compiled its
+    // programs on that frame (world-shot: 230 ms)
+    prewarmWorldScenery() {
+        const scenery = this.environment && this.environment.scenery;
+        if (!this.graphics || !this.graphics.renderer || !scenery || !scenery.warmGroup) return;
+        const group = scenery.warmGroup();
+        // (in the world's own group and with the haze, as the scenery is drawn: a program's key counts the haze)
+        const parent = this.environment.sceneryGroup || this.scene;
+        parent.add(group);
+        if (typeof LandShade !== 'undefined' && this.environment.isWorld) LandShade.hazeTree(group);
+        // (with the headlight on and off: a program counts the lights in view, and the ride switches it with the look)
+        const light = this.headlight, was = light ? light.visible : null;
+        try {
+            this.graphics.render(this.scene, this.camera);
+            if (light) {
+                light.visible = !was;
+                this.graphics.render(this.scene, this.camera);
+            }
+        } finally {
+            if (light) light.visible = was;
+            parent.remove(group);
+            group.traverse((o) => {
+                if (o.isInstancedMesh) o.dispose();
+                else if (o.isMesh) o.geometry.dispose();
+            });
+        }
+    }
+
     prewarmWorldWeather() {
         if (!this.graphics || !this.graphics.renderer) return;
         const shown = [this.headlight, ...Object.values(this.weatherSystem ? this.weatherSystem.systems : {}).map(system => system.points)]

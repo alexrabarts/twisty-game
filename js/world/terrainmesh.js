@@ -288,6 +288,11 @@ class TerrainMesh {
     // Returns {at(i, j)} the height of node (i, j) for i, j from -`margin` to 64 + `margin`, and `lowered`, a Map from
     // a node of the tile (j * 65 + i) to its lowered height
     static laidBack(tile, near = null, margin = 0) {
+        return TerrainMesh.drain(TerrainMesh.laidBackSteps(tile, near, margin));
+    }
+
+    // The same in steps, a row of nodes at a time
+    static *laidBackSteps(tile, near = null, margin = 0) {
         if (near && !near.ring) near = TerrainMesh.ring(tile, near);
         const n = WorldData.TILE_N, cells = n - 1, c = WorldData.CELL_M, zones = WorldData.ZONE;
         const K = TerrainMesh.LAY_REACH, S = TerrainMesh.LAY_SLOPE, hold = TerrainMesh.LAY_HOLD, batter = RoadMesh.BATTER;
@@ -295,6 +300,7 @@ class TerrainMesh {
         const raw = new Float32Array(count), fixed = new Uint8Array(count);
         const q = {};
         for (let j = -pad; j <= cells + pad; j++) {
+            if (j % 8 === 0) yield;
             for (let i = -pad; i <= cells + pad; i++) {
                 const at = (j + pad) * span + i + pad;
                 TerrainMesh.node(tile, i, j, near, q);
@@ -317,6 +323,7 @@ class TerrainMesh {
         // the fill under one (`fill`)
         const over = new Float32Array(count).fill(Infinity), under = new Float32Array(count).fill(-Infinity), fill = new Float32Array(count).fill(-Infinity);
         for (let j = 0; j < span; j++) {
+            if (j % 8 === 0) yield;
             for (let i = 0; i < span; i++) {
                 if (!fixed[j * span + i] ) continue;
                 const h = raw[j * span + i];
@@ -335,6 +342,7 @@ class TerrainMesh {
         for (let pass = 0; pass < K; pass++) {
             let moved = false;
             for (let j = 0; j < span; j++) {
+                if (j % 32 === 0) yield;
                 for (let i = 0; i < span; i++) {
                     const at = j * span + i;
                     let y = now[at];
@@ -420,7 +428,7 @@ class TerrainMesh {
         const W = 4;
         // The land the walls stand in is the land laid back (TerrainMesh.laidBack): what a wall's levelling reads and
         // lowers further
-        const laid = TerrainMesh.laidBack(tile, near, W);
+        const laid = yield* TerrainMesh.laidBackSteps(tile, near, W);
         yield;
         const none = () => { if (!laid.lowered.size) return null; const only = new Map(); only.lowered = laid.lowered; return only; };
         if (!runs || !runs.length) return none();
@@ -1305,6 +1313,11 @@ class TerrainMesh {
     // `cuts` (TerrainMesh.cuts) are the full-detail triangles cut to the retaining walls: drawn at LOD0 in place of the
     // nodes' own.
     static build(tile, cover, lod, holdY = null, near = null, cuts = null, tubes = null) {
+        return TerrainMesh.drain(TerrainMesh.buildSteps(tile, cover, lod, holdY, near, cuts, tubes));
+    }
+
+    // The same in steps, a row of nodes at a time (WorldStreamer)
+    static *buildSteps(tile, cover, lod, holdY = null, near = null, cuts = null, tubes = null) {
         if (lod !== 0) cuts = null;
         if (near && !near.ring) near = TerrainMesh.ring(tile, near);
         const n = WorldData.TILE_N;
@@ -1330,6 +1343,7 @@ class TerrainMesh {
         const grid = TerrainMesh.colours(tile, cover);
         const linear = [0, 0, 0];
         for (let b = 0; b < side; b++) {
+            yield;
             for (let a = 0; a < side; a++) {
                 const i = a * stride, j = b * stride;
                 const zone = tile.zones[j * n + i];
@@ -1347,6 +1361,7 @@ class TerrainMesh {
         let indices = new Uint32Array(cells * cells * 6 + 4 * cells * 6 + crowns.length * sides * 3);
         let at = 0;
         for (let b = 0; b < cells; b++) {
+            if (b % 8 === 0) yield;
             for (let a = 0; a < cells; a++) {
                 const v00 = b * side + a, v10 = v00 + 1, v01 = v00 + side, v11 = v01 + 1;
                 const id = (b * cells + a) * 2;
@@ -1361,7 +1376,9 @@ class TerrainMesh {
         if (cuts) {
             const add = (x, y, z, colour) => { extra.positions.push(x, y, z); extra.shades.push(colour[0], colour[1], colour[2]); return vertexCount + extra.positions.length / 3 - 1; };
             const mix = [0, 0, 0];
+            let cutCount = 0;
             for (const record of cuts.values()) {
+                if (++cutCount % 64 === 0) yield;
                 const own = record.nodes.map(([i, j]) => j * side + i);
                 const nodeY = own.map(v => positions[v * 3 + 1]);
                 const colourOf = vertex => {
@@ -1453,8 +1470,10 @@ class TerrainMesh {
         // A coarser tile's skirt reaches down to its edge as the tile beside it draws it laid back at full detail
         // (TerrainMesh.laidBack lowers the same nodes there): hung from the nodes' own heights only, it ended over
         // the lowered edge and the rider saw through the seam, 700 m off
-        const laidEdge = lod > 0 ? TerrainMesh.laidBack(tile, near).lowered : null;
-        edges.forEach((edge, e) => {
+        const laidEdge = lod > 0 ? (yield* TerrainMesh.laidBackSteps(tile, near)).lowered : null;
+        for (let e = 0; e < edges.length; e++) {
+            const edge = edges[e];
+            yield;
             const first = side * side + e * side;
             for (let k = 0; k < side; k++) {
                 const from = edge(k);
@@ -1482,7 +1501,7 @@ class TerrainMesh {
                 indices[at++] = a; indices[at++] = c; indices[at++] = b;
                 indices[at++] = b; indices[at++] = c; indices[at++] = d;
             }
-        });
+        }
         // The land's triangles first (the nodes' own, then the cut ones), then the skirts and the closing faces
         const gridLand = cells * cells * 6 - (cuts ? cuts.size * 3 : 0);
         let landCount = gridLand;
@@ -1592,7 +1611,9 @@ class TerrainMesh {
             const l = Math.hypot(nx, ny, nz) || 1;
             lit[v * 3] = nx / l; lit[v * 3 + 1] = ny / l; lit[v * 3 + 2] = nz / l;
         }
+        let smoothCount = 0;
         for (const [v, own, w] of extra.smooth) {
+            if (++smoothCount % 4096 === 0) yield;
             let nx = 0, ny = 0, nz = 0;
             for (let k = 0; k < 3; k++) { nx += w[k] * lit[own[k] * 3]; ny += w[k] * lit[own[k] * 3 + 1]; nz += w[k] * lit[own[k] * 3 + 2]; }
             const l = Math.hypot(nx, ny, nz) || 1;

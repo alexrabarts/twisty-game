@@ -879,7 +879,8 @@ describe('Scenery', () => {
         const scenery = new Scenery(ground, data, levelled());
         scenery.buildTile(tile, forest, [], { x: 100, z: 100 });
         const before = scenery.forest.children.filter(m => m.userData.treeLevel === 'near').map(m => Array.from(m.instanceMatrix.array.slice(0, m.count * 16))).flat();
-        scenery.rankTrees({ x: 100, z: 100 + Scenery.TREE_RANK_M / 2 });
+        // (within the bike's TREE_RANK_M square nothing is chosen again: the square's middle is the place, Scenery.snapped)
+        scenery.rankTrees({ x: 100, z: 100 + Scenery.TREE_RANK_M / 2 - 1 });
         expect(scenery.treeBike.z).toBe(100);
         scenery.rankTrees({ x: 100, z: 220 });
         const after = scenery.forest.children.filter(m => m.userData.treeLevel === 'near').map(m => Array.from(m.instanceMatrix.array.slice(0, m.count * 16))).flat();
@@ -917,14 +918,14 @@ describe('Scenery', () => {
         const houses = Array.from({ length: 80 }, (_, i) => ({ x: 200 + (i % 10) * 20, z: 50 + Math.floor(i / 10) * 20, w: 8, d: 10, heading: 0.3, h: 6, kind: 1 }));
         houses.push({ x: 100, z: 100, w: 8, d: 10, heading: 0, h: 6, kind: 1 }, { x: 5000, z: 5000, w: 8, d: 10, heading: 0, h: 6, kind: 1 });
         const group = scenery.buildTile(tile, null, houses, { x: 200, z: 50 });
-        const meshes = group.children.filter(m => m.name.startsWith('houses:') && m.name !== 'houses:footing');
+        const meshes = scenery.houseGroup.children.filter(m => m.name.startsWith('houses:') && m.name !== 'houses:footing');
         // A shape of several parts is one mesh for each part, with the same name and count
         const placed = [...new Map(meshes.map(m => [m.name, m.count])).values()].reduce((n, c) => n + c, 0);
         expect(placed).toBeGreaterThan(0);
         expect(placed).toBeLessThanOrEqual(houses.length - 2);
         expect(scenery.houseInstances).toBeLessThanOrEqual(Scenery.BUILDING_CAP);
         // Each house has its footing, from under the land (flat at 1000 here) up into the walls; the floor is on the land
-        const footing = group.children.find(m => m.name === 'houses:footing');
+        const footing = scenery.houseGroup.children.find(m => m.name === 'houses:footing');
         expect(footing.material).toBe(RoadMesh.stoneMaterial());
         expect(footing.userData.footings).toHaveLength(placed);
         const body = new THREE.Matrix4();
@@ -964,7 +965,7 @@ describe('Scenery', () => {
         const matrix = new THREE.Matrix4();
         const corner = new THREE.Vector3();
         let drawn = 0;
-        for (const mesh of group.children.filter(m => m.name.startsWith('houses:') && m.name !== 'houses:footing')) {
+        for (const mesh of scenery.houseGroup.children.filter(m => m.name.startsWith('houses:') && m.name !== 'houses:footing')) {
             mesh.geometry.computeBoundingBox();
             const box = mesh.geometry.boundingBox;
             for (let i = 0; i < mesh.count; i++) {
@@ -984,7 +985,7 @@ describe('Scenery', () => {
         }
         // The hut (the shed's footprint is too small for a house) is two parts, walls and roof
         expect(drawn).toBe(houses.length + 1);
-        expect(group.children.filter(m => m.name === 'houses:plain_hut').reduce((n, m) => n + m.count, 0)).toBe(2);
+        expect(scenery.houseGroup.children.filter(m => m.name === 'houses:plain_hut').reduce((n, m) => n + m.count, 0)).toBe(2);
     });
 
     test('marker stones stand along a sharp drop, on the side it falls, each in the ground at its own place', () => {

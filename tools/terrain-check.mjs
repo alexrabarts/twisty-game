@@ -6703,7 +6703,7 @@ async function camWallRide(placeSource, pilotSource, apex, mode, setup, beforeM,
         const take = (kind, o) => { if (o.isMesh && o.visible) { o.userData.camWall = kind; targets.push(o); } };
         for (const group of [env.roadGroup, env.sideGroup]) if (group) group.traverse(o => take(o.name === 'road-ribbon' || o.name === 'road-side' ? 'road' : 'works', o));
         for (const held of env.tileMeshes.values()) take('land', held.mesh);
-        for (const held of env.scenery.perTile.values()) held.group.traverse(o => { if (String(o.name).startsWith('houses:')) take('house', o); });
+        env.scenery.houseGroup.traverse(o => { if (String(o.name).startsWith('houses:')) take('house', o); });
     };
     // The first thing between a and b, from either side: its kind, or null
     const between = (a, b, short) => {
@@ -8712,14 +8712,11 @@ WORLD['world-stop-shots'] = async (page) => {
 // world-steps: every streaming step of a ride, timed. The land is streamed along the stage every STEPS_M as the ride
 // does (the streamer's own budget a frame), and each step is timed with its parts (the rows, the wall plans, the land's
 // cut, the land, the scenery). A step is what one frame's pump ran of one task: a whole build, or a slice of a build in
-// steps. The steps of a road section or a tile's scenery (built in steps: WorldStreamer) are about 12 ms at the most;
-// it fails on one over STEPS_MOST_MS,
-// and on any step over STEPS_ANY_MS, which with the frame's own work makes a frame over 50 ms.
+// steps (WorldStreamer). Every build is taken in steps of about 12 ms at the most; it fails on any step over
+// STEPS_MOST_MS.
 //   node tools/terrain-check.mjs world-steps --world tremola --gpu [--every 1] [--parts deep]
 const STEPS_M = 1;
-const STEPS_MOST_MS = 15;
-const STEPS_ANY_MS = 38;
-const STEPPED = /^(road:|works:road:|scenery:)/;
+const STEPS_MOST_MS = 16;
 WORLD_PROBES.push('world-steps');
 WORLD['world-steps'] = async (page) => page.evaluate(async (every, deep) => {
     const env = game.environment, route = env.route;
@@ -8739,7 +8736,11 @@ WORLD['world-steps'] = async (page) => page.evaluate(async (every, deep) => {
     if (deep) {
         for (const m of ['footY', 'stonePlace', 'wallRuns', 'hairpinRuns', 'wetUnder', 'clear']) wrap(env.scenery, m, `scenery.${m}`);
         for (const m of ['tileHeight', 'groundY', 'sideRoadY', 'kindAt']) wrap(env.ground, m, `ground.${m}`);
-        for (const m of ['surveyViaducts', 'mouthCut', 'goreRow', 'wallRunsNear']) wrap(env, m, `env.${m}`);
+        for (const m of ['surveyViaducts', 'mouthCut', 'goreRow', 'wallRunsNear', 'holdSide', 'sideMouths', 'fromRideEnd', 'liftSide', 'drawSideRibbons', 'rideWallEnds', 'wallJoins', 'sideOnward', 'edgeFoot', 'setSideWalls', 'setSideTubes', 'clipHorizon', 'tubesNear', 'rideSurfaceAt']) wrap(env, m, `env.${m}`);
+        for (const m of ['sideStructures', 'vergeSides', 'sideRoad', 'ribbonMesh']) wrap(RoadMesh, m, `road.${m}`);
+        for (const m of ['grid', 'build']) wrap(Horizon, m, `horizon.${m}`);
+        for (const m of ['clumps', 'colours', 'laidBack', 'ring', 'skirtDepth', 'tubeBox']) wrap(TerrainMesh, m, `land.${m}`);
+        for (const m of ['tubesNear', 'hasTileData']) wrap(env, m, `env.${m}`);
     }
     // A step is what one pump ran of one task: a whole build, or the slice of a build in steps (WorldStreamer.pump)
     const tasks = [];
@@ -8829,7 +8830,7 @@ WORLD['world-shot'] = async (page) => {
     const out = option('out') || SHOT_OUT;
     mkdirSync(out, { recursive: true });
     const tag = `${option('tag') || option('world') || 'tremola'}${phone ? '-phone' : ''}`;
-    const moments = (option('fly') || '0,1,2,3,4.5,6,7.5,9,10').split(',').map(Number);
+    const moments = (option('fly') || '0,1,2,3,4,5,6,8,10,12,14,16,18').split(',').map(Number);
     await page.addStyleTag({ content: '#finishBanner, .modal-backdrop { visibility: hidden !important; }' });
     // --hold x,z,upM,bearing,pitch,hfov tries another hold for the stop (a candidate pose; the shipped table is not changed)
     const tryHold = option('hold') ? option('hold').split(',').map(Number) : null;
@@ -8846,6 +8847,9 @@ WORLD['world-shot'] = async (page) => {
         }
         game.worldLinger = false;
         await placeAt(env.endS - SHOT_APPROACH_M);
+        // (in the chase view, as a ride is: the scene starts from the chase camera's pose)
+        game.cameraMode = 2;
+        game.worldCamera.reset(game.vehicle.yawAngle);
         twistyDev.autopilot({ speed: ride });
         // Ridden to just short of the line with the chase camera (each step updates it), then over the line
         const at = () => (Number.isFinite(game.vehicle.projection.s) ? game.vehicle.projection.s : game.vehicle.routeS);
@@ -8866,24 +8870,26 @@ WORLD['world-shot'] = async (page) => {
     }, placeAt.toString(), SHOT_RIDE_MS, tryHold, SHOT_APPROACH_M);
     if (begun.error) return { error: begun.error };
     // The fly, frame by frame at 60 frames a second, every frame drawn: the steps of the camera and the worst frame
-    const fly = await page.evaluate(async (moments, frameMs) => {
+    // (in runs to each moment, the picture taken there as the frame was: the riders where they were then)
+    const flyRun = async (moments, frameMs, until, final) => {
         const env = game.environment, scene = game.stopScene, cam = game.camera;
+        const st = window.__shotFly || (window.__shotFly = { poses: [], frames: [], marks: [], inView: [], tasks: [], slow: [], next: 0, near: new Set() });
         const pose = () => { const e = new THREE.Euler().setFromQuaternion(cam.quaternion, 'YXZ'); return { x: cam.position.x, y: cam.position.y, z: cam.position.z, yaw: e.y, pitch: e.x, roll: e.z, fov: cam.fov }; };
         const turn = (a, b) => Math.abs(Math.atan2(Math.sin(b - a), Math.cos(b - a)));
         const step = (a, b) => ({ moveM: Math.hypot(b.x - a.x, b.y - a.y, b.z - a.z), aimDeg: Math.max(turn(a.yaw, b.yaw), turn(a.pitch, b.pitch), turn(a.roll, b.roll)) * 180 / Math.PI, lensDeg: Math.abs(b.fov - a.fov) });
-        const poses = [];
-        const frames = [];
-        const marks = [];
+        const { poses, frames, marks, inView, slow } = st;
         // What each slow frame spent its time on: the scene's step, the land's update and each build task in it (by id),
         // the cull, the draw, and the programs the draw compiled
-        const tasks = [];
-        const streamer = env.streamer, enqueue = streamer.enqueue.bind(streamer);
-        streamer.enqueue = (id, priority, run) => enqueue(id, priority, () => { const a = performance.now(); run(); tasks.push({ id, ms: performance.now() - a }); });
+        const tasks = st.tasks;
+        const streamer = env.streamer;
+        if (!st.enqueue) {
+            const enqueue = st.enqueue = streamer.enqueue.bind(streamer);
+            streamer.enqueue = (id, priority, run) => enqueue(id, priority, () => { const a = performance.now(); const out = run(); tasks.push({ id, ms: performance.now() - a }); return out; });
+        }
         const renderer = game.graphics.renderer;
-        const slow = [];
-        let next = 0;
+        let next = st.next;
         // The shadow casters near the player (the sun's box follows it): the ones that came in this frame
-        let near = new Set();
+        let near = st.near;
         const wp = new THREE.Vector3();
         const casters = () => {
             // (every caster that has been inside a shadow camera's box: the sun's near one and the far cascade's)
@@ -8901,7 +8907,7 @@ WORLD['world-shot'] = async (page) => {
             for (const k of near) if (!out.has(k)) out.set(k, '');
             return out;
         };
-        while (scene.t < Math.max(...moments) + 1 / 120) {
+        while (scene.t < until + 1 / 120) {
             tasks.length = 0;
             const before = near;
             const programs = renderer.info.programs ? renderer.info.programs.length : 0;
@@ -8932,37 +8938,58 @@ WORLD['world-shot'] = async (page) => {
             const nowNear = frameMs < Infinity ? casters() : new Map();
             const came = [...nowNear.keys()].filter(k => !before.has(k)).map(k => nowNear.get(k));
             near = new Set(nowNear.keys());
-            if (t4 - t0 > frameMs) slow.push({ scene: was === is ? is : `${was} -> ${is}`, came: [...new Set(came)].slice(0, 8), compiled: compiled.map(pr => `${pr.name} ${String(pr.cacheKey || "").slice(0, 400)}`), users, t: Math.round(scene.t * 100) / 100, ms: Math.round(t4 - t0), stepMs: Math.round(t1 - t0), updateMs: Math.round(t2 - t1), cullMs: Math.round(t3 - t2), renderMs: Math.round(t4 - t3), newPrograms: (renderer.info.programs ? renderer.info.programs.length : 0) - programs, tasks: [...tasks].sort((a, b) => b.ms - a.ms).slice(0, 4).map(k => `${k.id} ${Math.round(k.ms)}`) });
+            if (t4 - t0 > frameMs) slow.push({ scene: was === is ? is : `${was} -> ${is}`, came: [...new Set(came)].slice(0, 8), compiled: compiled.map(pr => `${pr.name} ${String(pr.cacheKey || "").slice(0, 400)}`), users, keyDiff: compiled.map((pr) => {
+                // (what sets the new program apart from the nearest one made before: the fields of its key that differ)
+                const mine = String(pr.cacheKey || '').split(',');
+                let best = null, bestN = Infinity;
+                for (const o of known) {
+                    const theirs = String(o.cacheKey || '').split(',');
+                    if (theirs.length !== mine.length || theirs[0] !== mine[0]) continue;
+                    const n = mine.filter((v, i) => v !== theirs[i]).length;
+                    if (n < bestN) { bestN = n; best = theirs; }
+                }
+                return best ? mine.map((v, i) => v !== best[i] ? `${i}:${best[i]}->${v}` : null).filter(Boolean).join(' ') : 'none alike';
+            }), t: Math.round(scene.t * 100) / 100, ms: Math.round(t4 - t0), stepMs: Math.round(t1 - t0), updateMs: Math.round(t2 - t1), cullMs: Math.round(t3 - t2), renderMs: Math.round(t4 - t3), newPrograms: (renderer.info.programs ? renderer.info.programs.length : 0) - programs, tasks: [...tasks].sort((a, b) => b.ms - a.ms).slice(0, 4).map(k => `${k.id} ${Math.round(k.ms)}`) });
             poses.push(pose());
-            if (next < moments.length && scene.t >= moments[next] - 1e-6) { marks.push({ t: moments[next], k: poses.length - 1 }); next++; }
+            // (once the camera has passed the bike, the bike is out of the picture: StopScene.OVERTAKE; to the end at a
+            // stop held on a view of its own, a photo's (HOLDS), and until the hold is flown to at one that looks back at
+            // the group)
+            const O = StopScene.OVERTAKE;
+            if (scene.t > O.passFromS + O.passS && scene.t < (StopScene.HOLDS[scene.stop.id] ? scene.flyS + 1 : scene.holdFrom)) {
+                const v = game.vehicle.group.getWorldPosition(new THREE.Vector3()).add(new THREE.Vector3(0, 0.9, 0)).project(cam);
+                if (v.z < 1 && Math.abs(v.x) <= 1 && Math.abs(v.y) <= 1) inView.push(Math.round(scene.t * 100) / 100);
+            }
+            if (next < moments.length && scene.t >= moments[next] - 1e-6) {
+                const bike = game.vehicle.position;
+                marks.push({ t: moments[next], k: poses.length - 1, camToBikeM: Math.round(Math.hypot(cam.position.x - bike.x, cam.position.z - bike.z) * 10) / 10, back: Math.round(scene.back * 10) / 10 });
+                next++;
+            }
         }
+        st.next = next;
+        st.near = near;
+        if (!final) return null;
+        delete window.__shotFly;
         const steps = poses.slice(1).map((p, k) => step(poses[k], p));
         const worst = key => Math.max(...steps.slice(1).map((st, k) => Math.abs(st[key] - steps[k][key])));
+        const turns = steps.slice(1).map((st, k) => ({ t: Math.round((k + 2) * 100 / 60) / 100, aimKink: Math.round(Math.abs(st.aimDeg - steps[k].aimDeg) * 1000) / 1000, moveKink: Math.round(Math.abs(st.moveM - steps[k].moveM) * 1000) / 1000 })).sort((a, b) => b.aimKink + b.moveKink - a.aimKink - a.moveKink).slice(0, 6);
         const big = steps.map((st, k) => ({ t: Math.round((k + 2) * 100 / 60) / 100, moveM: Math.round(st.moveM * 1000) / 1000, dy: Math.round((poses[k + 1].y - poses[k].y) * 1000) / 1000, aimDeg: Math.round(st.aimDeg * 1000) / 1000 })).sort((a, b) => b.moveM - a.moveM).slice(0, 4);
         const sorted = [...frames].sort((a, b) => a - b);
         const slowest = frames.indexOf(Math.max(...frames));
         const top = frames.map((ms, k) => ({ t: Math.round((k + 1) * 100 / 60) / 100, ms: Math.round(ms * 10) / 10 })).sort((a, b) => b.ms - a.ms).slice(0, 6);
-        streamer.enqueue = enqueue;
-        return { poses, marks, slow, worstStep: { moveM: worst('moveM'), aimDeg: worst('aimDeg'), lensDeg: worst('lensDeg') }, frameWorstAtS: Math.round((slowest + 1) * 100 / 60) / 100, slowestFrames: top, biggestSteps: big, frameMedianMs: Math.round(sorted[Math.floor(sorted.length / 2)] * 100) / 100, frameWorstMs: Math.round(sorted[sorted.length - 1] * 100) / 100, frames: frames.length };
-    }, moments, SHOT_FRAME_MS);
+        streamer.enqueue = st.enqueue;
+        return { poses, marks, slow, turns, inView: inView.slice(0, 10), inViewFrames: inView.length, flyS: scene.flyS, worstStep: { moveM: worst('moveM'), aimDeg: worst('aimDeg'), lensDeg: worst('lensDeg') }, frameWorstAtS: Math.round((slowest + 1) * 100 / 60) / 100, slowestFrames: top, biggestSteps: big, frameMedianMs: Math.round(sorted[Math.floor(sorted.length / 2)] * 100) / 100, frameWorstMs: Math.round(sorted[sorted.length - 1] * 100) / 100, frames: frames.length };
+    };
+    const shots = [];
+    for (const t of moments) {
+        await page.evaluate(flyRun, moments, SHOT_FRAME_MS, t, false);
+        const file = join(out, `${tag}-fly-${String(t).replace('.', '_').padStart(4, '0')}s.png`);
+        await page.screenshot({ path: file });
+        shots.push({ t, file });
+    }
+    const fly = await page.evaluate(flyRun, moments, SHOT_FRAME_MS, Math.max(...moments), true);
     const first = fly.poses[0];
     const turn = (a, b) => Math.abs(Math.atan2(Math.sin(b - a), Math.cos(b - a)));
     const jump = { moveM: Math.hypot(first.x - begun.before.x, first.y - begun.before.y, first.z - begun.before.z), aimDeg: Math.max(turn(first.yaw, begun.before.yaw), turn(first.pitch, begun.before.pitch), turn(first.roll, begun.before.roll)) * 180 / Math.PI, lensDeg: Math.abs(first.fov - begun.before.fov) };
-    // The fly's frames again, drawn as they were, for the pictures (the scene is set back to each moment's pose)
-    const shots = [];
-    for (const mark of fly.marks) {
-        await page.evaluate((p) => {
-            const cam = game.camera;
-            cam.position.set(p.x, p.y, p.z);
-            cam.rotation.set(p.pitch, p.yaw, p.roll, 'YXZ');
-            cam.fov = p.fov;
-            cam.updateProjectionMatrix();
-            game.graphics.render(game.scene, game.camera);
-        }, fly.poses[mark.k]);
-        const file = join(out, `${tag}-fly-${String(mark.t).replace('.', '_').padStart(4, '0')}s.png`);
-        await page.screenshot({ path: file });
-        shots.push({ t: mark.t, file });
-    }
     // The held shot, everything streamed
     const held = await page.evaluate(async (countSource) => {
         const env = game.environment, scene = game.stopScene;
@@ -9035,7 +9062,7 @@ WORLD['world-shot'] = async (page) => {
         }
         await page.evaluate(() => game.quality.release(performance.now()));
     }
-    const result = { ...begun, jump, worstStep: fly.worstStep, flyFrameMedianMs: fly.frameMedianMs, flyFrameWorstMs: fly.frameWorstMs, flyFrameWorstAtS: fly.frameWorstAtS, flySlowest: fly.slowestFrames, flyBiggestSteps: fly.biggestSteps, flySlow: fly.slow, flyFrames: fly.frames, held, shots, levels, phone };
+    const result = { ...begun, jump, worstStep: fly.worstStep, flyFrameMedianMs: fly.frameMedianMs, flyFrameWorstMs: fly.frameWorstMs, flyFrameWorstAtS: fly.frameWorstAtS, flySlowest: fly.slowestFrames, flyBiggestSteps: fly.biggestSteps, flySlow: fly.slow, flyS: fly.flyS, flyMarks: fly.marks, flyKinks: fly.turns, bikeInViewAfterPass: fly.inViewFrames, bikeInViewAt: fly.inView, flyFrames: fly.frames, held, shots, levels, phone };
     writeFileSync(join(out, `${tag}-shot.json`), JSON.stringify(result, null, 1));
     return result;
 };
@@ -9094,6 +9121,7 @@ function shotChecks(results, failures) {
         if (!(shot.worstStep[key] <= most)) failures.push(`world-shot: a frame of the fly changes its ${key} by ${shot.worstStep[key].toFixed(3)} from the frame before, over ${most}`);
     }
     if (!(shot.flyFrameWorstMs <= SHOT_FRAME_MS)) failures.push(`world-shot: a frame of the fly took ${shot.flyFrameWorstMs} ms, over ${SHOT_FRAME_MS}: ${JSON.stringify((shot.flySlow || []).slice(0, 3))}`);
+    if (shot.bikeInViewAfterPass) failures.push(`world-shot: the bike is in the picture in ${shot.bikeInViewAfterPass} frames after the camera passed it (at ${JSON.stringify(shot.bikeInViewAt)} s)`);
     if (!shot.held.bars.every(h => h > 0)) failures.push(`world-shot: the bars are ${JSON.stringify(shot.held.bars)} px high`);
     if (!(shot.held.cameraOverGroundM > 0.2)) failures.push(`world-shot: the held camera is ${shot.held.cameraOverGroundM} m over the ground`);
 }
@@ -9120,12 +9148,7 @@ function worldChecks(report) {
     fairnessChecks(results, failures);
     shotChecks(results, failures);
     const steps = results['world-steps'];
-    if (steps) {
-        for (const list of Object.values(steps.slowestByKind || {})) for (const t of list) {
-            const most = STEPPED.test(t.id) ? STEPS_MOST_MS : STEPS_ANY_MS;
-            if (t.ms > most) failures.push(`world-steps: ${t.id} took ${t.ms} ms, over ${most}: ${JSON.stringify(t.parts)}`);
-        }
-    }
+    if (steps) for (const list of Object.values(steps.slowestByKind || {})) for (const t of list) if (t.ms > STEPS_MOST_MS) failures.push(`world-steps: ${t.id} took ${t.ms} ms, over ${STEPS_MOST_MS}: ${JSON.stringify(t.parts)}`);
     camWallChecks(results, failures);
     treeChecks(results, failures);
     roadLookChecks(results, failures);

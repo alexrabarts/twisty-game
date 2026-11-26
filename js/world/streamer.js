@@ -348,13 +348,15 @@ class WorldStreamer {
             if (held) held.zeroSince = null;
             if (this.data.chunks.has(k)) {
                 const near = this.sideNear(k, bike, held);
-                if (!held || near !== held.near) this.enqueue(`side:${k}`, WorldStreamer.distanceToBox(bike.x, bike.z, this.data.manifest.chunks[k].bbox), () => {
-                    const prior = this.sides.get(k);
-                    const now = this.sideNear(k, this.bike || bike, prior);
+                const streamer = this;
+                if (!held || near !== held.near) this.enqueue(`side:${k}`, WorldStreamer.distanceToBox(bike.x, bike.z, this.data.manifest.chunks[k].bbox), function* () {
+                    const prior = streamer.sides.get(k);
+                    const now = streamer.sideNear(k, streamer.bike || bike, prior);
                     if (prior && now === prior.near) return;
-                    this.hooks.buildSide(k, now, !!prior);
-                    this.sides.set(k, { zeroSince: null, near: now });
-                    this.stats.builds++;
+                    const built = streamer.hooks.buildSide(k, now, !!prior);
+                    if (built && typeof built.next === 'function') yield* built;
+                    streamer.sides.set(k, { zeroSince: null, near: now });
+                    streamer.stats.builds++;
                 });
             } else if (!this.loading.has(`c${k}`)) {
                 this.loading.add(`c${k}`);

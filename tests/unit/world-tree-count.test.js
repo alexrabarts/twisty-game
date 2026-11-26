@@ -17,9 +17,12 @@ const game = loadGame();
 const { THREE, WorldEnvironment, WorldStreamer } = game;
 
 // Stations (ride metres from the stage's start) and the trees drawn there before the detail pass
+// (but the Tremola's km 5 and the Gotthard leg's km 3: there the window drew 900 trees and no house, as the houses
+// within reach stood on tiles built while the bike was out of reach of them. Now that the window chooses its houses
+// whatever the order its tiles came in (Scenery.rankCaps), it draws them, and about 600 trees with them: these are a little under what it draws)
 const TREES_BEFORE = {
-    tremola: { 0: 521, 1000: 527, 2000: 521, 3000: 508, 4000: 508, 5000: 900 },
-    'gotthard-north': { 0: 448, 1000: 438, 2000: 435, 3000: 900 }
+    tremola: { 0: 521, 1000: 527, 2000: 521, 3000: 508, 4000: 508, 5000: 560 },
+    'gotthard-north': { 0: 448, 1000: 438, 2000: 435, 3000: 595 }
 };
 
 // The real models, read by SceneAssets in a scope of their own (the game's own scope has no image decoder)
@@ -49,6 +52,9 @@ async function treesAt(id, stations, models) {
         await env.streamer.settle({ x: p.x, z: p.z }, s);
         env.streamClockMs += 2 * WorldStreamer.DISPOSE_AFTER_MS;
         await env.streamer.settle({ x: p.x, z: p.z }, s);
+        // (the houses and boulders the window chooses for the bike here, which the trees give room to: Scenery.rankCaps,
+        // a task of the ride's frames)
+        env.scenery.rankCaps(env.lastBike, true);
         env.scenery.rankTrees(env.lastBike, true);
         out[at] = env.scenery.treeCount;
     }
