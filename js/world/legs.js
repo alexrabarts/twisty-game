@@ -1,6 +1,6 @@
 // WorldLegs: the legs of the real-map world on the menu, in the order they are ridden, grouped by pass. A leg is a
-// stage of an import (its data folder: WorldData.baseFor). The list scales: a new leg is one row of LIST, and the
-// dialog groups the rows by `pass` and scrolls.
+// stage of a data folder (WorldData.baseFor). The list is the tour's (js/world/tour.js): a new leg is one row there,
+// and the dialog groups the rows by `pass` and scrolls.
 //
 // Which legs are open: the first leg always; a leg whose `opensAfter` names a leg the rider has finished; a leg with
 // `open: true` (the Tremola, which every rider could ride before the new legs came, so it is never locked again);
@@ -10,10 +10,20 @@
 const WorldLegs = {
     STORE: 'twistyWorldLegs',
 
-    LIST: [
-        { id: 'gotthard-north', pass: 'Gotthard', name: 'Andermatt over the Gotthard to the lookout over Airolo', km: 14.5, note: 'A gentle run-in from the north, past the hospice square, then down the modern pass road through the galleries.', from: 'A hotel car park in Andermatt', to: 'The lookout over Airolo' },
-        { id: 'tremola', pass: 'Gotthard', name: 'Tremola, Airolo to the Gotthard summit', km: 13.2, note: 'The old cobbled road and its hairpins.', from: 'Airolo', to: 'The Gotthard summit', open: true }
-    ],
+    // The tour's legs in ride order (js/world/tour.js), then the legs shipped before it. A leg of the tour opens after
+    // the built leg before it; a row not built yet is listed, closed (`planned`)
+    get LIST() {
+        if (WorldLegs.cached) return WorldLegs.cached;
+        let before = null;
+        const tour = WorldTour.LEGS.map(leg => {
+            if (!leg.folder) return { id: `tour-${leg.n}`, n: leg.n, pass: leg.pass, name: leg.name, km: leg.km, note: 'Not built yet.', from: '', to: '', planned: true };
+            const row = { id: leg.id, n: leg.n, pass: leg.pass, name: leg.name, km: leg.km, note: leg.note, from: leg.from, to: leg.to, ...(before ? { opensAfter: before } : {}) };
+            before = leg.id;
+            return row;
+        });
+        WorldLegs.cached = Object.freeze([...tour, ...WorldTour.EARLIER.map(leg => ({ id: leg.id, pass: leg.pass, name: leg.name, km: leg.km, note: leg.note, from: leg.from, to: leg.to, open: true }))].map(Object.freeze));
+        return WorldLegs.cached;
+    },
 
     find(id) { return WorldLegs.LIST.find(leg => leg.id === id) || null; },
 
@@ -45,6 +55,7 @@ const WorldLegs = {
     isOpen(id, { unlockAll = false, storage = WorldLegs.storage() } = {}) {
         const leg = WorldLegs.find(id);
         if (!leg) return false;
+        if (leg.planned) return false;
         if (unlockAll || leg.open || leg === WorldLegs.LIST[0]) return true;
         return !!leg.opensAfter && WorldLegs.finished(storage).includes(leg.opensAfter);
     },
@@ -56,12 +67,12 @@ const WorldLegs = {
         return (next || WorldLegs.LIST[0]).id;
     },
 
-    // The rows grouped by pass, in the order of their first leg
+    // The rows grouped by pass: a group is a run of rows with one pass (the tour comes back over the Gotthard at its end)
     groups() {
         const out = [];
         for (const leg of WorldLegs.LIST) {
-            let group = out.find(g => g.pass === leg.pass);
-            if (!group) out.push(group = { pass: leg.pass, legs: [] });
+            let group = out[out.length - 1];
+            if (!group || group.pass !== leg.pass) out.push(group = { pass: leg.pass, legs: [] });
             group.legs.push(leg);
         }
         return out;
@@ -100,9 +111,10 @@ const WorldLegs = {
                 row.className = 'world-legs-row';
                 row.dataset.leg = leg.id;
                 row.disabled = !open;
-                const order = WorldLegs.LIST.indexOf(leg) + 1;
-                const state = !open ? `Finish leg ${WorldLegs.LIST.indexOf(WorldLegs.find(leg.opensAfter)) + 1} to open` : done.includes(leg.id) ? 'Finished' : '';
-                row.innerHTML = `<span class="world-legs-name">${order}. ${leg.name}</span><span class="world-legs-meta">${leg.km.toFixed(1)} km · ${leg.note}</span><span class="world-legs-meta">From ${leg.from.charAt(0).toLowerCase()}${leg.from.slice(1)} to ${leg.to.charAt(0).toLowerCase()}${leg.to.slice(1)}</span>${state ? `<span class="world-legs-state">${state}</span>` : ''}`;
+                const label = leg.n ? `${leg.n}. ` : '';
+                const state = leg.planned ? 'Coming later' : !open ? `Finish leg ${WorldLegs.find(leg.opensAfter).n} to open` : done.includes(leg.id) ? 'Finished' : '';
+                const ends = leg.from ? `<span class="world-legs-meta">From ${leg.from.charAt(0).toLowerCase()}${leg.from.slice(1)} to ${leg.to.charAt(0).toLowerCase()}${leg.to.slice(1)}</span>` : '';
+                row.innerHTML = `<span class="world-legs-name">${label}${leg.name}</span><span class="world-legs-meta">${leg.km.toFixed(1)} km · ${leg.note}</span>${ends}${state ? `<span class="world-legs-state">${state}</span>` : ''}`;
                 row.addEventListener('click', (event) => {
                     event.stopPropagation();
                     if (row.disabled) return;
