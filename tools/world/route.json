@@ -214,9 +214,10 @@
      "keepLine": true,
      "raise": {
       "tileLodM": [
-       1500,
-       4000
-      ]
+       1200,
+       3000
+      ],
+      "triangleScale": 1
      }
     }
    }
@@ -243,9 +244,10 @@
       "n": 1156616,
       "raise": {
        "tileLodM": [
-        1500,
-        4000
-       ]
+        1200,
+        3000
+       ],
+       "triangleScale": 1
       }
      },
      {
@@ -308,7 +310,8 @@
       "tileLodM": [
        1500,
        4000
-      ]
+      ],
+      "triangleScale": 1
      }
     }
    }

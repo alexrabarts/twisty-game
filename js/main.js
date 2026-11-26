@@ -4577,9 +4577,13 @@ class Game {
         const level = Quality.LEVELS[this.quality.level];
         // (a stop's hold may cap the land's raise, as its own data: a view over a whole valley, the lookout over Airolo,
         // drew the land at full detail out to 2.5 km and went over LEG_BUDGET's triangles; never raised past the level's)
-        const cap = scene.stop && scene.stop.raise;
+        const cap = (scene.stop && scene.stop.raise) || {};
         const own = StopScene.RAISE[level.id] || {};
-        const raise = cap && Array.isArray(cap.tileLodM) && own.tileLodM ? { ...own, tileLodM: own.tileLodM.map((m, k) => Math.min(m, cap.tileLodM[k])) } : own;
+        const raise = { ...own };
+        for (const [key, most] of Object.entries(cap)) {
+            if (Array.isArray(most) && Array.isArray(own[key])) raise[key] = own[key].map((m, k) => Math.min(m, most[k]));
+            else if (Number.isFinite(most) && Number.isFinite(own[key])) raise[key] = Math.min(own[key], most);
+        }
         const draw = !!scene.drawRaised;
         scene.raised = { level: level.id, draw, ...raise };
         const renderer = this.renderer;
