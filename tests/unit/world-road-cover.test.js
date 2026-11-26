@@ -4,9 +4,9 @@
 // No land covers the road (the owner, 2026-11-26: "create a test for terrain covering the road"). Every stage of every
 // shipped data folder, each as the menu rides it (a leg ridden against its folder's stage too), is streamed as the page
 // streams it, and the ride is read every STEP_M: across the carriageway and PAST_M past each edge, every ACROSS_M.
-// At each place the drawn road is the surface the physics says is drawn there (WorldGround.drawnY: the ribbon, or the
-// verge past the edge, RoadMesh.LIFT_M over the road), and it fails where any land drawn there stands more than TOL_M
-// over it:
+// At each place the drawn road is the road's surface at that row, RoadMesh.LIFT_M over its height (the ribbon, or past
+// the edge the verge, which lies at the road's height for RoadSurface.VERGE_M; past a bridge's edge nothing is read),
+// and it fails where any land drawn there stands more than TOL_M over it:
 //   lod0  the tile as the page builds it at full detail (cut to the walls, laid back, clipped to the tubes: the mesh
 //         the streamer holds, read on its own triangles);
 //   lod1  the same tile one level coarser, built as the page builds it there (WorldEnvironment.buildTile: its sink under
@@ -34,17 +34,15 @@ import { stagesFor } from '../helpers/world-stages.js';
 
 // The stages that fail today, each with its exact count of places. The table may only shrink, and must end empty: a
 // count that rises fails, a count that falls fails until the table is brought down to it. No other way passes a stage.
-// Measured 2026-11-26 (lod0, lod1, far, physics places in each)
+// Measured 2026-11-26 (lod0, lod1, far, physics places in each). No stage has land of a tile over its road: the far
+// grid over worlds/susten's road, and the physics 2 to 3 cm off the ribbon down the Tremola, are what is left
 const KNOWN = {
-    'tremola': 15, // 3, 1, 0, 11
-    'summit-airolo': 15, // 2, 1, 0, 12
-    'gotthard-north': 8, // 1, 7, 0, 0
-    'lookout-andermatt': 9, // 2, 7, 0, 0
-    'hospental-summit': 6, // 0, 6, 0, 0
-    'airolo-lookout': 23, // 8, 13, 0, 2
-    'andermatt-goeschenen': 5, // 0, 2, 3, 0
-    'goeschenen-susten': 28, // 2, 7, 19, 0
-    'susten-gadmen': 11 // 0, 5, 6, 0
+    'tremola': 11, // 0, 0, 0, 11
+    'summit-airolo': 12, // 0, 0, 0, 12
+    'airolo-lookout': 2, // 0, 0, 0, 2
+    'andermatt-goeschenen': 3, // 0, 0, 3, 0
+    'goeschenen-susten': 17, // 0, 0, 17, 0
+    'susten-gadmen': 5 // 0, 0, 5, 0
 };
 
 const STEP_M = 2;
@@ -159,24 +157,31 @@ async function readStage(id) {
                     if (ribbon > road - 1 && Math.abs(ribbon - road) > TOL_M) fault('physics', ribbon - road);
                     else if (ribbon <= road - 1) fault('physics', -1);
                 }
-                if (Number.isFinite(env.tubeRoofY(x, z, road))) continue;
+                // The land is read against the road's own surface at that row, `RoadMesh.LIFT_M` over its height: across the
+                // carriageway the ribbon, and past the edge the verge, laid at the road's height for VERGE_M (1.1 m). Past a
+                // bridge's edge there is no verge, only the deck's side, so the land there is not read. (Read against drawnY,
+                // a place past a bridge's edge, or one on the edge line that locate put a hair outside it, read the valley
+                // floor as the road: the coarser land over the finer land there was counted as land over the road.)
+                const surface = loc.roadY + game.RoadMesh.LIFT_M;
+                if (Math.abs(o) > half && loc.flags && loc.flags.bridge) continue;
+                if (Number.isFinite(env.tubeRoofY(x, z, surface))) continue;
                 const key = `${Math.floor(x / TILE)},${Math.floor(z / TILE)}`;
                 const held = env.tileMeshes.get(key);
                 // (land is read up to the tube's roof height over the road: a road under a bridge or a stacked leg has land
                 // far over it that is not on it)
-                const roof = road + 6.5;
+                const roof = surface + 6.5;
                 if (held) {
                     const y = gridOf(held.mesh, 8).top(x, z, roof);
-                    if (y > road + TOL_M) fault('lod0', y - road);
+                    if (y > surface + TOL_M) fault('lod0', y - surface);
                 }
                 if (showsLod1(key)) {
                     const g = lod1Grid(key);
                     const y = g ? g.top(x, z, roof) : -Infinity;
-                    if (y > road + TOL_M) fault('lod1', y - road);
+                    if (y > surface + TOL_M) fault('lod1', y - surface);
                 }
                 if (far) {
                     const y = far.top(x, z, roof);
-                    if (y > road + TOL_M) fault('far', y - road);
+                    if (y > surface + TOL_M) fault('far', y - surface);
                 }
             }
         }
