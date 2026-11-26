@@ -48,7 +48,8 @@ for (const item of list) {
             for (let i = 0; i < d.length; i += 4) for (let c = 0; c < 3; c++) sum[c] += d[i + c];
             return sum.map(k => Math.round(k / (d.length / 4)));
         };
-        const means = { still: mean(sb[0] * W1, sb[1] * H, (sb[2] - sb[0]) * W1, (sb[3] - sb[1]) * H), game: mean(W1 + 8 + gb[0] * W2, gb[1] * H, (gb[2] - gb[0]) * W2, (gb[3] - gb[1]) * H) };
+        const means = { still: mean(sb[0] * W1, sb[1] * H, (sb[2] - sb[0]) * W1, (sb[3] - sb[1]) * H), game: mean(W1 + 8 + gb[0] * W2, gb[1] * H, (gb[2] - gb[0]) * W2, (gb[3] - gb[1]) * H),
+            stillFrame: mean(0, 0, W1, H), gameFrame: mean(W1 + 8, 0, W2, H) };
         ctx.strokeStyle = 'rgba(255, 220, 0, 0.8)';
         ctx.lineWidth = 2;
         ctx.strokeRect(sb[0] * W1, sb[1] * H, (sb[2] - sb[0]) * W1, (sb[3] - sb[1]) * H);
@@ -57,7 +58,9 @@ for (const item of list) {
     }, still, game, VIDEO, item.stillBox, item.gameBox);
     const file = join(out, `${tag}-${item.name}.png`);
     writeFileSync(file, Buffer.from(result.png.split(',')[1], 'base64'));
-    report.push({ file, boyStill: result.means.still, boyGame: result.means.game });
+    // (each boy's box against its whole frame: how light he reads in his own picture)
+    const share = (box, frame) => +(box.reduce((a, b) => a + b, 0) / Math.max(1, frame.reduce((a, b) => a + b, 0))).toFixed(2);
+    report.push({ file, boyStill: result.means.still, boyGame: result.means.game, stillShare: share(result.means.still, result.means.stillFrame), gameShare: share(result.means.game, result.means.gameFrame) });
 }
 await browser.close();
 console.log(JSON.stringify(report, null, 1));

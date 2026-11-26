@@ -104,6 +104,10 @@ shoot('boy-pedals-behind', [0.6, 1.7, -2.6], [0, 1.0, 0], 34);
 shoot('boy-pedals-side', [-2.6, 1.1, 0.2], [0, 0.95, 0.1], 36);
 shoot('boy-pedals-front', [-0.5, 1.45, 2.4], [0, 1.15, 0], 30);
 shoot('boy-pedals-head', [-0.45, 1.6, 0.9], [0, 1.55, -0.05], 26);
+// The far body (past HillBoy.FAR.fromM) through a long lens, so its shape can be judged
+if (rider.boy) rider.boy.level(rider.group.localToWorld(new THREE.Vector3(0.8, 2.4, -16)));
+shoot('boy-far', [0.8, 2.4, -16], [0, 1.0, 0], 9);
+shoot('boy-far-side', [-15.5, 1.6, 3], [0, 1.0, 0], 9);
 pose({ s: 130, speed: 9, legs: 1, settle: 0.8 });
 shoot('boy-legs-out-behind', [0.4, 1.5, -3.2], [0, 0.85, 0], 34);
 shoot('boy-legs-out-front', [0.3, 1.3, 3.0], [0, 0.85, 0], 34);
@@ -112,37 +116,6 @@ shoot('boy-foot-down', [-2.4, 1.3, 1.2], [0, 0.85, 0], 36);
 if (rider.throwAt) {
     pose({ s: 160, speed: 8, throwSide: 1, settle: 0.25 });
     shoot('boy-throw', [-1.2, 1.6, 2.8], [0, 1.1, 0], 38);
-}
-// A fall: thrown off at speed, half a second into it and as he lies on the cobbles
-{
-    bike.reset(380);
-    bike.rides = (bike.rides || 0) + 1;
-    bike.walking = false;
-    v.speed = 12;
-    v.footDown = false;
-    bike.legs = 0;
-    rider.foot = 0;
-    ride.draw(1 / 60);
-    v.worldCrash('Too fast for the corner', null, 'grip');
-    const dt = 1 / 120;
-    for (let t = 0; t < 0.45; t += dt) { bike.step(dt, { pedal: 0, brake: 0, steer: 0 }); if (t % (1 / 60) < dt) ride.draw(1 / 60); }
-    rider.group.updateMatrixWorld(true);
-    const body = rider.parts.boy.getWorldPosition(new THREE.Vector3());
-    const look = (name, off) => {
-        cam.position.copy(body).add(off);
-        cam.up.set(0, 1, 0);
-        cam.fov = 40;
-        cam.updateProjectionMatrix();
-        cam.lookAt(body);
-        cam.updateMatrixWorld();
-        if (game.effectLevels && typeof Effects !== 'undefined') Effects.frame(game);
-        game.graphics.render(game.scene, cam);
-        pictures[name] = game.renderer.domElement.toDataURL('image/png');
-    };
-    look('boy-fall', new THREE.Vector3(2.4, 1.2, 1.6));
-    for (let t = 0; t < 1.2; t += dt) { bike.step(dt, { pedal: 0, brake: 0, steer: 0 }); if (t % (1 / 60) < dt) ride.draw(1 / 60); }
-    rider.parts.boy.getWorldPosition(body);
-    look('boy-fallen', new THREE.Vector3(2.0, 1.3, 1.2));
 }
 // His cost: the triangles and the meshes of his body (the parts that leave the bicycle in a fall, and his head and
 // apron), and the frame's GPU time from the chase camera with him drawn and hidden
@@ -197,15 +170,46 @@ const count = () => {
 const all = count();
 said.frame = { calls: all.calls, triangles: all.triangles, withBoyMs: time(80) };
 const hide = [];
-rider.group.traverse(o => { if (seen.has(o)) { hide.push(o); o.visible = false; } });
+rider.group.traverse(o => { if (o.isMesh && (seen.has(o) || o.userData.boy)) { hide.push([o, o.visible]); o.visible = false; } });
 // (the far body stays hidden while the near one is drawn)
 said.frame.withoutBoyMs = time(80);
 const less = count();
 said.frame.callsWithout = less.calls;
 said.frame.trianglesWithout = less.triangles;
-hide.forEach(o => { o.visible = true; });
+hide.forEach(([o, was]) => { o.visible = was; });
 said.maps = typeof HillBoyMaps !== 'undefined' && HillBoyMaps.made ? HillBoyMaps.made.ms : null;
 said.frame.withBoyAgainMs = time(80);
+// A fall: thrown off at speed, half a second into it and as he lies on the cobbles
+{
+    bike.reset(380);
+    bike.rides = (bike.rides || 0) + 1;
+    bike.walking = false;
+    v.speed = 12;
+    v.footDown = false;
+    bike.legs = 0;
+    rider.foot = 0;
+    ride.draw(1 / 60);
+    v.worldCrash('Too fast for the corner', null, 'grip');
+    const dt = 1 / 120;
+    for (let t = 0; t < 0.45; t += dt) { bike.step(dt, { pedal: 0, brake: 0, steer: 0 }); if (t % (1 / 60) < dt) ride.draw(1 / 60); }
+    rider.group.updateMatrixWorld(true);
+    const body = rider.parts.boy.getWorldPosition(new THREE.Vector3());
+    const look = (name, off) => {
+        cam.position.copy(body).add(off);
+        cam.up.set(0, 1, 0);
+        cam.fov = 40;
+        cam.updateProjectionMatrix();
+        cam.lookAt(body);
+        cam.updateMatrixWorld();
+        if (game.effectLevels && typeof Effects !== 'undefined') Effects.frame(game);
+        game.graphics.render(game.scene, cam);
+        pictures[name] = game.renderer.domElement.toDataURL('image/png');
+    };
+    look('boy-fall', new THREE.Vector3(2.4, 1.2, 1.6));
+    for (let t = 0; t < 1.2; t += dt) { bike.step(dt, { pedal: 0, brake: 0, steer: 0 }); if (t % (1 / 60) < dt) ride.draw(1 / 60); }
+    rider.parts.boy.getWorldPosition(body);
+    look('boy-fallen', new THREE.Vector3(2.0, 1.3, 1.2));
+}
 said.size = [game.renderer.domElement.width, game.renderer.domElement.height];
 said.pictures = pictures;
 return said;

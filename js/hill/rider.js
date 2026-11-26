@@ -161,7 +161,8 @@ class HillRider {
             long.add(hem);
             hem.position.sub(long.position).sub(r.boy);
         }
-        this.legPoints = Array.from({ length: 8 }, () => new THREE.Vector3());
+        // (and two points of the top tube under him on the saddle, which the apron drapes over: HillRider.TUBE)
+        this.legPoints = Array.from({ length: 10 }, () => new THREE.Vector3());
         this.hipsAt = new THREE.Vector3().copy(r.boy);
         // The body, skinned on the rig, and his life
         this.boy = skinned ? new HillBoy(this) : null;
@@ -352,7 +353,7 @@ class HillRider {
         this.footShift = this.footShift || new THREE.Vector3();
         this.footShift.set(0, 0, 0);
         if (!(share > 0) || !this.boy) return;
-        const leg = this.legs.find(l => l.side === Vehicle.LEFT);
+        const leg = this.legs[this.legs[0].side === Vehicle.LEFT ? 0 : 1];
         s.foot = s.foot || new THREE.Vector3();
         s.foot.set(leg.side * Vehicle.FOOT_OUT, 0, this.bb.z + Vehicle.FOOT_AHEAD);
         this.frame.localToWorld(s.foot);
@@ -556,6 +557,11 @@ class HillRider {
             s.m.makeBasis(s.x, s.y, s.z);
             leg.foot.quaternion.setFromRotationMatrix(s.m);
         }
+        // On the saddle the top tube is under the apron too; on foot it is not (put out of the apron's reach)
+        const T = HillRider.TUBE;
+        this.legPoints[8].fromArray(T[0]);
+        this.legPoints[9].fromArray(T[1]);
+        if (walk > 0.5) this.legPoints[8].y = this.legPoints[9].y = 10;
         this.hangApron();
         if (this.boy) this.boy.after(dt, bike, ctx);
     }
@@ -565,6 +571,10 @@ class HillRider {
     // foot just clear of his knees, shins and ankles below it. Each stays clearM in front of a leg's middle (a leg's
     // thickness and a little), and the swing is at most mostRad
     static get APRON() { return Object.freeze({ upperM: 0.4, clearM: 0.065, halfWideM: 0.26, mostRad: 1.45 }); }
+
+    // Two points of the bicycle's top tube under the apron on the saddle (in the frame): it drapes over the tube, as
+    // cloth does, and never hangs through it between his legs
+    static get TUBE() { return Object.freeze([[0, 0.885, -0.1], [0, 0.9, 0.06]]); }
 
     hangApron() {
         const { apron_long: long, apron_hem: hem } = this.parts;
@@ -585,14 +595,14 @@ class HillRider {
             return A.mostRad;
         };
         const swing = this.boy ? this.boy.apron : null;
-        const upper = Math.max(0.04, need(waist, [0, 1, 4, 5])) + (swing ? swing.flap : 0);
+        const upper = Math.max(0.04, need(waist, [0, 1, 4, 5, 8, 9])) + (swing ? swing.flap : 0);
         this.apronAngle = upper;
         s.qa = s.qa || new THREE.Quaternion();
         s.qa.setFromAxisAngle(s.xAxis, -upper);
         long.quaternion.copy(this.boyQ).invert().multiply(s.qa);
         if (!hem) return;
         const foot = (s.apronFoot || (s.apronFoot = new THREE.Vector3())).set(waist.x, waist.y - Math.cos(upper) * A.upperM, waist.z + Math.sin(upper) * A.upperM);
-        const lower = need(foot, [1, 2, 3, 5, 6, 7]) + (swing ? swing.flap * 0.5 : 0);
+        const lower = need(foot, [1, 2, 3, 5, 6, 7, 8, 9]) + (swing ? swing.flap * 0.5 : 0);
         hem.quaternion.setFromAxisAngle(s.xAxis, -(lower - upper));
         if (swing && swing.sway) hem.quaternion.multiply(s.qa.setFromAxisAngle(s.zAxis || (s.zAxis = new THREE.Vector3(0, 0, 1)), swing.sway));
     }

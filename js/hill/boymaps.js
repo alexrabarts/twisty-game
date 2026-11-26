@@ -89,7 +89,7 @@ class HillBoyMaps {
         const n1 = HillBoyMaps.noise(11, 64), n2 = HillBoyMaps.noise(12, 256), n3 = HillBoyMaps.noise(13, 32);
         const rand = HillBoyMaps.random(14);
         const g = (x) => Math.exp(-x * x), sm = (a, b, x) => { const t = Math.max(0, Math.min(1, (x - a) / (b - a))); return t * t * (3 - 2 * t); };
-        const base = [212, 168, 145], blush = [206, 124, 104], lip = [176, 116, 102], brow = [118, 86, 58], hair = [134, 100, 66];
+        const base = [212, 168, 145], blush = [206, 124, 104], lip = [176, 116, 102], brow = [104, 76, 52], hair = [112, 84, 58];
         const p = new THREE.Vector3(), q = new THREE.Vector3();
         // A few freckles over the nose and the cheeks (as head points)
         const freckles = [];
@@ -146,7 +146,7 @@ class HillBoyMaps {
                     // The hair's colour where it grows (behind the face, above the nape, round the ears; the shell over
                     // it gives the strands)
                     const behind = Math.abs(az);
-                    const bottom = behind < 1.38 ? 1.68 : behind < 2.15 ? 1.42 : 1.42 + (behind - 2.15) / (Math.PI - 2.15) * 0.75;
+                    const bottom = behind < 1.38 ? 1.68 : behind < 2.15 ? 1.42 : 1.42 + (behind - 2.15) / (Math.PI - 2.15) * 0.88;
                     const grows = sm(HillBoy.HAIR.az0 - 0.12, HillBoy.HAIR.az0 + 0.03, behind) * sm(bottom + 0.04, bottom - 0.05, polar);
                     if (grows > 0) mix(c, hair, grows * (0.85 + 0.15 * n2(u * 256, v * 64)));
                     // The ears' and the neck's warmth
@@ -219,14 +219,14 @@ class HillBoyMaps {
         for (let y = 0; y < H; y++) for (let x = 0; x < W; x++) {
             const u = (x + 0.5) / W, v = (y + 0.5) / H;
             const az = az0 + (az1 - az0) * u, polar = p0 + (p1 - p0) * v, behind = Math.abs(Math.atan2(Math.sin(az), Math.cos(az)));
-            const bottom = behind < 1.38 ? 1.68 : behind < 2.15 ? 1.42 : 1.42 + (behind - 2.15) / (Math.PI - 2.15) * 0.75;
+            const bottom = behind < 1.38 ? 1.68 : behind < 2.15 ? 1.42 : 1.42 + (behind - 2.15) / (Math.PI - 2.15) * 0.88;
             const end = bottom + (ends[x] - 0.5) * 0.12;
             const tone = 0.78 + 0.3 * strands[x] + 0.12 * n(u * 32, v * 8);
             const along = 0.5 + 0.5 * Math.sin(v * 90 + strands[x] * 20);
             const i = (y * W + x) * 4;
-            data[i] = HillBoyMaps.clamp(140 * tone);
-            data[i + 1] = HillBoyMaps.clamp(106 * tone);
-            data[i + 2] = HillBoyMaps.clamp(72 * tone);
+            data[i] = HillBoyMaps.clamp(116 * tone);
+            data[i + 1] = HillBoyMaps.clamp(88 * tone);
+            data[i + 2] = HillBoyMaps.clamp(60 * tone);
             // (whole above its end, a few strands short; nothing in front of the first strands at the face)
             const a = sm(end + 0.02, end - 0.05, polar) * sm(0.0, 0.05, u) * sm(1.0, 0.95, u) * (0.7 + 0.3 * strands[(x + 1) % W]);
             data[i + 3] = HillBoyMaps.clamp(a * 255 * (0.8 + 0.2 * along));

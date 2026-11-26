@@ -168,6 +168,9 @@ class HillBoy {
         this.blinkTwice = false;
         this.lid = 0;
         this.lookYaw = 0;
+        this.flick = new Float32Array(2);
+        this.curl = { l: 1, r: 1 };
+        this.foldShares = new Float32Array(HillBoyShape.FOLDS.length);
         this.lookPitch = 0;
         this.eyeYaw = 0;
         this.eyePitch = 0;
@@ -243,10 +246,9 @@ class HillBoy {
         s.v.copy(target).applyMatrix4(s.mi).sub(s.w.copy(this.skull.position).add(s.a.set(0, 0.08, 0.02)));
         const yaw = Math.atan2(s.v.x, s.v.z), pitch = Math.atan2(s.v.y, Math.hypot(s.v.x, s.v.z));
         const k = dt > 0 ? 1 - Math.exp(-dt / L.easeS) : 0, ke = dt > 0 ? 1 - Math.exp(-dt / 0.05) : 0;
-        const clamp = (x, m) => Math.max(-m, Math.min(m, x));
         const chestTo = ctx.fallen ? 0 : Math.sign(yaw) * Math.min(L.chestRad, Math.max(0, Math.abs(yaw) - L.chestFromRad) * 0.7);
-        const headTo = ctx.fallen ? 0 : clamp(yaw * L.share, L.headRad);
-        const pitchTo = clamp(-pitch * 0.45, 0.35);
+        const headTo = ctx.fallen ? 0 : HillBoy.clamp(yaw * L.share, L.headRad);
+        const pitchTo = HillBoy.clamp(-pitch * 0.45, 0.35);
         this.chestYaw = (this.chestYaw || 0) + (chestTo - (this.chestYaw || 0)) * k;
         this.lookYaw += (headTo - this.lookYaw) * k;
         this.lookPitch += (pitchTo - this.lookPitch) * k;
@@ -254,10 +256,11 @@ class HillBoy {
         this.flickIn = (this.flickIn || 0) - dt;
         if (this.flickIn <= 0) {
             this.flickIn = 0.6 + 1.4 * this.random();
-            this.flick = [(this.random() - 0.5) * 0.08, (this.random() - 0.5) * 0.05];
+            this.flick[0] = (this.random() - 0.5) * 0.08;
+            this.flick[1] = (this.random() - 0.5) * 0.05;
         }
-        const f = this.flick || [0, 0];
-        const eyeYawTo = clamp(yaw - this.lookYaw - this.chestYaw + f[0], L.eyeRad), eyePitchTo = clamp(-pitch - this.lookPitch + f[1], L.eyePitchRad);
+        const f = this.flick;
+        const eyeYawTo = HillBoy.clamp(yaw - this.lookYaw - this.chestYaw + f[0], L.eyeRad), eyePitchTo = HillBoy.clamp(-pitch - this.lookPitch + f[1], L.eyePitchRad);
         this.eyeYaw += (eyeYawTo - this.eyeYaw) * ke;
         this.eyePitch += (eyePitchTo - this.eyePitch) * ke;
         s.e.set(this.lookPitch, this.lookYaw, 0, 'YXZ');
@@ -303,7 +306,7 @@ class HillBoy {
     throwHand(arm, grip, out) {
         const T = HillBoy.THROW, t = this.throwT;
         if (t < 0 || arm.side !== this.throwSide) return null;
-        const sm = (x) => { const k = Math.max(0, Math.min(1, x)); return k * k * (3 - 2 * k); };
+        const sm = HillBoy.ease;
         const basket = this.scratch.b.set(arm.side * 0.13, 1.02, 0.42), wide = this.scratch.c.set(arm.side * 0.62, 1.42, 0.08);
         if (t < T.reachS) return out.copy(grip).lerp(basket, sm(t / T.reachS));
         if (t < T.flingS) {
@@ -318,23 +321,22 @@ class HillBoy {
     grip(dt, ctx) {
         const H = HillBoy.HAND, T = HillBoy.THROW, s = this.scratch;
         const k = dt > 0 ? 1 - Math.exp(-dt / 0.07) : 1;
-        this.curl = this.curl || { l: 1, r: 1 };
         for (const hand of this.hands) {
             let want = 1;
             const t = this.throwT;
             if (ctx.fallen) want = 0.35;
             else if (t >= 0 && hand.side === this.throwSide) want = t < T.reachS * 0.7 ? 0.1 : t < T.releaseS ? 0.75 : t < T.flingS + 0.1 ? 0 : 0.6;
             const c = this.curl[hand.tag] += (want - this.curl[hand.tag]) * k;
-            const pick = (a, b, j) => a[j] + (b[j] - a[j]) * c;
-            hand.fingers.forEach((f, i) => {
+            for (let i = 0; i < hand.fingers.length; i++) {
+                const f = hand.fingers[i];
                 for (let j = 0; j < 3; j++) {
                     const open = H.open[j] + 0.04 * i * (j === 0 ? 1 : 0);
                     f.joints[j].quaternion.setFromAxisAngle(s.a.set(1, 0, 0), open + (H.grip[j] + 0.05 * i - open) * c);
                 }
-            });
+            }
             // (the thumb across the palm, about its own axis)
             s.a.crossVectors(hand.thumb.dir, s.b.set(0, 0, -1)).normalize();
-            for (let j = 0; j < 3; j++) hand.thumb.joints[j].quaternion.setFromAxisAngle(s.a, pick(H.thumbOpen, H.thumbGrip, j));
+            for (let j = 0; j < 3; j++) hand.thumb.joints[j].quaternion.setFromAxisAngle(s.a, H.thumbOpen[j] + (H.thumbGrip[j] - H.thumbOpen[j]) * c);
             // The wrist: laid back a little to put the palm over the bar, straight when the hand is open
             hand.bone.quaternion.setFromAxisAngle(s.b.set(1, 0, 0), (ctx.fallen ? 0.1 : -0.32) * c);
         }
@@ -376,25 +378,26 @@ class HillBoy {
 
     // The folds' depths from the joints' bends: each elbow and knee, and the body's bend forward at the waist
     folds(ctx) {
-        const r = this.rider, s = this.scratch;
-        const bend = (a, b) => {
-            s.y.set(0, -1, 0).applyQuaternion(a.quaternion);
-            s.z.set(0, -1, 0).applyQuaternion(b.quaternion);
-            return Math.acos(Math.max(-1, Math.min(1, s.y.dot(s.z))));
-        };
-        const sm = (a, b, x) => { const k = Math.max(0, Math.min(1, (x - a) / (b - a))); return k * k * (3 - 2 * k); };
-        const w = [];
-        for (const tag of ['l', 'r']) w.push(sm(0.25, 1.7, bend(r.parts[`upperarm_${tag}`], r.parts[`forearm_${tag}`])));
-        for (const tag of ['l', 'r']) w.push(sm(0.25, 1.9, bend(r.parts[`thigh_${tag}`], r.parts[`shin_${tag}`])));
-        s.y.set(0, 1, 0).applyQuaternion(r.parts.boy.quaternion);
-        s.z.set(0, 1, 0).applyQuaternion(this.chest.quaternion).applyQuaternion(r.parts.boy.quaternion);
-        w.push(sm(0.05, 0.5, Math.acos(Math.max(-1, Math.min(1, s.z.y))) + 0.1 * this.rise));
-        w.push(sm(0.55, 1.3, r.apronAngle || 0));
+        const r = this.rider, s = this.scratch, w = this.foldShares, P = r.parts;
+        w[0] = HillBoy.step(0.25, 1.7, this.bend(P.upperarm_l, P.forearm_l));
+        w[1] = HillBoy.step(0.25, 1.7, this.bend(P.upperarm_r, P.forearm_r));
+        w[2] = HillBoy.step(0.25, 1.9, this.bend(P.thigh_l, P.shin_l));
+        w[3] = HillBoy.step(0.25, 1.9, this.bend(P.thigh_r, P.shin_r));
+        s.z.set(0, 1, 0).applyQuaternion(this.chest.quaternion).applyQuaternion(P.boy.quaternion);
+        w[4] = HillBoy.step(0.05, 0.5, Math.acos(Math.max(-1, Math.min(1, s.z.y))) + 0.1 * this.rise);
+        w[5] = HillBoy.step(0.55, 1.3, r.apronAngle || 0);
         for (const level of this.levels) {
             const m = level.mesh.morphTargetInfluences;
             if (m) for (let i = 0; i < w.length && i < m.length; i++) m[i] = w[i];
         }
-        this.foldShares = w;
+    }
+
+    // How far one limb's bone is bent from the one it hangs from (rad)
+    bend(a, b) {
+        const s = this.scratch;
+        s.y.set(0, -1, 0).applyQuaternion(a.quaternion);
+        s.x.set(0, -1, 0).applyQuaternion(b.quaternion);
+        return Math.acos(Math.max(-1, Math.min(1, s.y.dot(s.x))));
     }
 
     // The near or the far body for an eye at `eye` (in the world), with a little room either way
@@ -602,6 +605,16 @@ class HillBoy {
         const sn = Math.min(1, Math.abs(x) / w), th = Math.asin(Math.pow(sn, e / 2));
         return z + Math.pow(Math.cos(th), 2 / e) * f;
     }
+
+    static clamp(x, m) { return Math.max(-m, Math.min(m, x)); }
+
+    // A smoothstep of x from a to b, and of x over 0..1
+    static step(a, b, x) {
+        const k = Math.max(0, Math.min(1, (x - a) / (b - a)));
+        return k * k * (3 - 2 * k);
+    }
+
+    static ease(x) { return HillBoy.step(0, 1, x); }
 
     // A small seeded random sequence (the same blinks on every load)
     static random(seed) {
@@ -923,7 +936,7 @@ const HillBoyKit = {
 // grey wool, the scarf and gloves near black, the breeches' dark wool, the cap's darker tweed (each over its finish's
 // near white); the boots' leather is its own map's colour, the soles and their welt a share of it
 HillBoy.COLOURS = Object.freeze({
-    jumper: 0x8e8a82, scarf: 0x2a2522, glove: 0x272320, breeches: 0x2b2825, cap: 0x37322e, boot: 0xf0f0f0, sole: 0x9a9a9a, welt: 0xc8b49c
+    jumper: 0x9e9990, scarf: 0x2a2522, glove: 0x272320, breeches: 0x2b2825, cap: 0x37322e, boot: 0xf0f0f0, sole: 0x9a9a9a, welt: 0xc8b49c
 });
 
 // The whole body at one level of detail (1 near; less far): every piece on the rest pose of the rig
@@ -1401,7 +1414,7 @@ const HillBoyPieces = {
             });
         };
         wrap('scarf-low', N.y - 0.008, 0.072, 0.07, 0.024, 0.02, N.z - 0.014, 0.0);
-        wrap('scarf-high', N.y + 0.03, 0.06, 0.058, 0.021, 0.012, N.z - 0.0, 0.55);
+        wrap('scarf-high', N.y + 0.034, 0.06, 0.058, 0.021, 0.026, N.z - 0.0, 0.6);
         // Its ends crossed over his chest from his throat to the far side of his waist, under the apron's band: each a
         // flat band of knitting laid on the jumper (the one over the other where they cross), weighed as the jumper
         // under it, so it breathes and bends with him
@@ -1501,7 +1514,7 @@ const HillBoyPieces = {
 
 // Where his hair grows under the cap: round the head from az0 (in front of each ear) and down from p0 (under the cap)
 // to p1 (the nape), rad
-HillBoy.HAIR = Object.freeze({ az0: 1.18, p0: 0.78, p1: 2.25 });
+HillBoy.HAIR = Object.freeze({ az0: 1.18, p0: 0.78, p1: 2.38 });
 
 // A point of his head (from its centre, m) in the direction `polar` from the crown and `az` round from his front
 // (+ to his left, +x): a boy's skull, narrowing to the jaw and the chin, deeper behind; with `face`, its features
