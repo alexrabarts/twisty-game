@@ -70,7 +70,13 @@ for (const stage of ['tremola', 'gotthard-north', 'andermatt-goeschenen', 'goesc
     test('every side road of every junction was read', () => {
         const sides = env.graph.junctions.filter(inStage).reduce((n, j) => n + j.incident.filter(i => !env.data.edges[i.edgeId].onRide).length, 0);
         expect(found.roads).toBeGreaterThanOrEqual(sides);
-        expect(found.samples).toBeGreaterThan(200 * found.roads);
+        // (each read along its centre and wheel lines every 0.5 m out to 40 m, or to its end: a side road that goes
+        // into a tunnel 7 m out, leg 4's j83, has 3 x 14 places)
+        const reads = env.graph.junctions.filter(inStage).reduce((n, j) => n + j.incident.filter(i => !env.data.edges[i.edgeId].onRide).reduce((m, i) => {
+            const { rows } = env.graph.chainFrom(i.edgeId, j.node, 40);
+            return m + (rows.length > 1 ? 3 * Math.floor(Math.min(40, rows[rows.length - 1].run) / 0.5) : 0);
+        }, 0), 0);
+        expect(found.samples).toBeGreaterThanOrEqual(0.9 * reads);
     });
 
     test('a side road meets the ride: no step, no hole, no land over it', () => {

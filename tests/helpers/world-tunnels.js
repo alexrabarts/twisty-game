@@ -62,6 +62,16 @@ export function tunnelWindow(game, env, store, at, { nearM = 300, stepM = 1, acr
     };
     // Upright faces in plan by their boxes: fronts(x, z, y0, y1) is true where one stands within 0.3 m of (x, z) and
     // covers from y0 up to y1
+    // Whether the spans [low, high] together cover y0 to y1 (5 cm either end, and no gap between two of 5 cm)
+    const covers = (spans, y0, y1) => {
+        let reach = y0 + 0.05;
+        for (const [a, b] of spans.slice().sort((p, q) => p[0] - q[0])) {
+            if (a > reach + 0.05) break;
+            reach = Math.max(reach, b);
+            if (reach >= y1 - 0.05) return true;
+        }
+        return reach >= y1 - 0.05;
+    };
     const facesOf = (mesh, ranges) => {
         const id = `f:${mesh.geometry.uuid}`;
         if (store.grids.has(id)) return store.grids.get(id);
@@ -77,7 +87,12 @@ export function tunnelWindow(game, env, store, at, { nearM = 300, stepM = 1, acr
                 for (let cx = Math.floor((b[0] - 0.3) / cell); cx <= Math.floor((b[3] + 0.3) / cell); cx++) for (let cz = Math.floor((b[2] - 0.3) / cell); cz <= Math.floor((b[5] + 0.3) / cell); cz++) { const h = cx * 65536 + cz; (hash.get(h) || hash.set(h, []).get(h)).push(ref); }
             }
         }
-        const faces = { fronts(x, z, y0, y1) { for (const ref of hash.get(Math.floor(x / cell) * 65536 + Math.floor(z / cell)) || []) { const b = boxes[ref]; if (x >= b[0] - 0.3 && x <= b[3] + 0.3 && z >= b[2] - 0.3 && z <= b[5] + 0.3 && b[1] <= y0 + 0.05 && b[4] >= y1 - 0.05) return true; } return false; } };
+        // (fronted by the faces at (x, z) together: a portal's beam from its roof and the headwall from the beam's top
+        // up to the land are two faces, one over the other)
+        const faces = {
+            spans(x, z) { const out = []; for (const ref of hash.get(Math.floor(x / cell) * 65536 + Math.floor(z / cell)) || []) { const b = boxes[ref]; if (x >= b[0] - 0.3 && x <= b[3] + 0.3 && z >= b[2] - 0.3 && z <= b[5] + 0.3) out.push([b[1], b[4]]); } return out; },
+            fronts(x, z, y0, y1) { return covers(faces.spans(x, z), y0, y1); }
+        };
         store.grids.set(id, faces);
         return faces;
     };
@@ -127,7 +142,7 @@ export function tunnelWindow(game, env, store, at, { nearM = 300, stepM = 1, acr
     }
     const landYs = (x, z) => { const out = []; for (const g of land) g.ys(x, z, out); return out; };
     const floorAt = (x, z, y) => { const out = []; for (const g of floors) g.ys(x, z, out); return out.some(h => Math.abs(h - y) <= 0.15); };
-    const fronted = (x, z, y0, y1) => uprights.some(f => f.fronts(x, z, y0, y1));
+    const fronted = (x, z, y0, y1) => covers(uprights.flatMap(f => f.spans(x, z)), y0, y1);
 
     // The tubes near `at`: { key, road, rows: [{x, y, z, l: [x, y, z], r: [x, y, z], s}], tube: [k...] (rows in a tube) }
     const roads = [];
