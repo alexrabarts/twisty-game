@@ -20,7 +20,7 @@ const store = (initial = null) => {
 describe('the legs and their folders', () => {
     test('the tour is the list: its twelve legs in ride order, then the legs shipped before it', () => {
         expect(WorldLegs.LIST.filter(l => l.n).map(l => l.n)).toEqual([1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12]);
-        expect(WorldLegs.LIST.filter(l => !l.planned && l.n).map(l => l.id)).toEqual(['airolo-lookout', 'lookout-andermatt', 'hospental-summit', 'summit-airolo']);
+        expect(WorldLegs.LIST.filter(l => !l.planned && l.n).map(l => l.id)).toEqual(['airolo-lookout', 'lookout-andermatt', 'andermatt-goeschenen', 'goeschenen-susten', 'susten-gadmen', 'hospental-summit', 'summit-airolo']);
         expect(WorldLegs.LIST.slice(-2).map(l => l.id)).toEqual(['gotthard-north', 'tremola']);
         // (a group is a run of one pass: the tour comes back over the Gotthard at its end)
         expect(WorldLegs.groups().map(g => g.pass)).toEqual(['Gotthard', 'Schöllenen', 'Susten', 'Grimsel', 'Furka', 'Gotthard', 'Earlier legs']);
@@ -75,8 +75,9 @@ describe('which legs are open', () => {
         expect(WorldLegs.markFinished('airolo-lookout', s)).toBe(true);
         expect(WorldLegs.markFinished('airolo-lookout', s)).toBe(false);
         expect(WorldLegs.suggested({ storage: s })).toBe('lookout-andermatt');
-        // (leg 11 opens after the last built leg before it: leg 2, until legs 3 to 10 are built)
-        expect(WorldLegs.find('hospental-summit').opensAfter).toBe('lookout-andermatt');
+        // (leg 11 opens after the last built leg before it: leg 5, until legs 6 to 10 are built)
+        expect(WorldLegs.find('andermatt-goeschenen').opensAfter).toBe('lookout-andermatt');
+        expect(WorldLegs.find('hospental-summit').opensAfter).toBe('susten-gadmen');
     });
 
     test('a leg that opens after another stays shut until that leg is finished', () => {

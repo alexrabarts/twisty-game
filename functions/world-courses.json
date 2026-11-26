@@ -12,6 +12,34 @@
       25527
     ]
   },
+  "world-andermatt-goeschenen-v1": {
+    "kind": "stage",
+    "gates": 0,
+    "metres": 6799,
+    "floorMs": 108472,
+    "gateFloorsMs": [
+      108472
+    ]
+  },
+  "world-goeschenen-susten-v1": {
+    "kind": "stage",
+    "gates": 10,
+    "metres": 22473,
+    "floorMs": 277160,
+    "gateFloorsMs": [
+      29712,
+      26292,
+      30720,
+      23478,
+      24905,
+      22296,
+      21819,
+      22926,
+      25023,
+      23174,
+      26815
+    ]
+  },
   "world-gotthard-north-v2": {
     "kind": "stage",
     "gates": 6,
@@ -66,6 +94,32 @@
       34164,
       26502,
       29218
+    ]
+  },
+  "world-susten-gadmen-v1": {
+    "kind": "stage",
+    "gates": 6,
+    "metres": 15782,
+    "floorMs": 205737,
+    "gateFloorsMs": [
+      24490,
+      18801,
+      27701,
+      24686,
+      22623,
+      58718,
+      28718
+    ]
+  },
+  "world-tour-susten-v1": {
+    "kind": "tour",
+    "gates": 2,
+    "metres": 45053,
+    "floorMs": 591369,
+    "gateFloorsMs": [
+      108472,
+      277160,
+      205737
     ]
   },
   "world-tremola-v1": {

@@ -315,6 +315,56 @@
      }
     }
    }
+  },
+  "andermatt-goeschenen": {
+   "name": "Andermatt through the Schöllenen to Göschenen",
+   "waypoints": [
+    28,
+    3,
+    32
+   ],
+   "stops": {
+    "start": {
+     "kind": "hotel",
+     "e": 2688484,
+     "n": 1165283
+    },
+    "end": {
+     "kind": "carpark",
+     "e": 2687852,
+     "n": 1169199
+    }
+   }
+  },
+  "goeschenen-susten": {
+   "name": "Göschenen down to Wassen and up to the Susten pass",
+   "waypoints": [
+    32,
+    2,
+    21
+   ],
+   "stops": {
+    "end": {
+     "kind": "carpark",
+     "e": 2677064,
+     "n": 1175869
+    }
+   }
+  },
+  "susten-gadmen": {
+   "name": "The Susten pass down to Gadmen",
+   "waypoints": [
+    21,
+    22,
+    33
+   ],
+   "stops": {
+    "end": {
+     "kind": "carpark",
+     "e": 2669643,
+     "n": 1176582
+    }
+   }
   }
  },
  "points": [
@@ -352,6 +402,20 @@
    "e": 2685782,
    "n": 1153422,
    "boundary": false
+  },
+  {
+   "id": 32,
+   "name": "Göschenen",
+   "e": 2688140,
+   "n": 1169340,
+   "boundary": true
+  },
+  {
+   "id": 33,
+   "name": "Gadmen car park",
+   "e": 2669560,
+   "n": 1176600,
+   "boundary": true
   }
  ]
 }

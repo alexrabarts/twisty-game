@@ -111,6 +111,20 @@ export function writeFolder(dir, legs, { versions = {}, log = () => {} } = {}) {
   return rows;
 }
 
+// Names the start and end stops of the importer's stages that the tour names (stage.startStop, endStop), and seals the
+// folder again; the same bytes when nothing changes
+export function nameStops(dir, legs) {
+  const manifest = JSON.parse(fs.readFileSync(path.join(dir, 'manifest.json'), 'utf8'));
+  for (const leg of legs) {
+    const stage = manifest.stages.find(s => s.id === leg.id);
+    if (!stage) throw new Error(`leg ${leg.n} (${leg.id}): no stage of that id in ${dir}`);
+    for (const id of [leg.start, leg.end]) if (id && !manifest.stops.some(st => st.id === id)) throw new Error(`leg ${leg.n} (${leg.id}): no stop ${id} in ${dir}`);
+    if (leg.start) stage.startStop = leg.start;
+    if (leg.end) stage.endStop = leg.end;
+  }
+  seal(dir, manifest, v => Buffer.from(`${JSON.stringify(v)}\n`));
+}
+
 // The folder's dataHash (every data file but the manifest) and SHA256SUMS (every file), as encode.mjs makes them
 function seal(dir, manifest, json) {
   const files = [];
@@ -143,6 +157,10 @@ export function main(argv = []) {
   const log = m => console.error(m);
   const rows = {};
   for (const [folder, legs] of byFolder) Object.assign(rows, writeFolder(path.join(ROOT, folder), legs, { versions, log }));
+  // A leg the importer made that starts at the end stop of the leg before it (legs share one ride): its stops by name
+  const named = new Map();
+  for (const leg of tour.built()) if (!leg.base && (leg.start || leg.end)) (named.get(leg.folder) || named.set(leg.folder, []).get(leg.folder)).push(leg);
+  for (const [folder, legs] of named) nameStops(path.join(ROOT, folder), legs);
   // The derived legs' rows replace their own (any version) and keep every other row
   const own = new Set([...byFolder.values()].flat().map(l => `world-${l.id}-`));
   const kept = fs.existsSync(courses) ? Object.entries(JSON.parse(fs.readFileSync(courses, 'utf8'))).filter(([id]) => ![...own].some(prefix => id.startsWith(prefix) && /^v\d+$/.test(id.slice(prefix.length)))) : [];
