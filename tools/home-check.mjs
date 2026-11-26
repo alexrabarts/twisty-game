@@ -91,7 +91,7 @@ function layout(pairs) {
         }
     }
     // Groups of many (pins, names): none meets another of any group listed
-    const many = (pairs.many || []).flatMap(s => [...document.querySelectorAll(s)].map((el, k) => [`${s}[${k}] ${el.textContent.trim()}`, el.getBoundingClientRect()]));
+    const many = (pairs.many || []).flatMap(s => [...document.querySelectorAll(s)].filter(el => !el.hidden).map((el, k) => [`${s}[${k}] ${el.textContent.trim()}`, el.getBoundingClientRect()]));
     for (let i = 0; i < many.length; i++) {
         for (let j = i + 1; j < many.length; j++) {
             if (meet(many[i][1], many[j][1])) problems.push(`${many[i][0]} meets ${many[j][0]}`);

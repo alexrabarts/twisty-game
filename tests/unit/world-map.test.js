@@ -40,9 +40,20 @@ describe('the map data', () => {
         expect(loadScript('world/tourmap-data.js').length).toBeLessThan(30 * 1024);
     });
 
-    test('the places named are the passes and the towns of the loop, and nothing else', () => {
-        expect(WorldMapData.places.map(p => p.name).sort()).toEqual(['Airolo', 'Andermatt', 'Furka', 'Gadmen', 'Gletsch', 'Gotthard', 'Grimsel', 'Guttannen', 'Hospental', 'Innertkirchen', 'Realp', 'Schöllenen', 'Susten', 'Tremola']);
+    test('the places named are the passes and the towns of the loop and the ends of its legs, and nothing else', () => {
+        expect(WorldMapData.places.map(p => p.name).sort((a, b) => a.localeCompare(b, 'de'))).toEqual(['Airolo', 'Andermatt', 'Furka', 'Gadmen', 'Gletsch', 'Göschenen', 'Gotthard', 'Grimsel', 'Guttannen', 'Hospental', 'Innertkirchen', 'Lookout', 'Realp', 'Schöllenen', 'Susten', 'Tremola', 'Wassen']);
         WorldMapData.places.forEach(p => expect(['n', 's', 'e', 'w']).toContain(p.side));
+    });
+
+    test('every end of a leg has a place named within 1.5 km of it', () => {
+        const named = WorldMapData.places.filter(p => p.kind !== 'road');
+        for (const leg of WorldTour.LEGS) {
+            const line = WorldMapData.legs[leg.n];
+            for (const [x, z] of [line[0], line[line.length - 1]]) {
+                const near = Math.min(...named.map(p => Math.hypot(p.x - x, p.z - z)));
+                expect([leg.n, near < 1500]).toEqual([leg.n, true]);
+            }
+        }
     });
 
     test('the climb counts only steps of 10 m, so noise is not climb', () => {

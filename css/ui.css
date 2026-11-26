@@ -2402,6 +2402,14 @@ body.home-map-on .home-panel {
     letter-spacing: 0.08em;
 }
 
+.map-place[hidden] {
+    display: none;
+}
+
+.map-place-view {
+    color: var(--c-text-dim);
+}
+
 .map-place-road {
     font-style: italic;
     color: var(--c-text-dim);
@@ -2411,6 +2419,10 @@ body.home-map-on .home-panel {
 .map-place.side-w { transform: translate(calc(-100% - 8px), -50%); }
 .map-place.side-n { transform: translate(-50%, calc(-100% - 9px)); }
 .map-place.side-s { transform: translate(-50%, 8px); }
+.map-place.side-ne { transform: translate(6px, calc(-100% - 6px)); }
+.map-place.side-nw { transform: translate(calc(-100% - 6px), calc(-100% - 6px)); }
+.map-place.side-se { transform: translate(6px, 6px); }
+.map-place.side-sw { transform: translate(calc(-100% - 6px), 6px); }
 
 /* A pin for each leg of the tour, with its number: the keys and a thumb choose by it */
 .map-pin {

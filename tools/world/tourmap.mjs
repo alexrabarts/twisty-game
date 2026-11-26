@@ -25,16 +25,20 @@ export const ORIGIN = { e0: 2688000, n0: 1165000 };
 export const TOLERANCE_M = 12;
 export const ROUND_M = 5;
 
-// The places the map names: the passes and the towns of the loop, by their key in the plan's `W`. `kind` sets the
-// mark (a pass is a peak mark), `side` where the label stands from the point (the map's own layout, chosen so no two
-// labels meet at the menu's sizes)
+// The places the map names: the passes and the towns of the loop and every end of a leg the tour table names, by their
+// key in the plan's `W` or, for a place the plan does not name, by a stop of a built folder. `kind` sets the mark (a
+// pass is a peak mark, a town or a view a dot, a named road none), `side` where the label stands from the point (the
+// map moves a label to a clear side at run time, WorldMap.open)
 export const PLACES = [
     { key: 'Airolo', name: 'Airolo', kind: 'town', side: 'e' },
+    { stop: ['worlds/airolo/', 'airolo-lookout-end'], name: 'Lookout', kind: 'view', side: 'w' },
     { key: 'Tremola upper', name: 'Tremola', kind: 'road', side: 'w' },
     { key: 'Gotthard', name: 'Gotthard', kind: 'pass', side: 'w' },
     { key: 'Hospental', name: 'Hospental', kind: 'town', side: 'w' },
     { key: 'Andermatt', name: 'Andermatt', kind: 'town', side: 'e' },
     { key: 'Schöllenen', name: 'Schöllenen', kind: 'road', side: 'e' },
+    { stop: ['worlds/susten/', 'andermatt-goeschenen-end'], name: 'Göschenen', kind: 'town', side: 'w' },
+    { key: 'Wassen', name: 'Wassen', kind: 'town', side: 'e' },
     { key: 'Susten', name: 'Susten', kind: 'pass', side: 's' },
     { key: 'Gadmen', name: 'Gadmen', kind: 'town', side: 'n' },
     { key: 'Innertkirchen', name: 'Innertkirchen', kind: 'town', side: 's' },
@@ -135,9 +139,18 @@ export function build(plan, height, tour = readTour(), root = ROOT) {
         return { n: row.n, line };
     });
     const places = PLACES.map(place => {
-        const at = plan.W[place.key];
-        if (!at) throw new Error(`the plan names no ${place.key}`);
-        const [x, z] = toWorld(at);
+        let x, z;
+        if (place.stop) {
+            const [folder, id] = place.stop;
+            const manifest = JSON.parse(fs.readFileSync(path.join(root, folder, 'manifest.json'), 'utf8'));
+            const stop = manifest.stops.find(st => st.id === id);
+            if (!stop) throw new Error(`${folder} has no stop ${id}`);
+            [x, z] = [stop.x, stop.z];
+        } else {
+            const at = plan.W[place.key];
+            if (!at) throw new Error(`the plan names no ${place.key}`);
+            [x, z] = toWorld(at);
+        }
         return { name: place.name, kind: place.kind, side: place.side, x: Math.round(x / 10) * 10, z: Math.round(z / 10) * 10 };
     });
     return { legs, places };

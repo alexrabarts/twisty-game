@@ -121,35 +121,43 @@ const WorldMap = {
     // time, where its pin stands, and its state ('open', 'locked' or 'planned', and `done` once finished)
     entries({ unlockAll = false, storage = WorldMap.storage(), data = WorldMap.data() } = {}) {
         const done = WorldLegs.finished(storage);
-        const pins = [];
-        return WorldLegs.LIST.map((leg) => {
+        const entries = WorldLegs.LIST.map((leg) => {
             const line = WorldMap.lineOf(leg, data);
             const earlier = !!WorldMap.EARLIER[leg.id] || !leg.n;
             const open = WorldLegs.isOpen(leg.id, { unlockAll, storage });
             const state = leg.planned ? 'planned' : open ? 'open' : 'locked';
-            const entry = {
+            return {
                 id: leg.id, n: leg.n || null, pass: leg.pass, name: leg.name, km: leg.km, note: leg.planned ? '' : leg.note,
                 from: leg.from, to: leg.to, state, done: done.includes(leg.id), earlier, line,
                 ...WorldMap.climb(line), best: leg.planned ? null : WorldMap.best(leg.id, storage),
                 after: leg.opensAfter ? (WorldLegs.find(leg.opensAfter) || {}).n || null : null
             };
-            // A tour leg's pin: the point of its line farthest from the pins before it (and, at half the weight, from
-            // the places named), so pins of legs that share a valley stand apart and off the names
-            if (line && !earlier) {
+        });
+        WorldMap.placePins(entries.filter(e => e.line && !e.earlier), data);
+        return entries;
+    },
+
+    // Each tour leg's pin: the point of its line (10% to 90% of the way) farthest from the other pins, and then from
+    // the places named (a named road aside), so pins of legs that share a valley stand apart and off the names. Placed
+    // in turn, then each placed again against all the others, three times: the first placed does not take the best room
+    placePins(list, data) {
+        const towns = data.places.filter(q => q.kind !== 'road');
+        const shares = [];
+        for (let k = 10; k <= 90; k += 5) shares.push(k);
+        for (let round = 0; round < 4; round++) {
+            for (const entry of list) {
                 let pick = null, room = -Infinity;
-                for (let k = 10; k <= 90; k += 5) {
-                    const p = WorldMap.pointAt(line, k / 100);
-                    const nearPin = pins.reduce((d, q) => Math.min(d, Math.hypot(p.x - q.x, p.z - q.z)), Infinity);
-                    const nearPlace = data.places.reduce((d, q) => Math.min(d, 2 * Math.hypot(p.x - q.x, p.z - q.z)), Infinity);
-                    // (room past 4 km is room enough; then the middle of the line is preferred, 30 m for each hundredth)
-                    const score = Math.min(nearPin, nearPlace, 4000) - Math.abs(k - 50) * 30;
+                for (const k of shares) {
+                    const p = WorldMap.pointAt(entry.line, k / 100);
+                    const nearPin = list.reduce((d, o) => (o === entry || !o.pin ? d : Math.min(d, Math.hypot(p.x - o.pin.x, p.z - o.pin.z))), Infinity);
+                    const nearTown = towns.reduce((d, q) => Math.min(d, Math.hypot(p.x - q.x, p.z - q.z)), Infinity);
+                    // (room past 4 km from a pin, or 1.5 km from a name, is room enough; then the middle is preferred)
+                    const score = Math.min(nearPin, 4000) + 0.5 * Math.min(nearTown, 1500) - Math.abs(k - 50) * 5;
                     if (score > room) { room = score; pick = p; }
                 }
                 entry.pin = pick;
-                pins.push(pick);
             }
-            return entry;
-        });
+        }
     },
 
     // The id `delta` steps from `id` in the list's order (the arrow keys), held at the ends
@@ -632,24 +640,27 @@ const WorldMap = {
 
         // The frame keeps the box's shape inside whatever room the layout gives it
         // A name stands on its own side unless a pin, another name or the frame's edge is there: then on the first
-        // side that is clear
+        // side that is clear (the towns, passes and views first, so a named road gives way to them)
         const placeNames = () => {
             const edge = frame.getBoundingClientRect();
             if (!edge.width) return;
             const meet = (a, b) => a.left < b.right && b.left < a.right && a.top < b.bottom && b.top < a.bottom;
             const within = r => r.left >= edge.left && r.right <= edge.right && r.top >= edge.top && r.bottom <= edge.bottom;
             const taken = [...pins.querySelectorAll('.map-pin')].map(pin => pin.getBoundingClientRect());
-            const sides = ['n', 's', 'e', 'w'];
-            names.querySelectorAll('.map-place').forEach((label) => {
+            const sides = ['n', 's', 'e', 'w', 'ne', 'nw', 'se', 'sw'];
+            const labels = [...names.querySelectorAll('.map-place')];
+            [...labels.filter(l => !l.classList.contains('map-place-road')), ...labels.filter(l => l.classList.contains('map-place-road'))].forEach((label) => {
                 const set = side => sides.forEach(k => label.classList.toggle(`side-${k}`, k === side));
-                const order = [label.dataset.side, ...['e', 'w', 's', 'n'].filter(k => k !== label.dataset.side)];
+                const order = [label.dataset.side, ...['e', 'w', 's', 'n', 'ne', 'nw', 'se', 'sw'].filter(k => k !== label.dataset.side)];
                 let side = order.find((k) => {
                     set(k);
                     const r = label.getBoundingClientRect();
                     return within(r) && !taken.some(t => meet(t, r));
                 });
                 set(side || label.dataset.side);
-                taken.push(label.getBoundingClientRect());
+                // A named road with no clear side is left out: the line and the card name it already
+                label.hidden = !side && label.classList.contains('map-place-road');
+                if (!label.hidden) taken.push(label.getBoundingClientRect());
             });
         };
         let fitted = null, panned = false;
