@@ -259,15 +259,35 @@ class StopScene {
             this.pathYawRate += (w * w * StopScene.turn(this.pathYaw, aim) - 2 * w * this.pathYawRate) * dt;
             this.pathYaw += this.pathYawRate * dt;
         }
-        const path = { x: px, y: (Number.isFinite(g) ? g : ly) + O.upM, z: pz, yaw: this.pathYaw, pitch: O.pitchDeg * r, roll: 0, fov: from.fov };
+        // (its height follows the ground on the way on a critically damped spring at FLOOR_RATE: where the way steps
+        // from the road onto a stop's standing or under a deck, the ground under it moved the camera 0.9 m in a frame)
+        const gy = (Number.isFinite(g) ? g : ly) + O.upM;
+        if (this.pathY === undefined) { this.pathY = gy; this.pathYRate = 0; }
+        else if (dt > 0) {
+            const w = StopScene.FLOOR_RATE;
+            this.pathYRate += (w * w * (gy - this.pathY) - 2 * w * this.pathYRate) * dt;
+            this.pathY += this.pathYRate * dt;
+        }
+        const path = { x: px, y: this.pathY, z: pz, yaw: this.pathYaw, pitch: O.pitchDeg * r, roll: 0, fov: from.fov };
         const w1 = StopScene.ease(t / O.joinS), w2 = StopScene.ease((t - this.holdFrom) / this.settleS);
-        const mix = (a, b, w) => ({
+        // (each blend turns the way it started turning: the gap between the two aims is followed from frame to frame,
+        // never taken afresh the shorter way round. A hold that looks back along the way in, a car park's at the group,
+        // stands near 180 degrees from the overtake's aim, and the shorter way flipped sides there: 179 degrees in a frame)
+        const gaps = this.gaps || (this.gaps = {});
+        const gap = (key, a, b) => {
+            const raw = StopScene.turn(a, b);
+            gaps[key] = gaps[key] === undefined ? raw : gaps[key] + StopScene.turn(gaps[key], raw);
+            return gaps[key];
+        };
+        const mix = (key, a, b, w) => ({
             x: a.x + (b.x - a.x) * w, y: a.y + (b.y - a.y) * w, z: a.z + (b.z - a.z) * w,
-            yaw: a.yaw + StopScene.turn(a.yaw, b.yaw) * w, pitch: a.pitch + (b.pitch - a.pitch) * w,
-            roll: a.roll + StopScene.turn(a.roll, b.roll) * w, fov: a.fov + (b.fov - a.fov) * w
+            yaw: a.yaw + gap(`${key}yaw`, a.yaw, b.yaw) * w, pitch: a.pitch + (b.pitch - a.pitch) * w,
+            roll: a.roll + gap(`${key}roll`, a.roll, b.roll) * w, fov: a.fov + (b.fov - a.fov) * w
         });
         const held = { x: hold.eye.x, y: hold.eye.y, z: hold.eye.z, yaw: hold.yaw, pitch: hold.pitch, roll: hold.roll, fov: hold.fov };
-        const c = mix(mix(chase, path, w1), held, w2);
+        // (the way to the hold is chosen as the settle starts, the shorter then, and kept)
+        if (!(w2 > 0)) { gaps.holdyaw = undefined; gaps.holdroll = undefined; }
+        const c = mix('hold', mix('path', chase, path, w1), held, w2);
         // Over the bikes and the rail on the way to the hold, and never under EYE_CLEAR_M over the ground (eased in from
         // none, so the first frame is the chase camera's own)
         c.y += (this.arcM || StopScene.ARC_M) * 4 * w2 * (1 - w2);
@@ -305,6 +325,13 @@ class StopScene {
     static ease(u) {
         const x = Math.max(0, Math.min(1, u));
         return x * x * x * (x * (6 * x - 15) + 10);
+    }
+
+    // A puff of vapour, its own material so it fades on its own (Game.prewarmWorldScenery draws one at load: its
+    // program compiled at the first puff, 80 ms into the held shot)
+    static puffMesh() {
+        return new THREE.Mesh(StopScene.puffGeometry || (StopScene.puffGeometry = new THREE.SphereGeometry(0.1, 10, 8)),
+            new THREE.MeshBasicMaterial({ color: 0xeef1f4, transparent: true, opacity: 0.55, depthWrite: false }));
     }
 
     // The shortest turn from angle a to b (radians)
@@ -627,8 +654,7 @@ class StopScene {
         if (!head) return;
         const at = head.getWorldPosition(new THREE.Vector3());
         const facing = r.bike.rider.getWorldDirection(new THREE.Vector3());
-        const mesh = new THREE.Mesh(StopScene.puffGeometry || (StopScene.puffGeometry = new THREE.SphereGeometry(0.1, 10, 8)),
-            new THREE.MeshBasicMaterial({ color: 0xeef1f4, transparent: true, opacity: 0.55, depthWrite: false }));
+        const mesh = StopScene.puffMesh();
         mesh.name = 'stop-puff';
         mesh.position.copy(at).addScaledVector(facing, 0.22);
         scene3d.add(mesh);

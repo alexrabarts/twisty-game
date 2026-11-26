@@ -8929,6 +8929,7 @@ WORLD['world-shot'] = async (page) => {
             tasks.length = 0;
             const before = near;
             const programs = renderer.info.programs ? renderer.info.programs.length : 0;
+            const memory0 = { ...renderer.info.memory };
             const states = () => scene.riders.map(r => `${r.stood ? 'S' : ''}${(r.player ? r.bike.group : r.bike.bikeGroup || {}).visible ? 'V' : ''}`).join(',') + ` puffs ${scene.puffs.length} drawRaised ${!!scene.drawRaised}`;
             const was = states();
             const t0 = performance.now();
@@ -8956,7 +8957,7 @@ WORLD['world-shot'] = async (page) => {
             const nowNear = frameMs < Infinity ? casters() : new Map();
             const came = [...nowNear.keys()].filter(k => !before.has(k)).map(k => nowNear.get(k));
             near = new Set(nowNear.keys());
-            if (t4 - t0 > frameMs) slow.push({ scene: was === is ? is : `${was} -> ${is}`, came: [...new Set(came)].slice(0, 8), compiled: compiled.map(pr => `${pr.name} ${String(pr.cacheKey || "").slice(0, 400)}`), users, keyDiff: compiled.map((pr) => {
+            if (t4 - t0 > frameMs) slow.push({ scene: was === is ? is : `${was} -> ${is}`, came: [...new Set(came)].slice(0, 8), compiled: compiled.map(pr => `${pr.name} ${String(pr.cacheKey || "").slice(0, 400)}`), users, keys: compiled.map(pr => [String(pr.cacheKey), ...[...known].filter(o => String(o.cacheKey || '').split(',')[0] === String(pr.cacheKey).split(',')[0]).map(o => String(o.cacheKey))]), keyDiff: compiled.map((pr) => {
                 // (what sets the new program apart from the nearest one made before: the fields of its key that differ)
                 const mine = String(pr.cacheKey || '').split(',');
                 let best = null, bestN = Infinity;
@@ -8967,7 +8968,7 @@ WORLD['world-shot'] = async (page) => {
                     if (n < bestN) { bestN = n; best = theirs; }
                 }
                 return best ? mine.map((v, i) => v !== best[i] ? `${i}:${best[i]}->${v}` : null).filter(Boolean).join(' ') : 'none alike';
-            }), t: Math.round(scene.t * 100) / 100, ms: Math.round(t4 - t0), stepMs: Math.round(t1 - t0), updateMs: Math.round(t2 - t1), cullMs: Math.round(t3 - t2), renderMs: Math.round(t4 - t3), newPrograms: (renderer.info.programs ? renderer.info.programs.length : 0) - programs, tasks: [...tasks].sort((a, b) => b.ms - a.ms).slice(0, 4).map(k => `${k.id} ${Math.round(k.ms)}`) });
+            }), t: Math.round(scene.t * 100) / 100, ms: Math.round(t4 - t0), stepMs: Math.round(t1 - t0), updateMs: Math.round(t2 - t1), cullMs: Math.round(t3 - t2), renderMs: Math.round(t4 - t3), newPrograms: (renderer.info.programs ? renderer.info.programs.length : 0) - programs, newGeometries: renderer.info.memory.geometries - memory0.geometries, newTextures: renderer.info.memory.textures - memory0.textures, drawCalls: renderer.info.render.calls, drawTriangles: renderer.info.render.triangles, tasks: [...tasks].sort((a, b) => b.ms - a.ms).slice(0, 4).map(k => `${k.id} ${Math.round(k.ms)}`) });
             poses.push(pose());
             // (once the camera has passed the bike, the bike is out of the picture: StopScene.OVERTAKE; to the end at a
             // stop held on a view of its own, a photo's (HOLDS), and until the hold is flown to at one that looks back at

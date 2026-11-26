@@ -1119,3 +1119,14 @@ One job at a time, in the order A to H. Each entry: the job, the commit, what th
 - Check: road-cover and importer tests pass; tunnels and junctions under jest and on the GPU as above.
 - Held shots: every stop's held shot at Ultra is now under LEG_BUDGET with a margin, by a `raise` cap on each stop (400 560 to 427 565; Göschenen was 620 334, the Susten pass 526 800, the hospice square 485 600). The per-leg scenery scales (legs 1, 3 and 12) are back to 1: `Game.budgetWindow` holds `world-window` at most 435 889 there.
 - Open, not this job's: `world-shot` fails on a step in the end fly at six stops (aim up to 179 degrees from one frame to the next, at Airolo).
+
+
+
+## The end fly with a hold that faces back along the way in
+
+- The fault: `world-shot` failed at six of the tour's end stops on a jump between frames, the worst a 179-degree turn at the Airolo car park (leg 12, the Tremola ridden down).
+- Cause: the blend to the hold took the shorter way round afresh each frame. A car park's hold looks back at the group, near 180 degrees from the overtake's aim along the way in, so as the two aims moved the shorter way flipped sides in one frame. Not the stop data and not a reversed leg's direction: a hold facing any way does it.
+- Fix in `StopScene.overtakeAt`, for every stop and both directions: each blend follows the gap between its two aims from frame to frame, and the turn to the hold is chosen as the settle starts. The overtake's height also follows the ground on a spring (a 0.9 m drop in a frame where the way stepped onto a stop's standing). A test flies to holds facing every 7.5 degrees.
+- Also: a stop's puff of vapour compiled its program 80 ms into the held shot; it is drawn once at load now, its material kept (disposed, its program went with it).
+- `world-shot` on all nine end stops: no jump of place, aim or lens. Pictures: `~/Library/Caches/twisty-world/lookout-shots/overtake-tour/`.
+- Left: `susten-gadmen` has a run of frames of 45 to 59 ms at 13.5 s of the fly as the camera passes a house close by, draw only (no new program, no upload); every other stop keeps under 50 ms.

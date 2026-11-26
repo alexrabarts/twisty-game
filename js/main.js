@@ -1025,6 +1025,13 @@ class Game {
         const parent = this.environment.sceneryGroup || this.scene;
         parent.add(group);
         if (typeof LandShade !== 'undefined' && this.environment.isWorld) LandShade.hazeTree(group);
+        // (and a stop's puff of vapour, which hangs in the scene itself, out of sight)
+        const puff = typeof StopScene !== 'undefined' && StopScene.puffMesh ? StopScene.puffMesh() : null;
+        if (puff) {
+            puff.position.set(0, -10000, 0);
+            puff.frustumCulled = false;
+            this.scene.add(puff);
+        }
         // (with the headlight on and off: a program counts the lights in view, and the ride switches it with the look)
         const light = this.headlight, was = light ? light.visible : null;
         try {
@@ -1036,6 +1043,8 @@ class Game {
         } finally {
             if (light) light.visible = was;
             parent.remove(group);
+            // (its material is kept, not disposed: disposed, its program went with it)
+            if (puff) this.scene.remove(puff);
             group.traverse((o) => {
                 if (o.isInstancedMesh) o.dispose();
                 else if (o.isMesh) o.geometry.dispose();
