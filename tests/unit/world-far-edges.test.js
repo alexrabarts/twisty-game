@@ -11,8 +11,9 @@
 // round a wall's end and a mouth, so its rows and the section's differ): 5 cm out from the drawn edge, the land as its
 // tile is drawn there; where the road stands more
 // than TOL_M over it, and over every road drawn under the edge, three rays from under the road, out across the edge at
-// a fifth, a half and four fifths of the gap, must each meet the edge works (`road-works`, `road-side`), 5 cm either way of the row. An edge one ray
-// misses is open: the cleft under it is seen from afar. Rows within two of a structure's are not read (a deck has no
+// a fifth, a half and four fifths of the gap (no higher than PIXEL_M under the edge), must each meet the edge works
+// (`road-works`, `road-side`), AT_M either way of the row toward each row beside it. An edge one ray
+// misses is open: the cleft under it is seen from afar. A structure's rows and the rows beside them are not read (a deck has no
 // works under its edge). Each pair of levels (the section's, the tile's) is read once at each row and side.
 // A place is a run of open edges of one side with no gap over GAP_M along the ride. Each stage is read in a plain node
 // process, the stages side by side, as tests/unit/world-road-cover.test.js does (jest's module sandbox ran the same
@@ -26,23 +27,27 @@ import { stagesFor } from '../helpers/world-stages.js';
 
 // The stages with open far edges today, each with its exact count of places. The table may only shrink, and must end
 // empty: a count that rises fails, and one that falls fails until the table is brought down to it
-// Measured 2026-11-26 with the far slope's rule (WorldEnvironment.edgeFoot `far`); before it: 674 places, 16 086 open
-// edges, the worst 37.6 m (susten-gadmen); after it 509 places, 913 edges
+// Measured 2026-11-26. Before the far slope's rule (WorldEnvironment.edgeFoot `far`): 674 places, 16 086 open edges,
+// the worst 37.6 m (susten-gadmen). After it, and the faces under a far segment with no slope, the rows kept beside a
+// structure, the slopes tested against a carriageway at their drawn top, and this check's own reading (the streamer's
+// stale sections let go, the rays half a metre along and a pixel down): 18 places, 24 edges. What is left is named in
+// .agent/system/world.md, "A far section's slope goes down to the land at every level"
 const KNOWN = {
-    'tremola': 54,
-    'summit-airolo': 38,
-    'gotthard-north': 72,
-    'lookout-andermatt': 75,
-    'hospental-summit': 41,
-    'airolo-lookout': 36,
-    'andermatt-goeschenen': 31,
-    'goeschenen-susten': 90,
-    'susten-gadmen': 72
+    'summit-airolo': 1,
+    'gotthard-north': 3,
+    'lookout-andermatt': 3,
+    'hospental-summit': 1,
+    'airolo-lookout': 2,
+    'andermatt-goeschenen': 1,
+    'goeschenen-susten': 5,
+    'susten-gadmen': 2
 };
 
 const WALK_M = 1000;
 const TOL_M = 0.3;
 const GAP_M = 24;
+const AT_M = 0.5;
+const PIXEL_M = 0.3;
 
 const SELF = fileURLToPath(import.meta.url);
 const worker = process.argv[1] === SELF && process.argv[2];
@@ -50,7 +55,7 @@ const game = worker ? loadGame(undefined, []) : null;
 const { fetchFn } = diskFetch();
 
 async function readStage(id) {
-    const { THREE, WorldEnvironment, TerrainMesh, WorldData, RoadMesh, RoadSurface } = game;
+    const { THREE, WorldEnvironment, TerrainMesh, WorldData, RoadMesh, WorldStreamer } = game;
     const env = await WorldEnvironment.load(new THREE.Scene(), { id, fetchFn, models: null, digest: async () => '0' });
     env.scenery.buildTile = () => null;
     const route = env.route;
@@ -68,6 +73,11 @@ async function readStage(id) {
         const at = Math.min(env.endS, s);
         const c = route.sample(at, {});
         env.update(c, at, null, Infinity);
+        await env.streamer.settle(c, at);
+        // (the streamer lets go of what it no longer wants after DISPOSE_AFTER_MS of its clock, which only frames move:
+        // without these two steps every section met on the way stayed held at the level it had then, a section left
+        // at full detail kilometres behind over tiles drawn coarser, which no page ever shows)
+        for (let i = 0; i < 2; i++) env.update(c, at, null, Infinity, WorldStreamer.DISPOSE_AFTER_MS / 1000 + 1);
         await env.streamer.settle(c, at);
         const roads = [...meshes(env.roadGroup, o => o.name === 'road-ribbon' || o.name === 'road-side'), ...meshes(env.sideGroup, o => o.name === 'road-ribbon' || o.name === 'road-side')];
         const skirts = [...meshes(env.roadGroup, o => o.name === 'road-works' || o.name === 'road-side'), ...meshes(env.sideGroup, o => o.name === 'road-works' || o.name === 'road-side')];
@@ -103,11 +113,22 @@ async function readStage(id) {
                     if (roadY - top <= TOL_M) continue;
                     const dir = new THREE.Vector3(o[0], 0, o[1]);
                     ray.far = 0.6 + 1.6 * (roadY - top);
-                    // (5 cm either way along the road from the row: on the row's own line a ray runs along the edge two
-                    // pieces of slope share, and misses both on a rounding)
-                    const along = [-o[1] * 0.05, o[0] * 0.05];
-                    const missed = [0.2, 0.5, 0.8].some(f => [-1, 1].some(w => {
-                        ray.set(new THREE.Vector3(e[0] - o[0] * 0.5 + along[0] * w, roadY - (roadY - top) * f, e[2] - o[1] * 0.5 + along[1] * w), dir);
+                    // (AT_M either way along the edge from the row, toward each row beside it, and no higher than PIXEL_M
+                    // under the edge: a far section is 400 m and more off, where a pixel is about 0.4 m, and on the row's
+                    // own line a ray ran along the edge two pieces of slope share, or into the sliver of a few
+                    // centimetres the builder leaves between two slopes' feet at a bend. Not toward a row past the
+                    // section's drawn rows where no section is held beside it: the window's end, where the road ends)
+                    const ways = [];
+                    for (const [j, nb] of [[k - 1, index - 1], [k + 1, index + 1]]) {
+                        if ((j < from || j > to) && !env.streamer.roads.has(nb)) continue;
+                        const q = sides[j] && sides[j][key];
+                        if (!q) continue;
+                        const len = Math.hypot(q[0] - e[0], q[2] - e[2]);
+                        if (len > 1e-6) ways.push([(q[0] - e[0]) / len * Math.min(AT_M, len / 2), (q[2] - e[2]) / len * Math.min(AT_M, len / 2)]);
+                    }
+                    const missed = [0.2, 0.5, 0.8].some(f => ways.some(w => {
+                        const depth = Math.min(roadY - top, Math.max(PIXEL_M, (roadY - top) * f));
+                        ray.set(new THREE.Vector3(e[0] - o[0] * 0.5 + w[0], roadY - depth, e[2] - o[1] * 0.5 + w[1]), dir);
                         return !ray.intersectObjects(skirts, false).length;
                     }));
                     if (missed) open.push({ s: row.s, side, roadLod: held.lod, landLod: land.lod, gapM: roadY - top });

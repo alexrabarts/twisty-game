@@ -1487,7 +1487,15 @@ class RoadMesh {
         // (not a slope that ends on a side road beside the edge, `meets`: seated on the land under the gap between the
         // two roads it stood as a dark face down into it, seen from the ride)
         let onRoad = false;
-        const seated = q => { if (onRoad) return q; const land = landAt ? landAt(q[0], q[2]) : null; return land !== null && q[1] > land + 0.05 ? [q[0], land - 0.2, q[2]] : q; };
+        // (a far section's deep slope, `deepNow`, is seated on the lowest the land is drawn at its place, `foot.landLow`:
+        // seated on the land at full detail, its feet between two rows 15 m apart stood over the coarse land, open under)
+        let deepNow = false;
+        const landLow = foot && foot.landLow ? foot.landLow : null;
+        const seated = q => {
+            if (onRoad) return q;
+            const land = deepNow && landLow ? landLow(q[0], q[2]) : landAt ? landAt(q[0], q[2]) : null;
+            return land !== null && q[1] > land + 0.05 ? [q[0], land - 0.2, q[2]] : q;
+        };
         // The ground under the verge lies APRON_UNDER_M under the road, SIDE_GROUND_UNDER_M under any side road's
         // carriageway that lies there and APRON_UNDER_M under its verge (as drawn: `foot.sideUnder`, the lowest within
         // `r`). A side road in a mouth is held a few centimetres under the ride, and ground at the ride's own depth stood
@@ -1518,7 +1526,11 @@ class RoadMesh {
         const depthAt = (p, f, o) => {
             if (!guard) return null;
             const g = f.kind === 'wall' && guard.walls ? guard.walls : guard;
-            const top = p[1] + (f.kind === 'apron' ? 0 : H);
+            // (a slope's top where it is drawn: under the verge, and under a side road's surface in a mouth, underAt. Read
+            // at the edge's own height, a side road held a few centimetres under the ride in its mouth stood in every
+            // slope there, and a far section left the mouth open down to the coarse land, a notch metres deep where the
+            // side road is not drawn)
+            const top = f.kind === 'apron' ? underAt(p)[1] : p[1] + H;
             const worst = (a, b) => (a === null ? b : b === null ? a : Math.max(a, b));
             let d = worst(g.depth(p[0], p[2], f.y, top), g.depth(p[0] - o[0] * W, p[2] - o[1] * W, f.y, top));
             if (f.kind !== 'apron') return d;
@@ -1554,7 +1566,11 @@ class RoadMesh {
                 if (!f) return null;
                 const y = Number.isFinite(f.y) ? Math.max(p[1] - RoadMesh.DROP_MAX_M, Math.min(p[1] - 0.05, f.y)) : p[1] - RoadMesh.DECK_M;
                 const end = { kind: f.kind, y, out: out[key], color: f.color || null, top: f.top || null, at: p, run: Number.isFinite(f.run) ? f.run : null, meets: !!f.meets, deep: !!f.deep };
+                // A far section's deep slope (WorldEnvironment.edgeFoot `far`) keeps its foot at full detail too: where
+                // the deep one stands in a road below, the segment is laid with the full-detail one instead of none
+                if (f.deep && Number.isFinite(f.shallow)) end.shallow = { ...end, y: Math.max(p[1] - RoadMesh.DROP_MAX_M, Math.min(p[1] - 0.05, f.shallow)), deep: false };
                 let depth = depthAt(p, end, end.out);
+                if (depth !== null && end.shallow && depthAt(p, end.shallow, end.out) === null) return end.shallow;
                 if (depth === null) return end;
                 // In over the verge toward the carriageway's edge by as far as the works reach into the other road (and
                 // a little more), until they clear it
@@ -1580,7 +1596,13 @@ class RoadMesh {
         }
         // The end a segment of a kind reads at a row: a wall's segment its wall end, a slope's what the row stands on
         // beside its wall. Without a plan, the row's one end
-        const endOf = (k, key, wall) => {
+        // (`seg`: the segment asking; one laid with its ends' full-detail feet, `shallowSeg`, reads those)
+        const shallowSeg = { l: new Set(), r: new Set() };
+        const endOf = (k, key, wall, seg = null) => {
+            const e = endOfRaw(k, key, wall);
+            return seg !== null && e && e.shallow && shallowSeg[key].has(seg) ? e.shallow : e;
+        };
+        const endOfRaw = (k, key, wall) => {
             const e = ends[k] && ends[k][key];
             if (!plan) return e;
             if (wall) return e && e.kind === 'wall' ? e : null;
@@ -1588,11 +1610,21 @@ class RoadMesh {
         };
         // A segment whose two ends clear every other carriageway can still cut across one between them (a side road's
         // edge beside the ride's at a junction): its works are tested every metre along it
+        // A segment whose deep slope would cut across a road below it between its rows is laid with its ends'
+        // full-detail feet (`shallowSeg`), as it was before the far rule: open over the coarse land there, not missing
+        const betweenOr = (k, key, own) => {
+            if (between(k, key)) return true;
+            if (!own.some(f => f && f.shallow)) return false;
+            shallowSeg[key].add(k);
+            if (between(k, key)) return true;
+            shallowSeg[key].delete(k);
+            return false;
+        };
         const between = (k, key) => {
             if (!guard) return true;
             // With a plan this is asked of the slopes only (the plan tested its walls)
             const own = f => (f && !f.blocked ? f : null);
-            const fa = own(endOf(k, key, false)), fb = own(endOf(k + 1, key, false));
+            const fa = own(endOf(k, key, false, k)), fb = own(endOf(k + 1, key, false, k));
             const pa = fa ? fa.at : sides[k][key], pb = fb ? fb.at : sides[k + 1][key];
             const f = fa || fb;
             const n = Math.floor(Math.hypot(pb[0] - pa[0], pb[2] - pa[2]));
@@ -1627,9 +1659,9 @@ class RoadMesh {
                     // behind its wall, which a piece of wall joins to this one's end: `foot.joined`)
                     const joined = j => { const e = plan.end[key][j], p = e ? e.at : sides[j][key]; return !!foot.joined && foot.joined(p[0], p[1], p[2]); };
                     const toMouth = (plan.row[key][k] && atMouth(k + 1) && joined(k)) || (plan.row[key][k + 1] && atMouth(k) && joined(k + 1));
-                    if (!toMouth && ea && eb && (fa || fb) && !(fa && fa.blocked) && !(fb && fb.blocked) && between(k, key)) kind = [fa, fb].filter(Boolean).reduce((best, f) => (rank[f.kind] > rank[best] ? f.kind : best), 'apron');
+                    if (!toMouth && ea && eb && (fa || fb) && !(fa && fa.blocked) && !(fb && fb.blocked) && betweenOr(k, key, [fa, fb])) kind = [fa, fb].filter(Boolean).reduce((best, f) => (rank[f.kind] > rank[best] ? f.kind : best), 'apron');
                 }
-            } else if (ea && eb && (ea[key] || eb[key]) && !(ea[key] && ea[key].blocked) && !(eb[key] && eb[key].blocked) && between(k, key)) {
+            } else if (ea && eb && (ea[key] || eb[key]) && !(ea[key] && ea[key].blocked) && !(eb[key] && eb[key].blocked) && betweenOr(k, key, [ea[key], eb[key]])) {
                 kind = [ea[key], eb[key]].filter(Boolean).reduce((best, f) => (rank[f.kind] > rank[best] ? f.kind : best), 'apron');
             }
             // (no slope on a side road's segment with an end by the ride's wall across a cleft: the ground that closes
@@ -1821,10 +1853,38 @@ class RoadMesh {
             }
             for (const key of ['l', 'r']) {
                 const kind = kindOf(k, key);
+                // A far section's segment that lays no slope (a junction's paving, a side road's mouth, a carriageway in
+                // the way) over land drawn coarser than at full detail: a face hangs from the slope's top down to that
+                // land, along the edge, so the mouth is no notch down to it (`deep` feet at both rows, or `under` where a
+                // slope ends on a side road's surface: WorldEnvironment.edgeFoot `far`). Under a side road drawn there it
+                // lies under that road's surface (underAt); at full detail it lies under the land
+                const pavedSegment = !!(paved[k] && paved[k][key] && paved[k + 1] && paved[k + 1][key]);
+                if ((!kind || (kind === 'apron' && pavedSegment)) && foot && !(sides[k].bits & 7) && !(sides[k + 1].bits & 7)) {
+                    const pa = sides[k][key], pb = sides[k + 1][key], oa = RoadMesh.outward(sides[k])[key], ob = RoadMesh.outward(sides[k + 1])[key];
+                    const fa = foot(pa[0], pa[1], pa[2], oa[0], oa[1], plan ? false : undefined), fb = foot(pb[0], pb[1], pb[2], ob[0], ob[1], plan ? false : undefined);
+                    const low = f => (f && f.deep ? f.y : f && Number.isFinite(f.under) ? f.under : null);
+                    if (low(fa) !== null && low(fb) !== null) {
+                        const ta = underAt(pa), tb = underAt(pb), ba = [pa[0], Math.min(low(fa), ta[1]), pa[2]], bb = [pb[0], Math.min(low(fb), tb[1]), pb[2]];
+                        const along = Math.max(1, Math.ceil(Math.hypot(pb[0] - pa[0], pb[2] - pa[2]) / RoadMesh.APRON_STRIP_M));
+                        const down = Math.max(1, Math.ceil(Math.max(ta[1] - ba[1], tb[1] - bb[1]) / RoadMesh.DEEP_ROW_M));
+                        const mix = (u, v, t) => u.map((c, i) => c + (v[i] - c) * t);
+                        const ca = fa.top || fa.color || RoadMesh.APRON_LINEAR, cb = fb.top || fb.color || RoadMesh.APRON_LINEAR;
+                        const fca = fa.color || ca, fcb = fb.color || cb;
+                        for (let i = 0; i < along; i++) {
+                            const u0 = i / along, u1 = (i + 1) / along;
+                            const t0 = mix(ta, tb, u0), t1 = mix(ta, tb, u1), f0 = mix(ba, bb, u0), f1 = mix(ba, bb, u1);
+                            const c0 = mix(ca, cb, u0), c1 = mix(ca, cb, u1), d0 = mix(fca, fcb, u0), d1 = mix(fca, fcb, u1);
+                            for (let r = 0; r < down; r++) {
+                                const v0 = r / down, v1 = (r + 1) / down;
+                                RoadMesh.quad(apronOut, mix(t0, f0, v0), mix(t1, f1, v0), mix(t1, f1, v1), mix(t0, f0, v1), [mix(c0, d0, v0), mix(c1, d1, v0), mix(c1, d1, v1), mix(c0, d0, v1)]);
+                            }
+                        }
+                    }
+                }
                 if (!kind) continue;
                 // An end of the other kind (a slope's beside a wall, a wall's beside a slope) is no end of this segment's
                 const mine = f => (f && !f.blocked ? f : null);
-                const fa = mine(endOf(k, key, kind === 'wall')), fb = mine(endOf(k + 1, key, kind === 'wall'));
+                const fa = mine(endOf(k, key, kind === 'wall', k)), fb = mine(endOf(k + 1, key, kind === 'wall', k));
                 onRoad = false;
                 if (!fa && !fb) continue;
                 const pa = fa ? fa.at : sides[k][key], pb = fb ? fb.at : sides[k + 1][key];
@@ -1865,6 +1925,7 @@ class RoadMesh {
                     const foot = (f, p, way = o) => { const y = low(f, p), run = f ? RoadMesh.apronRun(f, p) : 0; return [p[0] + way[0] * run, Math.min(y, under(p)[1]), p[2] + way[1] * run]; };
                     const ta = under(pa), tb = under(pb), fA = foot(fa, pa), fB = foot(fb, pb);
                     onRoad = !!(fa && fa.meets) || !!(fb && fb.meets);
+                    deepNow = !!(fa && fa.deep) || !!(fb && fb.deep);
                     const strips = Math.max(1, Math.ceil(Math.hypot(tb[0] - ta[0], tb[2] - ta[2]) / RoadMesh.APRON_STRIP_M));
                     const lerp = (u, v, t) => u.map((c, i) => c + (v[i] - c) * t);
                     // and down the slope in rows no longer than APRON_STRIP_M * 4 (a foot on land far under the edge
@@ -1958,7 +2019,7 @@ class RoadMesh {
                     // The slope before this one stands out along its own outward: on the outside of a bend the two
                     // stood apart at the row they share, each with an open side there. A piece of slope from the
                     // row's edge point to the two feet closes it
-                    const before = kindOf(k - 1, key) === 'apron' ? mine(endOf(k - 1, key, false)) : null;
+                    const before = kindOf(k - 1, key) === 'apron' ? mine(endOf(k - 1, key, false, k - 1)) : null;
                     if (before && fa && (before.out[0] !== o[0] || before.out[1] !== o[1])) {
                         const other = at(0, foot(fa, pa, before.out));
                         const gap = [first.foot[0] - other.foot[0], first.foot[2] - other.foot[2]];
@@ -2583,6 +2644,11 @@ class RoadMesh {
             // mouth's row, the slope laid from there open beside it over the land levelled in front of the wall
             const mouth = k => !!rows[k] && !!(rows[k].mouthL || rows[k].mouthR);
             rows = rows.map((row, k) => (mouth(k - 1) || mouth(k) || mouth(k + 1) ? { ...row, keep: true } : row));
+            // The row before a structure's first row and after its last is kept too: a structure's row has no slope, and
+            // the far ribbon's segment from the last kept row to it (up to 19 m) had none either, a cleft beside the
+            // road to the coarse land at every bridge and gallery
+            const structure = k => !!rows[k] && !!(rows[k].bits & 7);
+            rows = rows.map((row, k) => (!structure(k) && (structure(k - 1) || structure(k + 1)) ? { ...row, keep: true } : row));
             const marked = rows.map((row, i) => (i === first || i === last ? { ...row, keep: true } : row));
             const kept = new Set(RoadMesh.decimate(marked).map(row => row.i));
             const past = RoadMesh.WALL_PAST_M;
