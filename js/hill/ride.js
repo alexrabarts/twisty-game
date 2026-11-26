@@ -487,7 +487,7 @@ class HillRide {
             if (!group) continue;
             // (a mesh of several finishes, the boy's body, has a list of them)
             group.traverse(o => {
-                for (const m of Array.isArray(o.material) ? o.material : [o.material]) if (m && m.isMeshStandardMaterial && !m.envMap) m.envMapIntensity = L.envIntensity;
+                for (const m of Array.isArray(o.material) ? o.material : [o.material]) if (m && m.isMeshStandardMaterial && !m.envMap && !m.userData.ownSky) m.envMapIntensity = L.envIntensity;
             });
         }
         this.sun = HillRide.sunDirection(this.lane);

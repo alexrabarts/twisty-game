@@ -749,7 +749,8 @@ describe('the boy on the bicycle', () => {
         // Modelled, not painted: the nose stands out ahead of the cheeks, the eyes sit back in their sockets under the
         // brow, an ear on each side
         const at = (polar, az) => HillBoy.headPoint(polar, az, new THREE.Vector3());
-        const tip = at(1.83, 0), cheek = at(1.83, 0.55), eye = at(1.48, Math.asin(HillBoy.FACE.eyeX / 0.0735)), brow = at(1.32, 0.42);
+        const F = HillBoy.FACE, up = (y) => Math.acos(y / HillBoy.HEAD.crownM);
+        const tip = at(1.83, 0), cheek = at(1.83, 0.55), eye = at(up(F.eyeY), Math.asin(F.eyeX / 0.0735)), brow = at(up(F.eyeY + 0.016), 0.38);
         expect(tip.z - cheek.z * Math.cos(0.55)).toBeGreaterThan(0.015);
         expect(brow.z).toBeGreaterThan(eye.z + 0.005);
         for (const tag of ['l', 'r']) expect(piece(`ear_${tag}`).getCenter(new THREE.Vector3()).x * (tag === 'l' ? 1 : -1)).toBeGreaterThan(size.x / 2 - 0.01);

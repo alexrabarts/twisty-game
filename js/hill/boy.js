@@ -379,10 +379,10 @@ class HillBoy {
     // The folds' depths from the joints' bends: each elbow and knee, and the body's bend forward at the waist
     folds(ctx) {
         const r = this.rider, s = this.scratch, w = this.foldShares, P = r.parts;
-        w[0] = HillBoy.step(0.25, 1.7, this.bend(P.upperarm_l, P.forearm_l));
-        w[1] = HillBoy.step(0.25, 1.7, this.bend(P.upperarm_r, P.forearm_r));
-        w[2] = HillBoy.step(0.25, 1.9, this.bend(P.thigh_l, P.shin_l));
-        w[3] = HillBoy.step(0.25, 1.9, this.bend(P.thigh_r, P.shin_r));
+        w[0] = HillBoy.joint(this.bend(P.upperarm_l, P.forearm_l));
+        w[1] = HillBoy.joint(this.bend(P.upperarm_r, P.forearm_r));
+        w[2] = HillBoy.joint(this.bend(P.thigh_l, P.shin_l));
+        w[3] = HillBoy.joint(this.bend(P.thigh_r, P.shin_r));
         s.z.set(0, 1, 0).applyQuaternion(this.chest.quaternion).applyQuaternion(P.boy.quaternion);
         w[4] = HillBoy.step(0.05, 0.5, Math.acos(Math.max(-1, Math.min(1, s.z.y))) + 0.1 * this.rise);
         w[5] = HillBoy.step(0.55, 1.3, r.apronAngle || 0);
@@ -616,6 +616,10 @@ class HillBoy {
 
     static ease(x) { return HillBoy.step(0, 1, x); }
 
+    // A knee's or an elbow's fold for its bend (rad): eased in, then on past one for a hard bend, where a skinned
+    // joint loses most
+    static joint(bend) { return HillBoy.step(0.25, 1.5, bend) + 0.7 * Math.max(0, bend - 1.5); }
+
     // A small seeded random sequence (the same blinks on every load)
     static random(seed) {
         let s = seed >>> 0;
@@ -649,7 +653,7 @@ class HillBoy {
     // The face: the eyes' place from the head's centre (across, up), the eyeball's radius, the lids' rest and the
     // blink (rad of the upper lid from open)
     static get FACE() {
-        return Object.freeze({ eyeX: 0.0315, eyeY: 0.009, eyeR: 0.0112, lidOpenRad: 0.0, lidShutRad: 1.05 });
+        return Object.freeze({ eyeX: 0.0292, eyeY: 0.001, eyeR: 0.0119, lidOpenRad: 0.0, lidShutRad: 1.05 });
     }
 
     // The spheres the scarf's tails lie on: [bone, x, y, z from the bone, r] (the belly under the apron, each thigh
@@ -674,6 +678,8 @@ class HillBoy {
         const skin = finish('skin', THREE.MeshStandardMaterial, { map: maps.skin || null, normalMap: maps.skinNormal || null, roughness: 0.6, metalness: 0 });
         HillBoy.subsurface(skin, [0.55, 0.16, 0.08]);
         const eye = finish('eye', physical, { map: maps.eye || null, roughness: 0.25, metalness: 0, clearcoat: 1, clearcoatRoughness: 0.04 });
+        // (the eyes keep the sky's full share in their clear coat: it is their wetness; HillRide leaves them so)
+        eye.userData.ownSky = true;
         const hair = finish('hair', THREE.MeshStandardMaterial, { map: maps.hair || null, normalMap: maps.hairNormal || null, roughness: 0.55, metalness: 0, alphaTest: 0.45, side: THREE.DoubleSide });
         const knit = finish('knit', physical, { map: maps.knit || null, normalMap: maps.knitNormal || null, roughness: 0.96, metalness: 0, vertexColors: true, sheen: 1, sheenRoughness: 0.8, sheenColor: new THREE.Color(0.16, 0.16, 0.16) });
         const wool = finish('wool', physical, { map: maps.wool || null, normalMap: maps.woolNormal || null, roughness: 0.93, metalness: 0, vertexColors: true, sheen: 0.7, sheenRoughness: 0.85, sheenColor: new THREE.Color(0.1, 0.1, 0.1) });
@@ -791,11 +797,15 @@ class HillBoyShape {
         };
         const N = normals(P);
         // Which way is out
-        let sign = out === 'auto' ? 0 : out;
-        if (out === 'auto') {
+        // ('auto': away from the grid's own middle; a point: away from that point; else 1 or -1 as built)
+        let sign = out === 'auto' || (out && out.isVector3) ? 0 : out;
+        if (!sign) {
             const mid = new THREE.Vector3();
-            for (let k = 0; k < count; k++) mid.x += P[k * 3], mid.y += P[k * 3 + 1], mid.z += P[k * 3 + 2];
-            mid.multiplyScalar(1 / count);
+            if (out && out.isVector3) mid.copy(out);
+            else {
+                for (let k = 0; k < count; k++) mid.x += P[k * 3], mid.y += P[k * 3 + 1], mid.z += P[k * 3 + 2];
+                mid.multiplyScalar(1 / count);
+            }
             let dot = 0;
             for (let k = 0; k < count; k++) dot += N[k * 3] * (P[k * 3] - mid.x) + N[k * 3 + 1] * (P[k * 3 + 1] - mid.y) + N[k * 3 + 2] * (P[k * 3 + 2] - mid.z);
             sign = dot < 0 ? -1 : 1;
@@ -936,7 +946,7 @@ const HillBoyKit = {
 // grey wool, the scarf and gloves near black, the breeches' dark wool, the cap's darker tweed (each over its finish's
 // near white); the boots' leather is its own map's colour, the soles and their welt a share of it
 HillBoy.COLOURS = Object.freeze({
-    jumper: 0x9e9990, scarf: 0x2a2522, glove: 0x272320, breeches: 0x2b2825, cap: 0x37322e, boot: 0xf0f0f0, sole: 0x9a9a9a, welt: 0xc8b49c
+    jumper: 0x9e9990, scarf: 0x2a2522, glove: 0x272320, breeches: 0x2b2825, cap: 0x726658, boot: 0xf0f0f0, sole: 0x9a9a9a, welt: 0xc8b49c
 });
 
 // The whole body at one level of detail (1 near; less far): every piece on the rest pose of the rig
@@ -1004,7 +1014,7 @@ const HillBoyPieces = {
                 o.t[1] = y;
             });
         };
-        rib('torso-band', y0 - 0.002, y0 + 0.06, 0.006, 176);
+        rib('torso-band', y0 - 0.002, y0 + 0.06, 0.006, 120);
         rib('torso-collar', y1 - 0.045, y1 + 0.004, 0.006, 96);
     },
 
@@ -1014,7 +1024,7 @@ const HillBoyPieces = {
         const y0 = R.boy.y - 0.058, y1 = R.boy.y + 0.1;
         const rows = [[y0, 0.0, 0.0, 0.0], [y0 + 0.01, 0.07, 0.045, 0.06], [y0 + 0.03, 0.125, 0.074, 0.094], [y0 + 0.06, 0.15, 0.085, 0.106],
             [y0 + 0.1, 0.149, 0.088, 0.101], [y1, 0.138, 0.084, 0.093]];
-        shape.grid('hips', 'wool', shape.k(14, 5), shape.k(48, 10), true, (u, v, o) => {
+        shape.grid('hips', 'wool', shape.k(12, 5), shape.k(40, 10), true, (u, v, o) => {
             const y = y0 + (y1 - y0) * Math.pow(u, 0.8), th = v * Math.PI * 2;
             const [x, d] = K.ring(th, K.curve(rows, y, 1), K.curve(rows, y, 2), K.curve(rows, y, 3), 2.3);
             o.p.set(x, y, R.boy.z + 0.005 * (y - y0) / (y1 - y0) + d);
@@ -1035,7 +1045,7 @@ const HillBoyPieces = {
             const y0 = hip.y + 0.055, y1 = knee.y - 0.215;
             const rows = [[y1, 0.042], [y1 + 0.025, 0.048], [knee.y - 0.15, 0.054], [knee.y - 0.1, 0.057], [knee.y - 0.04, 0.059], [knee.y, 0.061], [knee.y + 0.04, 0.061],
                 [knee.y + 0.12, 0.067], [knee.y + 0.25, 0.076], [hip.y - 0.08, 0.083], [hip.y, 0.078], [hip.y + 0.03, 0.066], [y0, 0.05]];
-            shape.grid(`leg_${tag}`, 'wool', shape.k(30, 9), shape.k(30, 9), true, (u, v, o) => {
+            shape.grid(`leg_${tag}`, 'wool', shape.k(26, 9), shape.k(26, 9), true, (u, v, o) => {
                 const y = y0 + (y1 - y0) * u, th = v * Math.PI * 2;
                 const front = Math.cos(th), out = Math.sin(th) * side;
                 let r = K.curve(rows, y);
@@ -1065,7 +1075,7 @@ const HillBoyPieces = {
             const side = tag === 'l' ? 1 : -1, knee = R[`shin_${tag}`], ankle = R[`foot_${tag}`];
             const top = knee.y - 0.175, y1 = ankle.y - 0.006;
             const rows = [[y1, 0.044], [ankle.y + 0.02, 0.046], [ankle.y + 0.05, 0.0435], [ankle.y + 0.1, 0.046], [ankle.y + 0.16, 0.05], [ankle.y + 0.22, 0.053], [top - 0.012, 0.056], [top, 0.058]];
-            shape.grid(`boot_${tag}`, 'leather', shape.k(18, 6), shape.k(30, 9), true, (u, v, o) => {
+            shape.grid(`boot_${tag}`, 'leather', shape.k(14, 6), shape.k(24, 9), true, (u, v, o) => {
                 // (the top turned over: up the outside to the rim, then a little way down inside it)
                 const rim = 0.08;
                 let y, r;
@@ -1096,7 +1106,7 @@ const HillBoyPieces = {
                 [0.065, 0.075, 0.049, 2.6], [0.11, 0.055, 0.048, 2.6], [0.15, 0.047, 0.043, 2.4], [0.178, 0.04, 0.032, 2.2], [0.193, 0.03, 0.0, 2.2]
             ];
             const z0 = rows2[0][0], z1 = rows2[rows2.length - 1][0], base = sy + 0.013;
-            shape.grid(`foot_${tag}`, 'leather', shape.k(26, 8), shape.k(26, 9), true, (u, v, o) => {
+            shape.grid(`foot_${tag}`, 'leather', shape.k(20, 8), shape.k(18, 9), true, (u, v, o) => {
                 const z = z0 + (z1 - z0) * u, th = v * Math.PI * 2;
                 const hi = K.curve(rows2, z, 1), w = Math.max(0, K.curve(rows2, z, 2)), e = K.curve(rows2, z, 3);
                 const s = Math.sin(th), c = Math.cos(th);
@@ -1112,7 +1122,7 @@ const HillBoyPieces = {
                 o.t[1] = 0.64 + 0.34 * (z - z0) / (z1 - z0);
             });
             // The sole and the heel: a slab under the foot, rounded at its edges, darker, its welt a little browner
-            shape.grid(`sole_${tag}`, 'leather', shape.k(20, 6), shape.k(16, 8), true, (u, v, o) => {
+            shape.grid(`sole_${tag}`, 'leather', shape.k(12, 6), shape.k(10, 8), true, (u, v, o) => {
                 const z = z0 + 0.004 + (z1 - z0 - 0.002) * u, th = v * Math.PI * 2;
                 const w = Math.max(0.0, K.curve(rows2, Math.min(z1 - 0.004, Math.max(z0 + 0.006, z)), 2)) + 0.004;
                 const heel = K.sm(-0.02, -0.035, z);
@@ -1137,7 +1147,7 @@ const HillBoyPieces = {
             const top = sh.y + 0.036, end = wrist + 0.05;
             const rows = [[end, 0.035], [end + 0.03, 0.037], [el.y - 0.12, 0.042], [el.y - 0.05, 0.046], [el.y, 0.049], [el.y + 0.05, 0.048], [el.y + 0.14, 0.05],
                 [sh.y - 0.05, 0.057], [sh.y - 0.02, 0.059], [sh.y + 0.005, 0.054], [sh.y + 0.022, 0.042], [sh.y + 0.031, 0.026], [top, 0.0]];
-            shape.grid(`sleeve_${tag}`, 'knit', shape.k(32, 9), shape.k(30, 9), true, (u, v, o) => {
+            shape.grid(`sleeve_${tag}`, 'knit', shape.k(28, 9), shape.k(28, 9), true, (u, v, o) => {
                 const y = top + (end - top) * (u < 0.15 ? Math.pow(u / 0.15, 1.6) * 0.15 : u), th = v * Math.PI * 2;
                 const front = Math.cos(th), out = Math.sin(th) * side;
                 let r = K.curve(rows, y);
@@ -1153,10 +1163,10 @@ const HillBoyPieces = {
                 o.c = C;
                 o.t[0] = th * 0.05;
                 o.t[1] = y;
-                o.fold = { [`elbow_${tag}`]: K.g((y - el.y + 0.01) / 0.05) * (0.0065 * Math.max(0, front) * (0.5 + 0.5 * Math.sin((y - el.y) * Math.PI * 2 / 0.022)) + 0.004 * Math.max(0, -front)) + 0.013 * K.g((y - el.y) / 0.045) };
+                o.fold = { [`elbow_${tag}`]: K.g((y - el.y + 0.01) / 0.05) * (0.0065 * Math.max(0, front) * (0.5 + 0.5 * Math.sin((y - el.y) * Math.PI * 2 / 0.022)) + 0.004 * Math.max(0, -front)) + 0.019 * K.g((y - el.y) / 0.045) };
             });
             // The ribbed cuff
-            shape.grid(`cuff_${tag}`, 'knit', shape.k(4, 2), shape.k(64, 20), true, (u, v, o) => {
+            shape.grid(`cuff_${tag}`, 'knit', shape.k(4, 2), shape.k(48, 20), true, (u, v, o) => {
                 const y = end + 0.042 - 0.062 * u, th = v * Math.PI * 2;
                 const r = 0.034 - 0.003 * u + 0.0018 * Math.cos(th * 16) + 0.0015 * Math.sin(u * Math.PI);
                 o.p.set(sh.x + Math.sin(th) * r, y, sh.z + Math.cos(th) * r);
@@ -1193,7 +1203,7 @@ const HillBoyPieces = {
             const digit = (name, joints, lengths, radius, dir) => {
                 const total = lengths[0] + lengths[1] + lengths[2], start = -0.01;
                 const root = boy.rest[joints[0].name];
-                shape.grid(name, 'knit', shape.k(16, 5), shape.k(12, 5), true, (u, v, o) => {
+                shape.grid(name, 'knit', shape.k(12, 5), shape.k(9, 5), true, (u, v, o) => {
                     const along = start + (total - start) * u, th = v * Math.PI * 2;
                     const end = total - along;
                     let r = radius * (1 - 0.18 * along / total);
@@ -1239,12 +1249,14 @@ const HillBoyPieces = {
     // The head: a boy's skull and face (HillBoy.headPoint), drawn from its own numbers, its features modelled: the
     // brow, the eyes' sockets, the nose and its wings, the cheekbones, the lips, the chin and the jaw
     head(shape, boy) {
-        const c = boy.headAt, nu = shape.k(60, 14), nv = shape.k(96, 16), q = new THREE.Vector3();
+        const c = boy.headAt, nu = shape.k(74, 14), nv = shape.k(108, 16), q = new THREE.Vector3();
+        // (the rings densest at the nose and mouth, uc: the share of the way down where they thin out most)
+        const a = 0.58, uc = 0.06, wa = 0.66;
         shape.grid('head', 'skin', nu, nv, true, (u, v, o) => {
             // (more rings through the face than at the crown and under the chin, more segments over the face than
             // round the back)
-            const m = u + 0.42 * Math.sin(2 * Math.PI * u) / (2 * Math.PI), w = 2 * v - 1;
-            const polar = Math.PI * m, az = Math.PI * (w - 0.55 * Math.sin(Math.PI * w) / Math.PI);
+            const m = u + a * (Math.sin(2 * Math.PI * (u - uc)) + Math.sin(2 * Math.PI * uc)) / (2 * Math.PI), w = 2 * v - 1;
+            const polar = Math.PI * m, az = Math.PI * (w - wa * Math.sin(Math.PI * w) / Math.PI);
             HillBoy.headPoint(polar, az, q, true);
             o.p.copy(q).add(c);
             o.w = [['skull', 1]];
@@ -1270,20 +1282,33 @@ const HillBoyPieces = {
                 if (z < 0) { o.t[0] = 0.02; o.t[1] = 0.5; }
             });
             // The lids: shells over the ball, from their edges back into the socket; the upper's edge rolled
-            const lid = (name, bone, from, to, edgeAt, r) => {
-                shape.grid(name, 'skin', shape.k(7, 3), shape.k(18, 6), false, (u, v, o) => {
-                    const el = from + (to - from) * u, az = (v - 0.5) * 2.6;
-                    const edge = Math.abs(el - edgeAt) < 1e-6 ? 0.96 : 1;
-                    const rr = F.eyeR * r * edge;
+            // (each lid's edge curves: the upper's down and the lower's up towards the corners, where they meet, so the
+            // eye shows an almond between them)
+            const lid = (name, bone, from, to, edgeAt, r, curve, thick) => {
+                shape.grid(name, 'skin', shape.k(8, 3), shape.k(18, 6), false, (u, v, o) => {
+                    const az = (v - 0.5) * 2.7, edgeHere = from + curve * Math.pow(Math.min(1.25, Math.abs(az) / 1.18), 2);
+                    const el = edgeHere + (to - edgeHere) * u;
+                    // (its edge rolled: in against the ball, then the lid's thickness proud of it, then its body)
+                    const k = u;
+                    const rr = F.eyeR * (k < 1e-6 ? 1.0 : k < 0.2 ? r + thick : r) * (1 - 0.06 * Math.pow(Math.abs(v - 0.5) * 2, 3));
                     const x = Math.cos(el) * Math.sin(az), y = Math.sin(el), z = Math.cos(el) * Math.cos(az);
                     o.p.set(at.x + x * rr, at.y + y * rr, at.z + z * rr);
                     o.w = [[bone, 1]];
                     o.t[0] = 0.03 + 0.18 * v;
-                    o.t[1] = 0.005 + 0.045 * Math.abs(el - edgeAt) / Math.abs(to - from);
-                });
+                    o.t[1] = 0.005 + 0.045 * u;
+                }, at);
             };
-            lid(`lid_${tag}`, `lid_${tag}`, 0.25, 1.45, 0.25, 1.12);
-            lid(`lidlow_${tag}`, 'skull', -0.42, -1.35, -0.42, 1.1);
+            lid(`lid_${tag}`, `lid_${tag}`, 0.3, 1.45, 0.3, 1.12, -0.36, 0.05);
+            lid(`lidlow_${tag}`, 'skull', -0.4, -1.35, -0.4, 1.06, 0.36, 0.025);
+            // The upper lashes: a short dark fringe from the lid's edge, out and up a little
+            shape.grid(`lash_${tag}`, 'skin', 2, shape.k(14, 6), false, (u, v, o) => {
+                const az = (v - 0.5) * 2.1, el = 0.3 - 0.36 * Math.pow(Math.abs(az) / 1.18, 2) + 0.16 * u, rr = F.eyeR * (1.0 + 0.2 * u) * (1 - 0.12 * Math.pow(Math.abs(v - 0.5) * 2, 3));
+                const x = Math.cos(el) * Math.sin(az), y = Math.sin(el), z = Math.cos(el) * Math.cos(az);
+                o.p.set(at.x + x * rr, at.y + y * rr - 0.0004 * u, at.z + z * rr);
+                o.w = [[`lid_${tag}`, 1]];
+                o.t[0] = 0.05;
+                o.t[1] = 0.003;
+            }, at);
         }
     },
 
@@ -1293,21 +1318,22 @@ const HillBoyPieces = {
         const K = HillBoyKit, c = boy.headAt;
         for (const side of [1, -1]) {
             const tag = side > 0 ? 'l' : 'r';
-            const root = new THREE.Vector3(side * 0.066, -0.006, -0.016).add(c);
-            const out = new THREE.Vector3(side * Math.cos(0.38), 0, -Math.sin(0.38)), up = new THREE.Vector3(0, 1, 0), back = new THREE.Vector3().crossVectors(out, up).multiplyScalar(-side);
-            shape.grid(`ear_${tag}`, 'skin', shape.k(12, 4), shape.k(22, 8), true, (u, v, o) => {
+            const root = new THREE.Vector3(side * 0.067, -0.015, -0.014).add(c);
+            const out = new THREE.Vector3(side * Math.cos(0.3), 0, -Math.sin(0.3)), up = new THREE.Vector3(0, 1, 0), back = new THREE.Vector3().crossVectors(out, up).multiplyScalar(-side);
+            shape.grid(`ear_${tag}`, 'skin', shape.k(14, 4), shape.k(24, 8), true, (u, v, o) => {
                 const polar = Math.PI * u, az = v * Math.PI * 2;
                 // (a lens: out is its thin axis)
                 const a = Math.sin(polar) * Math.sin(az), b = Math.sin(polar) * Math.cos(az), t = Math.cos(polar);
-                const H = 0.029 * (1 - 0.15 * Math.max(0, -a)), W = 0.0165;
-                let thick = 0.0065 * t;
-                // The outer face: its bowl hollowed, its rim rolled up
+                // (wider at the top, a small lobe below)
+                const H = 0.03 * (a > 0 ? 1 : 0.85), W = 0.0175 * (1 - 0.3 * K.sm(0, -1, a));
+                let thick = 0.006 * t;
+                // The outer face: its rim rolled up, its bowl hollowed, the small flap at its front over the opening
                 const rad = Math.sin(polar);
-                if (t > 0) thick += 0.004 * K.sm(0.75, 0.95, rad) - 0.0055 * K.g((rad - 0.25) / 0.35) * K.sm(-0.6, 0.2, -a);
-                o.p.copy(root).addScaledVector(up, a * H).addScaledVector(back, b * W + 0.009).addScaledVector(out, thick + 0.004 + 0.008 * Math.max(0, b));
+                if (t > 0) thick += 0.0045 * K.sm(0.72, 0.93, rad) - 0.006 * K.g((rad - 0.2) / 0.32) * K.sm(-0.7, 0.1, -a) + 0.0035 * K.g((b + 0.75) / 0.18) * K.g((a + 0.15) / 0.25);
+                o.p.copy(root).addScaledVector(up, a * H).addScaledVector(back, b * W + 0.009).addScaledVector(out, thick + 0.004 + 0.015 * Math.max(0, b) + 0.004 * Math.max(0, a));
                 o.w = [['skull', 1]];
                 o.t[0] = 0.25 + 0.2 * (0.5 + 0.5 * a);
-                o.t[1] = 0.055 + 0.03 * (0.5 + 0.5 * b);
+                o.t[1] = 0.055 + 0.03 * (t > 0 ? rad : 1);
             });
         }
     },
@@ -1330,72 +1356,87 @@ const HillBoyPieces = {
         }, 1);
     },
 
-    // The flat cap: a full, soft crown pulled forward over a short stiff peak, set low on his brow; a button on top
+    // The flat cap of tweed: a soft crown flattened on top and pulled forward over a stiff peak, set low on his brow
+    // and higher behind, so his hair shows at the sides and the back; the seam where the top meets the sides, the
+    // seam down the middle of its front, a button on top, and the peak's stitched edge and darker underside
     cap(shape, boy) {
-        const K = HillBoyKit, c = boy.headAt, C = K.lin(HillBoy.COLOURS.cap);
+        const K = HillBoyKit, c = boy.headAt, C = K.lin(HillBoy.COLOURS.cap), under = C.map(k => k * 0.55);
+        const Y = HillBoy.CAP;
         const band = (phi, out) => {
-            // The band round his head, lower at the front
-            const y = 0.043 + 0.012 * (-Math.cos(phi) * 0.5 + 0.5) - 0.003;
-            out.set(Math.sin(phi) * 0.081, y, -0.004 + Math.cos(phi) * (Math.cos(phi) > 0 ? 0.099 : 0.106));
+            const back = 0.5 - 0.5 * Math.cos(phi);
+            out.set(Math.sin(phi) * Y.sideM, Y.frontY + (Y.backY - Y.frontY) * back, -0.004 + Math.cos(phi) * (Math.cos(phi) > 0 ? Y.frontM : Y.backM));
             return out;
         };
-        const back = [[0, 1, 0], [0.2, 1.07, 0.024], [0.4, 1.065, 0.045], [0.6, 0.9, 0.06], [0.8, 0.55, 0.068], [1, 0, 0.07]];
-        const side = [[0, 1, 0], [0.2, 1.15, 0.018], [0.4, 1.17, 0.042], [0.6, 0.97, 0.061], [0.8, 0.55, 0.07], [1, 0, 0.072]];
-        const front = [[0, 1, 0], [0.15, 1.2, 0.003], [0.3, 1.31, 0.014], [0.45, 1.24, 0.038], [0.65, 0.97, 0.061], [0.85, 0.5, 0.072], [1, 0, 0.074]];
-        const b = new THREE.Vector3(), top = new THREE.Vector3(0, 0, 0.008);
-        shape.grid('cap', 'wool', shape.k(18, 6), shape.k(56, 12), true, (u, v, o) => {
-            const phi = v * Math.PI * 2, cf = Math.cos(phi);
-            const fw = Math.pow(K.sm(-0.1, 1, cf), 1.4), bw = Math.pow(K.sm(0.1, -1, cf), 1.4), sw = 1 - fw - bw;
-            const r = K.curve(front, u) * fw + K.curve(side, u) * sw + K.curve(back, u) * bw;
-            const h = K.curve(front, u, 2) * fw + K.curve(side, u, 2) * sw + K.curve(back, u, 2) * bw;
+        // [share of the way to the top, its reach over the band, its rise over the band]
+        const back = [[0, 1, 0], [0.2, 1.05, 0.016], [0.45, 1.02, 0.03], [0.7, 0.74, 0.04], [0.9, 0.33, 0.045], [1, 0, 0.046]];
+        const side = [[0, 1, 0], [0.2, 1.12, 0.014], [0.45, 1.11, 0.03], [0.7, 0.8, 0.042], [0.9, 0.36, 0.047], [1, 0, 0.048]];
+        const front = [[0, 1, 0], [0.12, 1.2, 0.003], [0.3, 1.33, 0.013], [0.5, 1.24, 0.03], [0.72, 0.88, 0.042], [0.9, 0.4, 0.047], [1, 0, 0.048]];
+        const b = new THREE.Vector3(), top = new THREE.Vector3(0, 0, 0.01);
+        const crown = (t, phi, out) => {
+            const cf = Math.cos(phi), fw = Math.pow(K.sm(-0.1, 1, cf), 1.4), bw = Math.pow(K.sm(0.1, -1, cf), 1.4), sw = 1 - fw - bw;
+            const r = K.curve(front, t) * fw + K.curve(side, t) * sw + K.curve(back, t) * bw;
+            const h = K.curve(front, t, 2) * fw + K.curve(side, t, 2) * sw + K.curve(back, t, 2) * bw;
             band(phi, b);
-            // (the soft cloth a little uneven over the crown)
-            const soft = 1 + 0.02 * Math.sin(phi * 3 + 0.6) * Math.sin(u * Math.PI);
-            o.p.set(top.x + (b.x - top.x) * r * soft, b.y + h, top.z + (b.z - top.z) * r * soft).add(c);
+            // (flat on top: every way up ends at the one height of the top)
+            const y = b.y + h + (Y.topY - (b.y + h)) * K.sm(0.5, 1, t);
+            const soft = 1 + 0.018 * Math.sin(phi * 3 + 0.6) * Math.sin(t * Math.PI);
+            return out.set(top.x + (b.x - top.x) * r * soft, y, top.z + (b.z - top.z) * r * soft);
+        };
+        const nu = shape.k(26, 6);
+        shape.grid('cap', 'wool', nu, shape.k(60, 12), true, (u, v, o) => {
+            // (rings close together at the seam round the top)
+            const t = u + 0.5 * (Math.sin(2 * Math.PI * (u - 0.05)) + Math.sin(2 * Math.PI * 0.05)) / (2 * Math.PI);
+            const phi = v * Math.PI * 2;
+            crown(t, phi, o.p);
+            // The seams: round the top where it meets the sides, and down the middle of the front from the button
+            const seam = -0.0022 * K.g((t - 0.55) / 0.018) - 0.0016 * K.g(Math.atan2(Math.sin(phi), Math.cos(phi)) / 0.035) * K.sm(0.45, 0.6, t) * K.sm(0.98, 0.9, t);
+            o.p.x += Math.sin(phi) * seam * (1 - K.sm(0.4, 0.9, t));
+            o.p.z += Math.cos(phi) * seam * (1 - K.sm(0.4, 0.9, t));
+            o.p.y += seam * K.sm(0.4, 0.9, t);
+            o.p.add(c);
             o.w = [['skull', 1]];
             o.c = C;
-            o.t[0] = phi * 0.09;
-            o.t[1] = u * 0.12;
+            o.t[0] = phi * 0.06;
+            o.t[1] = t * 0.08;
         });
         // The crown's underside where it overhangs the band (seen from below, it is cloth, not the head through it)
-        shape.grid('cap-under', 'wool', shape.k(4, 2), shape.k(56, 12), true, (u, v, o) => {
-            const phi = v * Math.PI * 2, cf = Math.cos(phi);
-            const fw = Math.pow(K.sm(-0.1, 1, cf), 1.4), bw = Math.pow(K.sm(0.1, -1, cf), 1.4), sw = 1 - fw - bw;
-            const t = 0.35 * u;
-            const r = K.curve(front, t) * fw + K.curve(side, t) * sw + K.curve(back, t) * bw;
-            const h = (K.curve(front, t, 2) * fw + K.curve(side, t, 2) * sw + K.curve(back, t, 2) * bw) * (1 - u) + 0.004 * u;
+        shape.grid('cap-under', 'wool', shape.k(4, 2), shape.k(60, 12), true, (u, v, o) => {
+            const phi = v * Math.PI * 2;
+            crown(0.32 * u, phi, o.p);
             band(phi, b);
-            const rr = 1 + (r - 1) * (1 - 0.15 * u);
-            o.p.set(top.x + (b.x - top.x) * rr, b.y + h - 0.0015, top.z + (b.z - top.z) * rr).add(c);
+            o.p.lerp(b, u * 0.4).add(c);
+            o.p.y -= 0.0015;
             o.w = [['skull', 1]];
-            o.c = C.map(k => k * 0.7);
-            o.t[0] = phi * 0.09;
-            o.t[1] = u * 0.03;
+            o.c = under;
+            o.t[0] = phi * 0.036;
+            o.t[1] = u * 0.01;
         }, -1);
-        // The peak: a stiff, rounded-edged blade from the band's front, out and a little down
-        const pa = 1.35;
-        shape.grid('cap-peak', 'wool', shape.k(16, 6), shape.k(10, 6), true, (u, v, o) => {
+        // The peak: a stiff blade from the band's front, out and down, its edge rounded and stitched, its underside
+        // darker
+        const pa = 1.32;
+        shape.grid('cap-peak', 'wool', shape.k(20, 6), shape.k(12, 6), true, (u, v, o) => {
             const phi = (u - 0.5) * 2 * pa, th = v * Math.PI * 2;
             band(phi, b);
-            const reach = 0.048 * Math.pow(Math.max(0, Math.cos(phi / pa * Math.PI / 2)), 0.6);
+            const reach = Y.peakM * Math.pow(Math.max(0, Math.cos(phi / pa * Math.PI / 2)), 0.55);
             const outX = Math.sin(phi), outZ = Math.cos(phi);
-            const along = (0.5 + 0.5 * Math.cos(th)) * reach, thick = 0.0032 * Math.sin(th) * (reach > 0.002 ? 1 : 0.3);
-            const drop = 0.32 * along;
-            o.p.set(b.x + outX * (along - 0.008), b.y - 0.0012 - drop + thick, b.z + outZ * (along - 0.008)).add(c);
+            const along = (0.5 + 0.5 * Math.cos(th)) * reach, thick = 0.0042 * Math.sin(th) * (reach > 0.002 ? 1 : 0.3);
+            // (the stitching: a fine groove a little in from the edge, on top)
+            const stitch = Math.sin(th) > 0 ? -0.0006 * K.g((reach - along - 0.006) / 0.0015) : 0;
+            const drop = 0.36 * along + 0.006 * Math.pow(along / Math.max(1e-6, reach), 2);
+            o.p.set(b.x + outX * (along - 0.009), b.y - 0.001 - drop + thick + stitch, b.z + outZ * (along - 0.009)).add(c);
             o.w = [['skull', 1]];
-            o.c = C;
-            o.t[0] = phi * 0.09;
-            o.t[1] = along;
+            o.c = Math.sin(th) < -0.2 ? under : C;
+            o.t[0] = phi * 0.036;
+            o.t[1] = along * 0.4;
         });
-        // The button on the crown
+        // The button on the top
         shape.grid('cap-button', 'wool', shape.k(4, 2), shape.k(10, 5), true, (u, v, o) => {
             const polar = Math.PI / 2 * u, az = v * Math.PI * 2;
-            o.p.set(Math.sin(polar) * Math.cos(az) * 0.0075, Math.cos(polar) * 0.004 + 0.003, Math.sin(polar) * Math.sin(az) * 0.0075).add(top).add(c);
-            o.p.y += K.curve(front, 1, 2) * 0.5 + K.curve(back, 1, 2) * 0.5 + 0.043;
+            o.p.set(Math.sin(polar) * Math.cos(az) * 0.0075, Y.topY + Math.cos(polar) * 0.0035, Math.sin(polar) * Math.sin(az) * 0.0075).add(top).add(c);
             o.w = [['skull', 1]];
-            o.c = C;
-            o.t[0] = az * 0.01;
-            o.t[1] = polar * 0.01;
+            o.c = C.map(k => k * 0.8);
+            o.t[0] = az * 0.004;
+            o.t[1] = polar * 0.004;
         });
     },
 
@@ -1404,7 +1445,7 @@ const HillBoyPieces = {
     scarf(shape, boy) {
         const K = HillBoyKit, R = boy.rest, N = R.head, C = K.lin(HillBoy.COLOURS.scarf), S = HillBoy.SCARF;
         const wrap = (name, y, rx, rz, tube, tilt, z0, head) => {
-            shape.grid(name, 'knit', shape.k(40, 12), shape.k(12, 6), false, (u, v, o) => {
+            shape.grid(name, 'knit', shape.k(34, 12), shape.k(10, 6), false, (u, v, o) => {
                 const phi = u * Math.PI * 2, th = v * Math.PI * 2;
                 const front = Math.cos(phi);
                 // (a band of knitting folded round, taller than it is thick, a little twisted and lumpy along it)
@@ -1422,7 +1463,7 @@ const HillBoyPieces = {
             });
         };
         wrap('scarf-low', N.y - 0.008, 0.072, 0.07, 0.024, 0.02, N.z - 0.014, 0.0);
-        wrap('scarf-high', N.y + 0.034, 0.06, 0.058, 0.021, 0.026, N.z - 0.0, 0.6);
+        wrap('scarf-high', N.y + 0.03, 0.06, 0.058, 0.024, 0.016, N.z - 0.0, 0.6);
         // Its ends crossed over his chest from his throat to the far side of his waist, under the apron's band: each a
         // flat band of knitting laid on the jumper (the one over the other where they cross), weighed as the jumper
         // under it, so it breathes and bends with him
@@ -1520,6 +1561,10 @@ const HillBoyPieces = {
     }
 };
 
+// The cap's band round his head (from the head's centre, m): low at the front, higher behind; its reach to the
+// side, ahead and behind; the height of its flat top; the peak's reach
+HillBoy.CAP = Object.freeze({ frontY: 0.037, backY: 0.057, sideM: 0.0815, frontM: 0.099, backM: 0.106, topY: 0.113, peakM: 0.05 });
+
 // Where his hair grows under the cap: round the head from az0 (in front of each ear) and down from p0 (under the cap)
 // to p1 (the nape), rad
 HillBoy.HAIR = Object.freeze({ az0: 1.18, p0: 0.78, p1: 2.38 });
@@ -1538,23 +1583,35 @@ HillBoy.headPoint = function (polar, az, out, face = true) {
     const x = Math.sign(sa) * Math.pow(Math.abs(sa), 2 / e) * w;
     let z = zc + Math.sign(ca) * Math.pow(Math.abs(ca), 2 / e) * (ca > 0 ? f : b);
     if (face && ca > 0) {
-        const ax = Math.abs(x), G = K.g;
+        const ax = Math.abs(x), G = K.g, F = HillBoy.FACE;
         let dz = 0;
-        // The brow over the eyes, and the eyes' sockets under it
-        dz += 0.005 * G((y - 0.024) / 0.008) * K.sm(0.006, 0.016, ax) * K.sm(0.058, 0.044, ax);
-        dz -= 0.0115 * G((ax - 0.0315) / 0.0155) * G((y - 0.0085) / 0.0112);
-        // The nose: its bridge between the eyes, out to its tip, its wings; its underside steep
-        const ny = Math.max(0, Math.min(1, (0.012 - y) / 0.044));
-        const nose = (0.0035 + 0.0175 * Math.pow(ny, 1.5)) * K.sm(0.018, 0.006, y) * K.sm(-0.041, -0.031, y);
-        dz += nose * G(x / (0.0058 + 0.006 * ny));
-        dz += 0.006 * G((ax - 0.0125) / 0.0052) * G((y + 0.033) / 0.0052);
-        dz -= 0.0016 * G(x / 0.0042) * G((y + 0.0455) / 0.0032);
+        // The brow over the eyes, a soft rise between them, and the eyes' sockets under it, deepest at the inner corner
+        dz += 0.0045 * G((y - 0.017) / 0.007) * K.sm(0.004, 0.014, ax) * K.sm(0.054, 0.042, ax) + 0.0018 * G(x / 0.008) * G((y - 0.013) / 0.006);
+        dz -= 0.013 * G((ax - F.eyeX) / 0.0135) * G((y - F.eyeY) / 0.0095) + 0.0025 * G((ax - 0.017) / 0.005) * G((y - 0.006) / 0.006);
+        // The nose: a bridge between the eyes, out to a rounded tip, the wings each side, the nostrils under the tip
+        const ny = Math.max(0, Math.min(1, (0.006 - y) / 0.036));
+        const nose = (0.0042 + 0.0172 * Math.pow(ny, 1.3)) * K.sm(0.013, 0.004, y) * K.sm(-0.0385, -0.0295, y);
+        dz += nose * G(x / (0.0046 + 0.005 * ny)) + 0.003 * G((y + 0.028) / 0.006) * G(x / 0.0075);
+        dz += 0.0046 * G((ax - 0.0105) / 0.0042) * G((y + 0.031) / 0.0046);
+        dz -= 0.004 * G((ax - 0.006) / 0.0019) * G((y + 0.0357) / 0.0015);
+        // The philtrum's two ridges and its groove, under the nose to the lip
+        const lipZone = K.sm(-0.0485, -0.045, y) * K.sm(-0.037, -0.04, y);
+        dz += lipZone * (0.0011 * G((ax - 0.0042) / 0.0016) - 0.0009 * G(x / 0.0022));
+        // The folds from the nose's wings down past the mouth
+        const fold = Math.abs((ax - 0.017) - (-(y + 0.033)) * 0.42);
+        dz -= 0.0016 * G(fold / 0.0028) * K.sm(-0.03, -0.036, y) * K.sm(-0.06, -0.054, y);
         // The cheekbones and a boy's full cheeks
-        dz += 0.0035 * G((ax - 0.045) / 0.012) * G((y + 0.01) / 0.01) + 0.0042 * G((ax - 0.04) / 0.017) * G((y + 0.04) / 0.02);
-        // The lips, the mouth between them, the dip under the lower lip and the chin
-        const lips = Math.exp(-Math.pow(x / 0.0185, 4));
-        dz += (0.0042 * G((y + 0.0515) / 0.0042) + 0.0048 * G((y + 0.0632) / 0.0048)) * lips - 0.0032 * G((y + 0.0575) / 0.0011) * Math.exp(-Math.pow(x / 0.0195, 4));
-        dz += 0.0045 * G((y + 0.089) / 0.009) * G(x / 0.021) - 0.0016 * G((y + 0.075) / 0.0042) * G(x / 0.015);
+        dz += 0.0035 * G((ax - 0.044) / 0.012) * G((y + 0.011) / 0.01) + 0.005 * G((ax - 0.038) / 0.016) * G((y + 0.036) / 0.018);
+        // The lips: the upper a little ahead, its bow; the mouth's line, turned in at its corners; the fuller lower lip;
+        // the dip under it and the chin
+        const upperW = Math.exp(-Math.pow(x / 0.0185, 4)), lowerW = Math.exp(-Math.pow(x / 0.0165, 4));
+        const bow = 0.0011 * Math.cos(Math.min(1, ax / 0.0075) * Math.PI);
+        dz += 0.0038 * G((y + 0.0498 - bow * 0.3) / 0.0027) * upperW;
+        dz += 0.0047 * G((y + 0.0572) / 0.0033) * lowerW;
+        dz -= 0.0034 * G((y + 0.0527 - 0.0012 * Math.pow(ax / 0.019, 2)) / 0.001) * Math.exp(-Math.pow(x / 0.0205, 4));
+        dz -= 0.0016 * G((ax - 0.0205) / 0.0028) * G((y + 0.053) / 0.0034);
+        dz -= 0.0021 * G((y + 0.065) / 0.0032) * G(x / 0.016);
+        dz += 0.0045 * G((y + 0.0765) / 0.008) * G(x / 0.017);
         z += dz * K.sm(0.15, 0.5, ca);
     }
     out.set(x, y, z);
@@ -1565,11 +1622,11 @@ HillBoy.headPoint = function (polar, az, out, face = true) {
 // depth behind, the section's middle forward]. A boy's proportions: wide over the temples, a rounded jaw, a small
 // chin; the face's plane upright from brow to chin
 HillBoy.HEAD = Object.freeze({
-    crownM: 0.104, chinM: 0.106,
+    crownM: 0.104, chinM: 0.096,
     rows: [
-        [-0.106, 0.0, 0.012, 0.0, 0.03], [-0.103, 0.021, 0.03, 0.012, 0.03], [-0.095, 0.036, 0.046, 0.025, 0.024], [-0.08, 0.049, 0.06, 0.045, 0.016],
-        [-0.06, 0.059, 0.071, 0.068, 0.008], [-0.035, 0.0675, 0.081, 0.088, 0.002], [-0.01, 0.0725, 0.086, 0.098, 0.0], [0.015, 0.0742, 0.088, 0.101, 0.0],
-        [0.04, 0.073, 0.085, 0.099, 0.0], [0.07, 0.064, 0.068, 0.088, 0.0], [0.09, 0.045, 0.042, 0.06, 0.0], [0.104, 0.0, 0.0, 0.0, 0.0]
+        [-0.096, 0.0, 0.012, 0.0, 0.03], [-0.093, 0.024, 0.032, 0.012, 0.03], [-0.086, 0.038, 0.048, 0.025, 0.024], [-0.072, 0.051, 0.062, 0.046, 0.016],
+        [-0.053, 0.0595, 0.073, 0.068, 0.008], [-0.03, 0.0672, 0.082, 0.088, 0.002], [-0.005, 0.0735, 0.086, 0.098, 0.0], [0.02, 0.0745, 0.088, 0.101, 0.0],
+        [0.045, 0.073, 0.084, 0.099, 0.0], [0.07, 0.064, 0.068, 0.088, 0.0], [0.09, 0.045, 0.042, 0.06, 0.0], [0.104, 0.0, 0.0, 0.0, 0.0]
     ]
 });
 

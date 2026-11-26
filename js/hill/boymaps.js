@@ -89,7 +89,7 @@ class HillBoyMaps {
         const n1 = HillBoyMaps.noise(11, 64), n2 = HillBoyMaps.noise(12, 256), n3 = HillBoyMaps.noise(13, 32);
         const rand = HillBoyMaps.random(14);
         const g = (x) => Math.exp(-x * x), sm = (a, b, x) => { const t = Math.max(0, Math.min(1, (x - a) / (b - a))); return t * t * (3 - 2 * t); };
-        const base = [214, 174, 152], blush = [206, 128, 110], lip = [176, 116, 102], brow = [104, 76, 52], hair = [112, 84, 58];
+        const base = [220, 181, 158], blush = [206, 128, 110], lip = [176, 116, 102], brow = [74, 54, 38], hair = [112, 84, 58];
         const p = new THREE.Vector3(), q = new THREE.Vector3();
         // A few freckles over the nose and the cheeks (as head points)
         const freckles = [];
@@ -109,34 +109,54 @@ class HillBoyMaps {
                     HillBoy.headPoint(polar, az, p, true);
                     const ax = Math.abs(p.x), front = p.z > 0;
                     // (where the face is modelled in, a little shade; where it stands out, a little light)
-                    if (front) {
-                        const dz = p.z - HillBoy.headPoint(polar, az, q, false).z;
-                        const k = 1 + Math.max(-0.12, Math.min(0.04, dz * 9));
-                        c[0] *= k; c[1] *= k; c[2] *= k;
+                    {
+                        const turn = Math.max(0, Math.cos(az)), form = 1 - 0.24 * Math.pow(1 - turn, 1.6) - 0.1 * sm(-0.066, -0.094, p.y) * turn;
+                        c[0] *= form; c[1] *= form; c[2] *= form;
                     }
                     if (front) {
-                        // The cheeks' colour, the nose's tip and the chin a little red
-                        mix(c, blush, 0.32 * g((ax - 0.04) / 0.02) * g((p.y + 0.028) / 0.022) + 0.25 * g(p.x / 0.01) * g((p.y + 0.03) / 0.009) + 0.12 * g(p.x / 0.02) * g((p.y + 0.088) / 0.012));
-                        // The lids' crease and under the eyes a shade darker
-                        mix(c, [176, 128, 112], 0.35 * g((ax - 0.0315) / 0.014) * g((p.y - 0.019) / 0.004) + 0.22 * g((ax - 0.031) / 0.012) * g((p.y + 0.005) / 0.005));
-                        // Deep in the sockets, round the eyes, dark and pink
-                        mix(c, [120, 70, 66], 0.8 * sm(0.9, 1.0, g((ax - 0.0315) / 0.012) * g((p.y - 0.0085) / 0.0085)));
-                        // The lips, their line darker
-                        const lips = Math.exp(-Math.pow(p.x / 0.0185, 4));
-                        const onLips = lips * (sm(-0.069, -0.064, p.y) * sm(-0.046, -0.05, p.y));
-                        mix(c, lip, 0.6 * onLips);
-                        mix(c, [120, 66, 60], 0.65 * lips * g((p.y + 0.0575) / 0.0012));
+                        const F = HillBoy.FACE, ex = ax - F.eyeX, ey = p.y - F.eyeY;
+                        // A little shade where the face is modelled in, a little light where it stands out (its
+                        // occlusion, from its own shape)
+                        const dz = p.z - HillBoy.headPoint(polar, az, q, false).z;
+                        // (and the face's form: a little darker as it turns away towards its sides and under the jaw,
+                        // lighter over the cheekbones, the bridge of the nose and the chin)
+                        const lit = 0.05 * g((ax - 0.042) / 0.012) * g((p.y + 0.012) / 0.009) + 0.05 * g(p.x / 0.004) * sm(0.006, -0.01, p.y) * sm(-0.032, -0.024, p.y) + 0.04 * g(p.x / 0.012) * g((p.y + 0.081) / 0.007);
+                        const k = 1 + Math.max(-0.22, Math.min(0.05, dz * 15)) + lit;
+                        c[0] *= k; c[1] *= k; c[2] *= k;
+                        // The cheeks' colour, the nose's tip and the chin a little red, the ears' warmth
+                        mix(c, blush, 0.3 * g((ax - 0.038) / 0.02) * g((p.y + 0.03) / 0.02) + 0.22 * g(p.x / 0.009) * g((p.y + 0.029) / 0.008) + 0.1 * g(p.x / 0.02) * g((p.y + 0.08) / 0.011));
+                        // The lid's crease over each eye, the shade under it, and deep in the socket at its corners
+                        mix(c, [168, 118, 102], 0.4 * g(ex / 0.013) * g((ey - 0.0105) / 0.0028) + 0.2 * g(ex / 0.012) * g((ey + 0.0125) / 0.004));
+                        mix(c, [110, 66, 62], 0.8 * sm(0.88, 1.0, g(ex / 0.0125) * g(ey / 0.0085)));
+                        // (the socket's shade between the lid and the brow, and the pink at the eye's inner corner)
+                        mix(c, [150, 100, 90], 0.35 * g(ex / 0.016) * g((ey - 0.012) / 0.006) * sm(0.0, 0.01, ey));
+                        mix(c, [196, 110, 104], 0.6 * g((ax - (F.eyeX - 0.0125)) / 0.0022) * g(ey / 0.0022));
+                        mix(c, [120, 76, 70], 0.5 * g((ax - 0.0165) / 0.0035) * g((ey - 0.001) / 0.004));
+                        // The lips: the upper with its bow, the fuller lower lip, the line between them darker and
+                        // shaded into the corners; the shade under the lower lip
+                        const bow = 0.0011 * Math.cos(Math.min(1, ax / 0.0075) * Math.PI);
+                        const upper = Math.exp(-Math.pow(p.x / 0.0182, 4)) * sm(-0.0535, -0.0522, p.y) * sm(-0.0472 + bow * 0.4, -0.0484 + bow * 0.4, p.y);
+                        const lower = Math.exp(-Math.pow(p.x / 0.0162, 4)) * sm(-0.0622, -0.0605, p.y) * sm(-0.0522, -0.0532, p.y);
+                        mix(c, lip, 0.62 * upper + 0.55 * lower);
+                        mix(c, [104, 58, 54], 0.8 * Math.exp(-Math.pow(p.x / 0.0205, 4)) * g((p.y + 0.0527 - 0.0012 * Math.pow(ax / 0.019, 2)) / 0.0008));
+                        mix(c, [140, 88, 78], 0.4 * g((ax - 0.0205) / 0.0026) * g((p.y + 0.053) / 0.003) + 0.25 * g(p.x / 0.014) * g((p.y + 0.0648) / 0.0025));
                         // The brows: short strokes in an arch over each eye
-                        const archY = 0.0245 + 0.0045 * Math.sin(Math.min(1, Math.max(0, (ax - 0.012) / 0.04)) * Math.PI) - 0.002 * sm(0.04, 0.052, ax);
-                        const inBrow = g((p.y - archY) / (0.0035 - 0.0012 * sm(0.03, 0.052, ax))) * sm(0.011, 0.016, ax) * sm(0.056, 0.047, ax);
+                        const archY = F.eyeY + 0.0185 + 0.0035 * Math.sin(Math.min(1, Math.max(0, (ax - 0.011) / 0.036)) * Math.PI) - 0.002 * sm(0.036, 0.048, ax);
+                        const inBrow = g((p.y - archY) / (0.0038 - 0.0013 * sm(0.03, 0.048, ax))) * sm(0.009, 0.014, ax) * sm(0.052, 0.044, ax);
                         if (inBrow > 0.05) {
                             const hairs = 0.55 + 0.45 * Math.sin((p.x * 2600 + p.y * 900) + n2(u * 256, v * 256) * 6);
                             mix(c, brow, Math.min(1, inBrow * 0.95 * (0.6 + 0.4 * hairs)));
                             height[i] += inBrow * hairs * 0.6;
                         }
-                        // The nostrils under the tip, the shade beside the nose and along the jaw
-                        mix(c, [92, 52, 46], 0.85 * Math.max(0, 1 - Math.hypot((ax - 0.0078) / 0.0029, (p.y + 0.0392) / 0.0017)));
-                        mix(c, [176, 120, 100], 0.25 * g((ax - 0.017) / 0.004) * g((p.y + 0.03) / 0.012) + 0.18 * sm(0.048, 0.07, ax) * sm(-0.03, -0.08, p.y));
+                        // The nostrils, the shade under the nose and in the folds beside it
+                        mix(c, [96, 56, 50], 0.7 * Math.max(0, 1 - Math.hypot((ax - 0.006) / 0.0022, (p.y + 0.0358) / 0.0013)));
+                        mix(c, [168, 112, 96], 0.3 * g(p.x / 0.012) * g((p.y + 0.0375) / 0.0025));
+                        const fold = Math.abs((ax - 0.017) - (-(p.y + 0.033)) * 0.42);
+                        mix(c, [170, 114, 96], 0.3 * g(fold / 0.0025) * sm(-0.03, -0.036, p.y) * sm(-0.06, -0.054, p.y));
+                        mix(c, [176, 120, 100], 0.16 * sm(0.048, 0.07, ax) * sm(-0.03, -0.08, p.y));
+                        // The sides of the nose a shade darker, so its bridge reads from ahead; the forehead lighter
+                        mix(c, [168, 116, 98], 0.3 * g((ax - 0.0085) / 0.0035) * sm(0.004, -0.004, p.y) * sm(-0.03, -0.022, p.y));
+                        mix(c, [232, 196, 176], 0.25 * sm(0.022, 0.035, p.y));
                         // Freckles
                         for (const f of freckles) {
                             const d = Math.hypot(p.x - f[0], p.y - f[1]);
@@ -158,8 +178,9 @@ class HillBoyMaps {
                     mix(c, [58, 40, 32], 0.95 * g(edge / 0.09));
                     mix(c, [150, 92, 88], 0.4 * g((edge - 0.16) / 0.06));
                 } else if (v < 0.1) {
-                    // The ears: pinker, darker in their bowl
+                    // The ears: pinker, darker deep in their bowl (v from its middle out to the rim)
                     mix(c, blush, 0.35);
+                    mix(c, [120, 70, 62], 0.55 * sm(0.075, 0.058, v));
                 } else if (v > 0.975) {
                     // The neck, under the jaw a little shadowed
                     mix(c, [196, 150, 128], 0.4);
@@ -186,7 +207,7 @@ class HillBoyMaps {
         const sm = (a, b, x) => { const t = Math.max(0, Math.min(1, (x - a) / (b - a))); return t * t * (3 - 2 * t); };
         for (let y = 0; y < N; y++) for (let x = 0; x < N; x++) {
             const u = (x + 0.5) / N - 0.5, v = (y + 0.5) / N - 0.5, r = Math.hypot(u, v), a = Math.atan2(v, u);
-            let c = [236, 228, 220];
+            let c = [222, 214, 204];
             // The white, a little pink towards its edge, its fine veins
             const vein = Math.pow(n(a * 30 + r * 8, r * 40), 6) * sm(0.3, 0.45, r);
             c = c.map((k, i) => k * (1 - 0.06 * sm(0.3, 0.5, r)) - [0, 40, 40][i] * vein);
@@ -198,6 +219,9 @@ class HillBoyMaps {
                 const pupil = sm(0.095, 0.08, r);
                 c = c.map(k => k + (14 - k) * pupil);
             }
+            // A soft catch of light over the pupil, high to one side (the eye looks wet in any light)
+            const glint = sm(0.034, 0.016, Math.hypot(u + 0.06, v - 0.075));
+            c = c.map(k => k + (250 - k) * 0.9 * glint);
             const i = (y * N + x) * 4;
             data[i] = HillBoyMaps.clamp(c[0]); data[i + 1] = HillBoyMaps.clamp(c[1]); data[i + 2] = HillBoyMaps.clamp(c[2]); data[i + 3] = 255;
         }
@@ -287,9 +311,9 @@ class HillBoyMaps {
         for (let y = 0; y < N; y++) for (let x = 0; x < N; x++) {
             const rib = 0.5 + 0.5 * Math.sin((x + y) / N * Math.PI * 2 * 32);
             const thread = n(x / N * 64, y / N * 64);
-            const h = rib * 0.7 + thread * 0.3;
+            const h = rib * 0.4 + thread * 0.6;
             height[y * N + x] = h;
-            const s = 0.78 + 0.18 * h + (thread - 0.5) * 0.12, i = (y * N + x) * 4, t = (y * N + x) * 3;
+            const s = 0.8 + 0.1 * h + (thread - 0.5) * 0.12, i = (y * N + x) * 4, t = (y * N + x) * 3;
             data[i] = HillBoyMaps.clamp(228 * s * tone[t]); data[i + 1] = HillBoyMaps.clamp(224 * s * tone[t + 1]); data[i + 2] = HillBoyMaps.clamp(216 * s * tone[t + 2]); data[i + 3] = 255;
         }
         const tileM = 0.05;

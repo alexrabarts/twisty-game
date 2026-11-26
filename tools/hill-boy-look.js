@@ -111,12 +111,40 @@ shoot('boy-pedals-head', [-0.45, 1.6, 0.9], [0, 1.55, -0.05], 26);
     ride.lookTarget = () => eye;
     for (let i = 0; i < 40; i++) ride.draw(1 / 60);
     shoot('boy-portrait', [0.35, 1.62, 0.75], [0, 1.6, -0.03], 22);
+    if (rider.boy) {
+        // (a close look at his left eye and his mouth, from the portrait's eye)
+        rider.group.updateMatrixWorld(true);
+        const e = rider.boy.eyes[0].getWorldPosition(new THREE.Vector3()), from = rider.group.localToWorld(new THREE.Vector3(0.35, 1.62, 0.75));
+        const near = (name, at, fov) => {
+            cam.position.copy(from);
+            cam.fov = fov;
+            cam.updateProjectionMatrix();
+            cam.lookAt(at);
+            cam.updateMatrixWorld();
+            if (game.effectLevels && typeof Effects !== 'undefined') Effects.frame(game);
+            game.graphics.render(game.scene, cam);
+            pictures[name] = game.renderer.domElement.toDataURL('image/png');
+        };
+        near('boy-eye', e, 5);
+        near('boy-mouth', rider.boy.skull.localToWorld(new THREE.Vector3(0, 0.025, 0.11)), 7);
+    }
     const ahead = rider.group.localToWorld(new THREE.Vector3(0, 1.6, 8));
     ride.lookTarget = () => ahead;
     for (let i = 0; i < 40; i++) ride.draw(1 / 60);
     shoot('boy-profile', [0.85, 1.6, 0.05], [0, 1.6, 0.0], 22);
+    ride.lookTarget = () => eye;
+    for (let i = 0; i < 40; i++) ride.draw(1 / 60);
+    shoot('boy-three-quarter', [0.62, 1.66, 0.55], [0, 1.6, -0.03], 22);
+    shoot('boy-three-quarter-r', [-0.62, 1.58, 0.6], [0, 1.6, -0.03], 22);
+    shoot('boy-back', [0.25, 1.72, -0.8], [0, 1.6, -0.08], 24);
     ride.lookTarget = own;
 }
+// In play: the ride's own chase camera, rolling down the lane
+pose({ s: 140, speed: 7, crank: 1.1, settle: 0.4 });
+ride.view = 0;
+ride.forcedShot = null;
+for (let i = 0; i < 30; i++) { ride.placeCamera(1); ride.draw(1 / 60); }
+pictures['boy-chase'] = game.renderer.domElement.toDataURL('image/png');
 // The far body (past HillBoy.FAR.fromM) through a long lens, so its shape can be judged
 if (rider.boy) rider.boy.level(rider.group.localToWorld(new THREE.Vector3(0.8, 2.4, -16)));
 shoot('boy-far', [0.8, 2.4, -16], [0, 1.0, 0], 9);
