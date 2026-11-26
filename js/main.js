@@ -426,7 +426,9 @@ class Game {
         // The far land stands up to 40 km away (FarLand); a leg keeps its 5 km
         this.camera.far = WorldEnvironment.FAR_PLANE_M;
         this.camera.updateProjectionMatrix();
-        this.graphics.setHorizonSpan(WorldLooks.horizonSpan);
+        // (the stage's own sky, measured on its photos: WorldLooks.viewOf)
+        const view = WorldLooks.viewOf(environment.stage ? environment.stage.id : null);
+        this.graphics.setHorizonSpan(Number.isFinite(view.horizonSpan) ? view.horizonSpan : WorldLooks.horizonSpan);
 
         // (free roam: its own time of day and weather, GameModes.TIMES and WEATHERS, from the menu or the address)
         const roamLook = typeof GameModes !== 'undefined' && GameModes.active(this.rideMode, Game.debugEnabled(window.location.search)) === 'roam';
@@ -4504,7 +4506,7 @@ class Game {
         this.updateShadowCamera();
         this.holdQuality(1000);
         // The air eases to the hold's with the camera (StopScene.hazeAt), and the drawing raise comes once it holds
-        const haze = typeof LandShade !== 'undefined' ? StopScene.hazeAt(scene.hold, scene.t, LandShade.HAZE, scene.flyS) : null;
+        const haze = typeof LandShade !== 'undefined' ? StopScene.hazeAt(scene.hold, scene.t, LandShade.hazeNow(), scene.flyS) : null;
         if (haze) LandShade.writeHaze(haze);
         if (frame.held && !scene.drawRaised) {
             scene.drawRaised = true;
@@ -4573,7 +4575,11 @@ class Game {
         const scene = this.stopScene, env = this.environment;
         if (!scene || !this.quality || typeof StopScene === 'undefined') return;
         const level = Quality.LEVELS[this.quality.level];
-        const raise = StopScene.RAISE[level.id] || {};
+        // (a stop's hold may cap the land's raise, as its own data: a view over a whole valley, the lookout over Airolo,
+        // drew the land at full detail out to 2.5 km and went over LEG_BUDGET's triangles; never raised past the level's)
+        const cap = scene.stop && scene.stop.raise;
+        const own = StopScene.RAISE[level.id] || {};
+        const raise = cap && Array.isArray(cap.tileLodM) && own.tileLodM ? { ...own, tileLodM: own.tileLodM.map((m, k) => Math.min(m, cap.tileLodM[k])) } : own;
         const draw = !!scene.drawRaised;
         scene.raised = { level: level.id, draw, ...raise };
         const renderer = this.renderer;
@@ -4607,7 +4613,7 @@ class Game {
     // The level in force again, as before the held shot
     dropShot() {
         const env = this.environment;
-        if (typeof LandShade !== 'undefined' && LandShade.uniforms) LandShade.writeHaze(LandShade.HAZE);
+        if (typeof LandShade !== 'undefined' && LandShade.uniforms) LandShade.writeHaze(LandShade.hazeNow());
         if (env && env.isWorld) {
             if (env.streamer) env.streamer.tileLodM = null;
             if (env.scenery && env.scenery.setShot) env.scenery.setShot(null);

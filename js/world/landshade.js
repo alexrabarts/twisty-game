@@ -35,10 +35,27 @@ class LandShade {
                 ice: [0.70, 0.74, 0.77],
                 water: [0.15, 0.24, 0.28],
                 settlement: [0.46, 0.43, 0.39],
-                bare: [0.40, 0.36, 0.30]
+                bare: [0.40, 0.36, 0.30],
+                // (the stage in play's own colours, measured on its photos: WorldLooks.viewOf, setView)
+                ...((LandShade.stageView && LandShade.stageView.palette) || {})
             };
         }
         return LandShade.palette;
+    }
+
+    // The look of the stage in play, measured on its own photos (WorldLooks.viewOf): its land's colours (`palette`, over
+    // PALETTE's), its haze's depth (`hazePerM`, over HAZE's). Set before the stage's land is built; null gives the
+    // shared values back
+    static setView(view) {
+        LandShade.stageView = view || null;
+        LandShade.palette = null;
+        if (LandShade.shared) LandShade.writeHaze(LandShade.hazeNow());
+    }
+
+    // The haze in force: HAZE with the stage's own depth
+    static hazeNow() {
+        const view = LandShade.stageView;
+        return view && Number.isFinite(view.hazePerM) ? { ...LandShade.HAZE, perM: view.hazePerM } : LandShade.HAZE;
     }
 
     // Earth radius and the usual refraction coefficient: a point d away drops d^2 (1 - k) / 2R
@@ -127,7 +144,7 @@ class LandShade {
                 uLandFloor: { value: LandShade.FLOOR },
                 uDetail: { value: 1 }
             };
-            LandShade.writeHaze(LandShade.HAZE);
+            LandShade.writeHaze(LandShade.hazeNow());
         }
         return LandShade.shared;
     }

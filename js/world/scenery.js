@@ -1328,7 +1328,8 @@ class Scenery {
         all.sort((a, b) => a.d - b.d);
         const others = this.triangles - this.treeTriangles;
         const shot = this.shot || {};
-        const cap = Scenery.TRIANGLE_CAP * (shot.triangleScale || 1);
+        // (and the stage's own share of it, WorldLooks.viewOf `sceneryScale`: a leg whose land is denser keeps LEG_BUDGET)
+        const cap = Scenery.TRIANGLE_CAP * (shot.triangleScale || 1) * (this.stageScale || 1);
         let room = Math.max(0, cap - others - Scenery.TREE_NEAR_KEPT * this.nearExtra());
         const total = this.perTile.size ? [...this.perTile.values()].reduce((n, held) => n + (held.trees || 0), 0) : 0;
         const want = Math.min(Scenery.TREE_CAP, Math.ceil(total * this.treeShare));

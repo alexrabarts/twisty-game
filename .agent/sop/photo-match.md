@@ -115,3 +115,18 @@ A leg is measured on its own photos: `node tools/world/photomatch.mjs haze --rou
 1. Run `node tools/world/photomatch.mjs coverage`. `coverage.json` lists each cluster of photos with its distance to the drawn world (`corridorDistanceM`) and to the planned route. Use it to size the next import or a free-roam corridor so that it covers the stops. In the importer, `readCoverage()` and `coverageBoxes(coverage, { reachM, marginM })` from `tools/world/photos/geo.mjs` give the LV95 boxes round the stops near the planned route.
 2. After the import, run a new round. Photos that were `awaiting-import` and are now in the drawn world are matched with no code change.
 3. A world far from the cached height data needs those swissALTI3D tiles in the cache, and Copernicus tiles for the far skyline. Download a Copernicus tile from `https://copernicus-dem-30m.s3.amazonaws.com/Copernicus_DSM_COG_10_N<lat>_00_E<lng>_00_DEM/Copernicus_DSM_COG_10_N<lat>_00_E<lng>_00_DEM.tif` into `~/Library/Caches/twisty-world/copernicus/`.
+
+## 6. Each leg of the tour
+
+A leg of the tour (js/world/tour.js) is matched on the photos within 1 km of it, in its own folder of shots, outside the repo:
+
+```sh
+node tools/world/photomatch.mjs --data worlds/airolo --world airolo-lookout --stage airolo-lookout --margin 1000 \
+  --out ~/Library/Caches/twisty-world/tour-shots/airolo-lookout/round-<n>
+```
+
+- `--stage` keeps the photos whose nearest point of the folder's ride lies on the leg, or within 200 m past either of its lines (its stops). A leg ridden against its stage is drawn as it is ridden: the look at each photo is the leg's own at that place.
+- `--out` writes the round there: the side-by-sides, the overlays, the poses and the numbers. It refuses a folder inside the repo. Nothing of a round goes into the repo but the measured numbers.
+- Read the round by region (sky, far, mid, near): the mean display colour of photo and game over the photos with a `high` confidence, their distance in sRGB, and the skyline's mean error (game against photo, in degrees). Change one thing at a time and run the round again; keep the round before and after.
+- The numbers go into the leg's rows: its weather and light along it (`WorldLooks[<id>]`), and `WorldLooks.stageView[<id>]`: `horizonSpan` (the sky), `hazePerM` (the haze's depth) and `palette` (the land's colours over `LandShade.PALETTE`). A leg with no photos of its own names the leg it takes them from (`from`).
+- Most photos of legs 1, 2 and 12 stand at the lookout over Airolo, where all three pass: one view weighs on three legs. Leg 11 has one photo (at the summit).

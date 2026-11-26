@@ -36,12 +36,13 @@ const WorldLooks = {
         { from: 0.909, to: 1, look: { ...WORLD_LOOK_BASE, weather: 'clear' } }
     ],
     // The tour (js/world/tour.js). Leg 1, Airolo (1,184 m) up the modern pass road to the lookout (1,931 m), 10.7 km:
-    // the clear morning of the lookout photos in the valley and on the open ramps, a thin cloud over the galleries and
-    // the Motto Bartola bend (0.52 to 0.78, s 5,560 to 8,340 m), clear again for the last 2.3 km to the lookout
+    // clear all the way, as every photo within 1 km of it (three trips, September and July mornings and one late
+    // afternoon: blue sky with fair-weather cumulus, no cloud on the road). It starts in the low light of the morning
+    // in the valley and is full day from 0.16 (s 1,710 m, the first ramps). (The lookout's own light was tried as the
+    // golden hour from 0.8: the mid slopes went 20 points yellower than the photos)
     'airolo-lookout': [
-        { from: 0, to: 0.52, look: { ...WORLD_LOOK_BASE, weather: 'clear' } },
-        { from: 0.52, to: 0.78, look: { ...WORLD_LOOK_BASE, weather: 'fog', weatherIntensity: 0.08 } },
-        { from: 0.78, to: 1, look: { ...WORLD_LOOK_BASE, weather: 'clear' } }
+        { from: 0, to: 0.16, look: { ...WORLD_LOOK_BASE, timeOfDay: 'dawn', weather: 'clear' } },
+        { from: 0.16, to: 1, look: { ...WORLD_LOOK_BASE, weather: 'clear' } }
     ],
     // Leg 2, the lookout over the summit to Andermatt: gotthard-north the other way, its two changes at the same places
     // (the cloud on the summit plateau and through the galleries, clear down the north side)
@@ -50,20 +51,21 @@ const WorldLooks = {
         { from: 0.11, to: 0.32, look: { ...WORLD_LOOK_BASE, weather: 'fog', weatherIntensity: 0.1 } },
         { from: 0.32, to: 1, look: { ...WORLD_LOOK_BASE, weather: 'clear' } }
     ],
-    // Leg 11, Hospental up the north road to the summit: clear up the open valley, the thin cloud of the summit plateau
-    // from s 9,840 m of gotthard-north (0.8 of this leg)
+    // Leg 11, Hospental up the north road to the summit: clear all the way, as its one photo (at the summit, a clear
+    // morning: the Gotthard leg's thin cloud on the plateau put that view's sky 38 points from the photo's, now 17),
+    // in the low light of the morning in the village and full day from 0.2 (s 4,435 m of gotthard-north)
     'hospental-summit': [
-        { from: 0, to: 0.8, look: { ...WORLD_LOOK_BASE, weather: 'clear' } },
-        { from: 0.8, to: 1, look: { ...WORLD_LOOK_BASE, weather: 'fog', weatherIntensity: 0.1 } }
+        { from: 0, to: 0.2, look: { ...WORLD_LOOK_BASE, timeOfDay: 'dawn', weather: 'clear' } },
+        { from: 0.2, to: 1, look: { ...WORLD_LOOK_BASE, weather: 'clear' } }
     ],
-    // Leg 12, the summit down the Tremola to Airolo: the Tremola's weather the other way. Dry at the top, the rain over
-    // the stacked hairpins (the grip bound holds as uphill: WorldLooks.grip.rain), mist on the lower ramps, clear in the
-    // valley
+    // Leg 12, the summit down the Tremola to Airolo. Dry at the top, then the Tremola's shower over the upper stacked
+    // hairpins (0.2 to 0.4, s 2,500 to 5,000 m: the grip bound holds as uphill, WorldLooks.grip.rain), and clear from
+    // there to the valley, as all 17 photos within 1 km of it (km 6 to 7, round the lookout: three trips, clear with
+    // cumulus). The Tremola's mist on the lower ramps put the match's far slopes 70 points too pale
     'summit-airolo': [
         { from: 0, to: 0.2, look: { ...WORLD_LOOK_BASE, weather: 'clear' } },
-        { from: 0.2, to: 0.47, look: { ...WORLD_LOOK_BASE, weather: 'rain', weatherIntensity: 1 } },
-        { from: 0.47, to: 0.75, look: { ...WORLD_LOOK_BASE, weather: 'fog', weatherIntensity: 0.15 } },
-        { from: 0.75, to: 1, look: { ...WORLD_LOOK_BASE, weather: 'clear' } }
+        { from: 0.2, to: 0.4, look: { ...WORLD_LOOK_BASE, weather: 'rain', weatherIntensity: 1 } },
+        { from: 0.4, to: 1, look: { ...WORLD_LOOK_BASE, weather: 'clear' } }
     ],
     // Airolo (1,184 m) up the Tremola to the Gotthard summit (2,104 m). Clear in the Leventina valley, cloud
     // building over the first ramps (a thin mist, the sky closing over), and rain from the middle of the climb: the
@@ -137,6 +139,52 @@ Object.defineProperties(WorldLooks, {
             'lookout-andermatt': Object.freeze({ from: 'gotthard-north', photos: 0 }),
             'hospental-summit': Object.freeze({ from: 'gotthard-north', photos: 0 })
         })
+    },
+    // The look of each stage's land, haze and sky, measured on the photos within 1 km of it (tools/world/photomatch.mjs
+    // --stage <id> --margin 1000, the side-by-side rounds of .agent/sop/photo-match.md, "Each leg of the tour"):
+    //   horizonSpan  how high the horizon's pale colour reaches up the sky (Graphics.setHorizonSpan; else horizonSpan)
+    //   hazePerM     the haze's depth (LandShade.HAZE.perM; else HAZE's)
+    //   palette      the land's colours (sRGB, over LandShade.PALETTE's)
+    //   sceneryScale the share of Scenery.TRIANGLE_CAP its scenery may take (else 1): a leg whose land and roads are
+    //                denser keeps LEG_BUDGET by drawing fewer trees where the cap holds
+    // `from` takes another stage's row (a leg with no photos of its own); `photos` the count measured on. A stage with
+    // no row has the shared values.
+    stageView: {
+        value: Object.freeze({
+            // Leg 1: 10 photos with a high confidence, all but two at the lookout at its end (three trips: July and
+            // September; mornings and one late afternoon). Four rounds; from the first to the last, the mean sRGB
+            // distance of photo and game: sky 62.8 to 42.4 (a bluer sky: the horizon's pale colour a third as high),
+            // land from 3 km 62.1 to 33.0 (thinner haze: the far slopes were 26 points too pale), the near ground 41.4
+            // to 37.6 (drier grass: its green share 0.58 to 0.30, the photos' 0.29), the whole picture 28.9 to 19.9.
+            // The land 0.6 to 3 km stayed at 23 to 25 (the photos' forest there is darker and bluer). The skyline is the
+            // height data's: 0.47 degrees from the photos' (the photos' own fit to the data 0.43)
+            'airolo-lookout': Object.freeze({ sceneryScale: 0.84, horizonSpan: 0.15, hazePerM: 1 / 6000, palette: Object.freeze({ grass: [0.33, 0.31, 0.2], dry: [0.44, 0.39, 0.26] }), photos: 10 }),
+            // Legs 2 and 12: most of their photos are the same view (the lookout, where all three legs pass): leg 1's
+            // land, haze and sky, at the shared scenery's full share. Leg 2 (19 photos, the lookout and the hotel at
+            // Andermatt): whole picture 37.3 to 34.7, sky 66.8 to 58.4, land from 3 km 53.2 to 48.5, near 42.3 to 41.6,
+            // land 0.6 to 3 km 44.8 to 48.5. Leg 12 (17 photos, km 6 to 7 round the lookout; its clear lower half in the
+            // same round): whole 45.9 to 30.4, sky 78.2 to 44.2, from 3 km 110.2 to 68.1, 0.6 to 3 km 101.6 to 35.8,
+            // near 35.9 to 36.4. A haze of their own (1 / 7 000 m, 1 / 8 000 m) and leg 2's greener grass were tried in
+            // a third round: each moved its legs by under 3 points, the land 0.6 to 3 km the wrong way
+            'lookout-andermatt': Object.freeze({ from: 'airolo-lookout', sceneryScale: 1, photos: 19 }),
+            // (leg 12's scenery at 0.9 of the shared share: down the Tremola the window held 458 142 triangles at
+            // s 9 638, where the Tremola up holds about 450 000)
+            'summit-airolo': Object.freeze({ from: 'airolo-lookout', sceneryScale: 0.9, photos: 17 }),
+            // Leg 11: one photo, at the summit, a clear morning. The bluer sky (17.2 from the photo's, 38.2 under the
+            // Gotthard leg's cloud) and the shared land colours and haze: leg 1's drier grass and thinner haze drew that
+            // view's slopes 52 points yellower than the photo. The slopes 0.6 to 3 km off stay 49 points apart: in the
+            // photo they lie in the morning's shadow, in the game in sun
+            'hospental-summit': Object.freeze({ horizonSpan: 0.15, photos: 1 })
+        })
+    },
+    // A stage's view: its own row over its `from` stage's, or {} (the shared values)
+    viewOf: {
+        value(id) {
+            const row = id ? WorldLooks.stageView[id] : null;
+            if (!row) return {};
+            const { from, photos, ...own } = row;
+            return from ? { ...WorldLooks.viewOf(from), ...own } : own;
+        }
     },
     // The air of a stage: its own, its `from` stage's, or null (LandShade.HAZE.air)
     airOf: {

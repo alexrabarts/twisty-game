@@ -153,7 +153,11 @@ class WorldEnvironment {
         // The stops at the stages' ends (tools/world/stops.mjs): where the group parks after the finish line
         this.stops = data.manifest.stops || [];
         // The stage's own air, measured on its photos (WorldLooks.stageAir)
-        if (typeof LandShade !== 'undefined' && typeof WorldLooks !== 'undefined') LandShade.setAir(stage ? WorldLooks.airOf(stage.id) : null);
+        if (typeof LandShade !== 'undefined' && typeof WorldLooks !== 'undefined') {
+            LandShade.setAir(stage ? WorldLooks.airOf(stage.id) : null);
+            // and its land's colours and its haze's depth, before any of its land is built
+            LandShade.setView(stage ? WorldLooks.viewOf(stage.id) : null);
+        }
         this.ground = new WorldGround(this.route, data);
         // The physics reads the land as it is drawn: cut to the retaining walls (cutsOf)
         this.ground.cutsOf = key => this.cutsOf(key);
@@ -215,6 +219,9 @@ class WorldEnvironment {
         // The pieces of each side chunk's roads (sidePieces), for the streamer's LOD0 test (WorldStreamer.sideNear)
         this.sidePieceCache = new Map();
         this.scenery = new Scenery(this.ground, data, models);
+        // (the stage's own share of the scenery's triangles: WorldLooks.viewOf `sceneryScale`)
+        const view = stage && typeof WorldLooks !== 'undefined' ? WorldLooks.viewOf(stage.id) : {};
+        this.scenery.stageScale = Number.isFinite(view.sceneryScale) ? view.sceneryScale : 1;
         this.scenery.landmarkModels = landmarks;
         this.sceneryGroup.add(this.scenery.forest);
         this.triangleCount = 0;
