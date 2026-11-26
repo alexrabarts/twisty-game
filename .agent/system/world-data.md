@@ -188,16 +188,16 @@ The stops were laid on the shipped data, not imported whole: `world/` was import
 
 ### The stops of `worlds/susten`
 
-One ride, Andermatt over the Schöllenen to Göschenen, down to Wassen, up the Meiental to the Susten pass and down to Gadmen, 45.2 km in three stages (legs 3 to 5 of the tour): `node tools/world/import.mjs --stages andermatt-goeschenen,goeschenen-susten,susten-gadmen --out worlds/susten`, then `node tools/world/tour.mjs` (it names each leg's start stop: the end stop of the leg before it). 277 height tiles, 46 structures, 5 places from the map and 73 found, 4.93 MB.
+One ride, Andermatt over the Schöllenen to Göschenen, down to Wassen, up the Meiental to the Susten pass and down to Gadmen, 44.2 km in three stages (legs 3 to 5 of the tour): `node tools/world/import.mjs --stages andermatt-goeschenen,goeschenen-susten,susten-gadmen --out worlds/susten`, then `node tools/world/tour.mjs` (it names each leg's start stop: the end stop of the leg before it). 276 height tiles, 46 structures, 3 places from the map and 73 found, 4.92 MB. The Göschenen waypoint stands on the through road where the village road leaves it: on a village street, the ride ran 1 km into the village and back on the same road.
 
 | Stop | Kind | Area | Way in |
 | --- | --- | --- | --- |
 | Start of `andermatt-goeschenen` | `hotel` | the public car park at the south-west edge of Andermatt (the Gotthard leg's start) | direct |
-| End of `andermatt-goeschenen`, start of `goeschenen-susten` (line s 6 798.5) | `carpark` | the station's public car park at Göschenen | by road, turn-in at s 6 858.5 |
-| End of `goeschenen-susten`, start of `susten-gadmen` (line s 29 271.3) | `carpark` | the public car park at the Susten pass | direct, turn-in at s 29 331.3 |
-| End of `susten-gadmen` (line s 45 052.8) | `carpark` | the public car park at the west edge of Gadmen, where leg 6 will start | by road, turn-in at s 45 112.8 |
+| End of `andermatt-goeschenen`, start of `goeschenen-susten` (line s 6 421.8) | `carpark` | the station's public car park at Göschenen (`legStart`) | by road, turn-in at s 6 481.8 |
+| End of `goeschenen-susten`, start of `susten-gadmen` (line s 28 272.7) | `carpark` | the public car park at the Susten pass (`legStart`) | direct, turn-in at s 28 332.7 |
+| End of `susten-gadmen` (line s 44 059.6) | `carpark` | the public car park at the west edge of Gadmen, where leg 6 will start | by road, turn-in at s 44 119.6 |
 
-- **A stage with no place for a checkpoint.** Every target of leg 3 lies in the Schöllenen's tunnels and galleries or within 80 m of them. Where a dropped target would leave a gap over twice the spacing, a stage now takes one checkpoint fewer, placed evenly again; one with none anywhere, up to four times the spacing long, is timed in one link (`placeStations`). Leg 3 has no checkpoint; legs 4 and 5 have 10 and 6 (leg 5's target at s 41 107 is within 80 m of a structure and dropped, the gap left 3.6 km).
+- **A stage with fewer checkpoints.** Leg 3's first target lies among the Schöllenen's tunnels and galleries. Where a dropped target would leave a gap over twice the spacing, a stage now takes one checkpoint fewer, placed evenly again; one with no place at all, up to four times the spacing long, is timed in one link (`placeStations`). Leg 3 has 1 checkpoint where its length gives 2; legs 4 and 5 have 10 and 6 (leg 5's target at s 40 113 is within 80 m of a structure and dropped).
 - **Landmarks with no model.** The old Devil's Bridge and the Urnerloch are listed (`tools/world/landmarks.json`) with no model; the importer leaves such a landmark out and says so, instead of stopping.
 
 ### The stops of `worlds/gotthard`
