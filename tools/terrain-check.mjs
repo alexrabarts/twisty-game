@@ -2412,6 +2412,47 @@ function countScene() {
     return { meshes, triangles: Math.round(triangles), instances, coverTriangles: Math.round(coverTriangles), trianglesByKind: byKind };
 }
 
+// In the page: the frame as it stands drawn again and again, whole and with each part of the scene left out (each
+// child of the scene and of the world's group, the houses, trees and boulders, the shadows), each timed to the GPU's
+// finish (a pixel read back) as the median of five draws. Returns [{part, ms, saved}] dearest first
+function profileFrame() {
+    const renderer = game.graphics.renderer, gl = renderer.getContext(), px = new Uint8Array(4);
+    const draw = () => {
+        const times = [];
+        for (let k = 0; k < 5; k++) {
+            const a = performance.now();
+            game.graphics.render(game.scene, game.camera);
+            gl.readPixels(0, 0, 1, 1, gl.RGBA, gl.UNSIGNED_BYTE, px);
+            times.push(performance.now() - a);
+        }
+        return times.sort((p, q) => p - q)[2];
+    };
+    draw();
+    const whole = draw();
+    const env = game.environment, sc = env.scenery;
+    const parts = [];
+    const named = (o, prefix) => `${prefix}${o.name || o.type}`;
+    for (const o of game.scene.children) if (o !== env.group && o.visible) parts.push([named(o, 'scene/'), [o]]);
+    for (const o of env.group.children) if (o.visible) parts.push([named(o, 'world/'), [o]]);
+    for (const o of env.sceneryGroup.children) if (o.visible) parts.push([named(o, 'scenery/'), [o]]);
+    if (sc.houseGroup) for (const o of sc.houseGroup.children) parts.push([named(o, 'house/'), [o]]);
+    const out = [];
+    for (const [part, list] of parts) {
+        list.forEach(o => { o.visible = false; });
+        const ms = draw();
+        list.forEach(o => { o.visible = true; });
+        out.push({ part, ms: Math.round(ms * 10) / 10, saved: Math.round((whole - ms) * 10) / 10 });
+    }
+    const sm = renderer.shadowMap.enabled;
+    renderer.shadowMap.enabled = false;
+    const noShadow = draw();
+    renderer.shadowMap.enabled = sm;
+    renderer.shadowMap.needsUpdate = true;
+    out.push({ part: 'shadows', ms: Math.round(noShadow * 10) / 10, saved: Math.round((whole - noShadow) * 10) / 10 });
+    const info = renderer.info.render;
+    return { whole: Math.round(whole * 10) / 10, calls: info.calls, triangles: info.triangles, camera: { x: game.camera.position.x, y: game.camera.position.y, z: game.camera.position.z }, parts: out.sort((p, q) => q.saved - p.saved).slice(0, 20) };
+}
+
 // Put the bike on the ride at s, build the ground round it and wait for the queue to drain
 async function placeAt(s) {
     const env = game.environment;
@@ -8904,7 +8945,7 @@ WORLD['world-shot'] = async (page) => {
             const enqueue = st.enqueue = streamer.enqueue.bind(streamer);
             streamer.enqueue = (id, priority, run) => enqueue(id, priority, () => { const a = performance.now(); const out = run(); tasks.push({ id, ms: performance.now() - a }); return out; });
         }
-        const renderer = game.graphics.renderer;
+        const renderer = game.graphics.renderer, gl = renderer.getContext(), pixel = new Uint8Array(4);
         let next = st.next;
         // The shadow casters near the player (the sun's box follows it): the ones that came in this frame
         let near = st.near;
@@ -8941,6 +8982,10 @@ WORLD['world-shot'] = async (page) => {
             game.updatePerformanceCulling();
             const t3 = performance.now();
             game.graphics.render(game.scene, game.camera);
+            // (each frame waits for the GPU to finish it, so its time is its own: unpaced, the loop queued frames faster
+            // than the GPU drew them, and the queue's stall fell on whichever frame filled it: 45 to 59 ms at
+            // susten-gadmen 13.5 s, where each frame drew in 15 to 18 ms; profileFrame)
+            gl.readPixels(0, 0, 1, 1, gl.RGBA, gl.UNSIGNED_BYTE, pixel);
             const t4 = performance.now();
             frames.push(t4 - t0);
             // (a program compiled in the draw: which objects draw with it)
@@ -8998,9 +9043,12 @@ WORLD['world-shot'] = async (page) => {
         streamer.enqueue = st.enqueue;
         return { poses, marks, slow, turns, inView: inView.slice(0, 10), inViewFrames: inView.length, flyS: scene.flyS, worstStep: { moveM: worst('moveM'), aimDeg: worst('aimDeg'), lensDeg: worst('lensDeg') }, frameWorstAtS: Math.round((slowest + 1) * 100 / 60) / 100, slowestFrames: top, biggestSteps: big, frameMedianMs: Math.round(sorted[Math.floor(sorted.length / 2)] * 100) / 100, frameWorstMs: Math.round(sorted[sorted.length - 1] * 100) / 100, frames: frames.length };
     };
-    const shots = [];
+    const shots = [], profiles = [];
     for (const t of moments) {
         await page.evaluate(flyRun, moments, SHOT_FRAME_MS, t, false);
+        // (--profile-at <t>: the frame at that moment drawn again with each part of the scene left out, timed to the
+        // GPU's finish, so a slow frame's cost is found by its part)
+        if (option('profile-at') && String(option('profile-at')).split(',').map(Number).some(v => Math.abs(v - t) < 1e-6)) profiles.push({ t, ...(await page.evaluate(profileFrame)) });
         const file = join(out, `${tag}-fly-${String(t).replace('.', '_').padStart(4, '0')}s.png`);
         await page.screenshot({ path: file });
         shots.push({ t, file });
@@ -9081,7 +9129,7 @@ WORLD['world-shot'] = async (page) => {
         }
         await page.evaluate(() => game.quality.release(performance.now()));
     }
-    const result = { ...begun, jump, worstStep: fly.worstStep, flyFrameMedianMs: fly.frameMedianMs, flyFrameWorstMs: fly.frameWorstMs, flyFrameWorstAtS: fly.frameWorstAtS, flySlowest: fly.slowestFrames, flyBiggestSteps: fly.biggestSteps, flySlow: fly.slow, flyS: fly.flyS, flyMarks: fly.marks, flyKinks: fly.turns, bikeInViewAfterPass: fly.inViewFrames, bikeInViewAt: fly.inView, flyFrames: fly.frames, held, shots, levels, phone };
+    const result = { ...begun, jump, worstStep: fly.worstStep, flyFrameMedianMs: fly.frameMedianMs, flyFrameWorstMs: fly.frameWorstMs, flyFrameWorstAtS: fly.frameWorstAtS, flySlowest: fly.slowestFrames, flyBiggestSteps: fly.biggestSteps, flySlow: fly.slow, flyS: fly.flyS, flyMarks: fly.marks, flyKinks: fly.turns, profiles, bikeInViewAfterPass: fly.inViewFrames, bikeInViewAt: fly.inView, flyFrames: fly.frames, held, shots, levels, phone };
     writeFileSync(join(out, `${tag}-shot.json`), JSON.stringify(result, null, 1));
     return result;
 };

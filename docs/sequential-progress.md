@@ -1130,3 +1130,8 @@ One job at a time, in the order A to H. Each entry: the job, the commit, what th
 - Also: a stop's puff of vapour compiled its program 80 ms into the held shot; it is drawn once at load now, its material kept (disposed, its program went with it).
 - `world-shot` on all nine end stops: no jump of place, aim or lens. Pictures: `~/Library/Caches/twisty-world/lookout-shots/overtake-tour/`.
 - Left: `susten-gadmen` has a run of frames of 45 to 59 ms at 13.5 s of the fly as the camera passes a house close by, draw only (no new program, no upload); every other stop keeps under 50 ms.
+
+## The fly's frame bound measures each frame; a car park's hold frames every bike
+
+- The slow frames at `susten-gadmen` 13.5 s (45 to 59 ms) were not one frame's cost. Drawn again at that moment and timed to the GPU's finish, the frame takes 18 ms, as at every other moment of that fly (15 to 18 ms on the mini, at the desk size); no part of the scene left out saves more than 4 ms (`world-shot --profile-at`). The probe's loop gave the GPU frames faster than it drew them, and the queue's stall fell on whichever frame filled it. `world-shot` now times each frame to the GPU's finish: every end stop's fly keeps under 50 ms on the mini, the worst its first frame (39 to 46 ms).
+- A car park's hold (`group` in `StopScene.KINDS`) now looks at the middle of the slots the riders park in and stands back until every bike and the rider beside it is in the picture by 8% of each half (`StopScene.fitGroup`). At Andermatt and Gadmen the nearest bike had stood cut by the picture's edge. The rule needs no stop data.
