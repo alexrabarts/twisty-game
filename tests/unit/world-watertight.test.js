@@ -24,7 +24,9 @@ function edgeProfile(mesh, lod, e) {
     return { top: m => at(top, m), foot: m => at(skirt, m) };
 }
 
-describe('the committed Tremola slice', () => {
+// Every shipped data folder: the Tremola's (world/), the Gotthard leg's and the tour's (worlds/*). A leg of the tour
+// ridden against a stage reads that stage's folder, so its land is checked with the folder
+for (const base of ['world/', 'worlds/gotthard/', 'worlds/airolo/']) describe(`the committed land of ${base}`, () => {
     const tiles = new Map();
     const built = new Map();
     const near = key => tiles.get(key) || null;
@@ -34,7 +36,7 @@ describe('the committed Tremola slice', () => {
         return built.get(id);
     };
     beforeAll(async () => {
-        const data = await new WorldData({ fetchFn: diskFetch().fetchFn }).load();
+        const data = await new WorldData({ base, fetchFn: diskFetch().fetchFn }).load();
         for (const [tx, tz] of data.manifest.tiles.height) {
             const key = `${tx},${tz}`;
             tiles.set(key, await data.ensureTile(key));
@@ -58,7 +60,7 @@ describe('the committed Tremola slice', () => {
                 }
             }
         }
-        expect(pairs).toBeGreaterThan(5000);
+        expect(pairs).toBeGreaterThan(3000);
         expect(worst).toBe(0);
         // Each file holds its own copy of an edge node, rounded to its 0.1 m steps: the page decodes them as written
         // (a change the page made to a tile's heights by its own nodes alone left the copies up to 10 m apart)
@@ -88,7 +90,7 @@ describe('the committed Tremola slice', () => {
                 }
             }
         }
-        expect(edges).toBeGreaterThan(1000);
+        expect(edges).toBeGreaterThan(700);
         expect(open.sort((p, q) => q.gapM - p.gapM).slice(0, 10)).toEqual([]);
     }, 300000);
 
@@ -107,7 +109,7 @@ describe('the committed Tremola slice', () => {
                 }
             }
         }
-        expect(faces).toBeGreaterThan(500000);
+        expect(faces).toBeGreaterThan(400000);
         expect(folded).toBe(0);
     }, 120000);
 });

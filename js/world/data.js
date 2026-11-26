@@ -27,7 +27,8 @@ class WorldData {
     static get SHIPPED_BASE() { return 'world/'; }
     // Every shipped data folder and the stages it holds: one continuous ride a folder. The Tremola stays in world/;
     // the legs a later import added are in their own folder under worlds/, so world/ never changes for them
-    static get FOLDERS() { return { 'world/': ['tremola'], 'worlds/gotthard/': ['gotthard-north'] }; }
+    // (js/world/tour.js lists the legs and their folders: the tour's and the legs shipped before it)
+    static get FOLDERS() { return typeof WorldTour !== 'undefined' ? WorldTour.folders() : { 'world/': ['tremola'], 'worlds/gotthard/': ['gotthard-north'] }; }
     static get ALLOWED_BASES() { return ['world/', 'worlds/', 'tests/fixtures/world/']; }
 
     // The shipped folder that holds stage `id` ('all' and an unknown id: world/)
@@ -102,8 +103,72 @@ class WorldData {
         this.junctions = junctions;
         this.decodeNodes(nodes);
         this.decodeEdges(edges);
+        // What the files hold, which every stage's view is made from (useStage)
+        const m = this.manifest;
+        this.file = { ride, junctions, places: m.places || [], structures: m.structures || [], landmarks: m.landmarks || [], stops: m.stops || [], junctionS: m.junctions || [] };
+        this.useStage(null);
         await this.ensureChunks(this.rideChunks());
         this.trusted = await this.checkTrust(manifestBuffer);
+        return this;
+    }
+
+    // The data as `stage` rides it (manifest.stages: `dir` 1 the way the ride runs, -1 against it). Every distance in the
+    // files is in the ride's own run (the forward frame); a stage ridden against it reads the same files turned round:
+    // the ride's path from its other end (each edge the other way), and every distance s along it as length - s, every
+    // side as -side, a span [s0, s1] as [length - s1, length - s0], a junction's way in as its way out. The ride holds
+    // this stage alone and its own stations, and each stop is named by its part in the stage: its start, its end, or
+    // a stop on the way. A stage of `null` ('all': the tools, the tests) keeps the folder's own stages, the ones the
+    // importer made, as the files hold them. Call it once, after load and before anything reads the ride.
+    useStage(stage) {
+        const file = this.file, ride = file.ride, manifest = this.manifest;
+        Object.assign(manifest, { places: file.places, structures: file.structures, landmarks: file.landmarks, stops: file.stops, junctions: file.junctionS });
+        this.junctions = file.junctions;
+        if (!stage) {
+            const own = (manifest.stages || []).filter(st => !st.base);
+            const ids = new Set(own.map(st => st.id));
+            this.ride = { ...ride, stages: ride.stages.filter(st => ids.has(st.id)), stations: ride.stations.filter(st => ids.has(st.stage)) };
+            this.stage = null;
+            return this;
+        }
+        const dir = stage.dir === -1 ? -1 : 1;
+        const L = ride.length;
+        const at = s => (dir === 1 ? s : Math.round((L - s) * 1000) / 1000);
+        const span = (s0, s1) => (dir === 1 ? [s0, s1] : [at(s1), at(s0)]);
+        const [from, to] = span(stage.from, stage.to);
+        const oriented = { ...stage, dir, from, to };
+        const stations = ride.stations.filter(st => st.stage === stage.id).map(st => ({ ...st, s: at(st.s) })).sort((p, q) => p.s - q.s);
+        stations.forEach((st, i) => { st.kind = i === 0 ? 'start' : i === stations.length - 1 ? 'end' : 'gate'; });
+        let path = ride.path;
+        if (dir === -1) {
+            const lengths = ride.path.map(use => this.edges[use.edgeId].length);
+            let s = 0;
+            path = ride.path.slice().reverse().map((use, k) => {
+                const out = { ...use, dir: -use.dir, sStart: Math.round(s * 1000) / 1000 };
+                s += lengths[ride.path.length - 1 - k];
+                return out;
+            });
+        }
+        this.ride = { ...ride, path, stages: [oriented], stations };
+        this.stage = oriented;
+        if (dir === -1) {
+            manifest.places = (manifest.places || []).map(p => ({ ...p, s: at(p.s + p.length), side: -p.side })).sort((p, q) => p.s - q.s);
+            manifest.structures = (manifest.structures || []).map(st => { const [s0, s1] = span(st.s0, st.s1); return { ...st, s0, s1 }; }).sort((p, q) => p.s0 - q.s0);
+            manifest.landmarks = (manifest.landmarks || []).map(l => ({ ...l, s: at(l.s) })).sort((p, q) => p.s - q.s);
+            manifest.junctions = (manifest.junctions || []).map(j => ({ ...j, passes: (j.passes || []).map(at).sort((p, q) => p - q) }));
+            this.junctions = (file.junctions || []).map(j => ({
+                ...j,
+                passes: (j.passes || []).map(p => ({ ...p, sIn: at(p.sIn), inEdge: p.outEdge === undefined ? null : p.outEdge, outEdge: p.inEdge === undefined ? null : p.inEdge })).sort((p, q) => p.sIn - q.sIn)
+            }));
+        }
+        // A stop's turn-in as this stage rides past it: against the ride, the far end of the run of the ride beside it
+        manifest.stops = (manifest.stops || []).map(stop => {
+            const role = stop.id === stage.startStop ? 'start' : stop.id === stage.endStop ? 'end' : (!stage.base && stop.stage === stage.id) ? stop.at : 'via';
+            const s = dir === 1 ? stop.s : at(Number.isFinite(stop.s1) ? stop.s1 : stop.s);
+            const out = { ...stop, stage: stage.id, at: role, s, side: dir * stop.side };
+            // (a stop behind its stage's line is one whose line was kept: the line stays and the scene turns the group)
+            if (role === 'end' && s < to) out.keepLine = true; else delete out.keepLine;
+            return out;
+        });
         return this;
     }
 

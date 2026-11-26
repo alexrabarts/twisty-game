@@ -231,6 +231,51 @@ describe('the scene', () => {
     });
 });
 
+// The tour's legs (js/world/tour.js): each ends at its end stop and starts at its start stop as it is ridden, the
+// data turned round for a leg ridden against its stage (WorldData.useStage)
+describe('the stops of the tour\'s legs', () => {
+    const { WorldData, WorldTour } = new Function(`${loadScript('world/tour.js')}\n${loadScript('world/data.js')}\nreturn { WorldData, WorldTour };`)();
+    const view = (leg) => {
+        const read = f => JSON.parse(fs.readFileSync(path.join(REPO, leg.folder, f), 'utf8'));
+        const data = new WorldData({ base: leg.folder });
+        data.manifest = read('manifest.json');
+        data.ride = read('ride.json');
+        data.junctions = read('graph/junctions.json');
+        data.edges = data.ride.path.reduce((out, use) => { out[use.edgeId] = { length: 0 }; return out; }, []);
+        data.file = { ride: data.ride, junctions: data.junctions, places: data.manifest.places, structures: data.manifest.structures, landmarks: data.manifest.landmarks, stops: data.manifest.stops, junctionS: data.manifest.junctions };
+        data.useStage(data.manifest.stages.find(s => s.id === leg.id));
+        return data;
+    };
+
+    for (const leg of WorldTour.built()) {
+        test(`leg ${leg.n} (${leg.id}): one stop at its start, one at its end, its finish line leadM before the end's turn-in`, () => {
+            const data = view(leg);
+            const env = { stage: data.stage, stops: data.manifest.stops };
+            const end = StopScene.stopAt(env);
+            expect(end).toBeTruthy();
+            if (leg.end) expect(end.id).toBe(leg.end);
+            expect(data.manifest.stops.filter(s => s.at === 'start')).toHaveLength(1);
+            if (leg.start) expect(data.manifest.stops.find(s => s.at === 'start').id).toBe(leg.start);
+            // (the turn-in after the line, by the importer's lead: tools/world/stops.mjs STOP.leadM)
+            expect(end.s - data.stage.to).toBeCloseTo(60, 0);
+            expect(end.keepLine).toBeUndefined();
+            expect(data.stage.from).toBeLessThan(data.stage.to);
+        });
+    }
+
+    test('leg 1 ends at the lookout and holds the lookout\'s photo-matched shot, as the Gotthard leg does', () => {
+        const data = view(WorldTour.built()[0]);
+        const end = StopScene.stopAt({ stage: data.stage, stops: data.manifest.stops });
+        expect(end.kind).toBe('lookout');
+        const ground = (x, z) => StopScene.planeY(end, x, z);
+        const hold = StopScene.holdOf(end, ground, 2.39);
+        const row = StopScene.HOLDS['gotthard-north-end'];
+        expect([hold.eye.x, hold.eye.z]).toEqual([row.x, row.z]);
+        expect(hold.yaw).toBeCloseTo(-row.bearing * Math.PI / 180, 9);
+        expect(hold.haze).toEqual({ perM: expect.closeTo(1 / 7500, 8) });
+    });
+});
+
 describe('the tables', () => {
     test('every stop kind of the importer has a hold; the owner\'s three riders vape, and nobody else', () => {
         const kinds = fs.readFileSync(path.join(REPO, 'tools/world/stops.mjs'), 'utf8').match(/STOP_KINDS = Object\.freeze\(\[([^\]]+)\]/)[1].match(/'(\w+)'/g).map(k => k.slice(1, -1));

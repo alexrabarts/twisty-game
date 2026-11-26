@@ -19,6 +19,7 @@ import { promisify } from 'node:util';
 import { fileURLToPath } from 'node:url';
 import { loadGame } from '../helpers/load-game.js';
 import { samplesOf } from '../helpers/world-synthetic.js';
+import { stagesFor } from '../helpers/world-stages.js';
 import { diskFetch } from '../helpers/world-fetch.js';
 import { chaseRide } from '../helpers/world-chase-ride.js';
 
@@ -101,20 +102,24 @@ describe('the road a chase camera reads (WorldCamera.roadMean)', () => {
     });
 });
 
+// The stages swept: the two legs shipped before the tour and the tour's built legs (WORLD_STAGES narrows them)
+const SWEPT = stagesFor();
+// The chicanes each stage has at the least (a leg ridden the other way has its stage's)
+const CHICANES_MIN = { tremola: 15, 'summit-airolo': 15 };
+
 describe('the chase camera through every chicane and hairpin of the shipped stages', () => {
     const results = {};
     beforeAll(async () => {
-        const [tremola, gotthard] = await Promise.all([sweep('tremola'), sweep('gotthard-north')]);
-        results.tremola = tremola;
-        results['gotthard-north'] = gotthard;
-    }, 1800000);
+        const swept = await Promise.all(SWEPT.map(id => sweep(id)));
+        SWEPT.forEach((id, k) => { results[id] = swept[k]; });
+    }, 3600000);
 
     const over = (place, view) => Object.entries(LIMITS).filter(([key, most]) => (key === 'room' ? place[view][key] < most : place[view][key] > most)).map(([key]) => key);
 
-    for (const id of ['tremola', 'gotthard-north']) {
+    for (const id of SWEPT) {
         test(`${id}: every chicane, in both views, swings within the limits with the bike well inside the view`, () => {
             const { chicanes } = results[id];
-            expect(chicanes.length).toBeGreaterThan(id === 'tremola' ? 15 : 3);
+            expect(chicanes.length).toBeGreaterThan(CHICANES_MIN[id] ?? 3);
             const bad = [];
             for (const c of chicanes) for (const view of ['standard', 'high']) if (over(c, view).length) bad.push({ s: c.s, view, over: over(c, view), ...c[view] });
             expect(bad).toEqual([]);
@@ -135,15 +140,16 @@ describe('the chase camera through every chicane and hairpin of the shipped stag
     }
 
     test('in every tunnel and gallery of both stages the eye and the near plane keep clear of the roof and the walls, and the camera does not bounce', () => {
-        const tubes = [...results.tremola.tubes, ...results['gotthard-north'].tubes];
+        const tubes = SWEPT.flatMap(id => results[id].tubes);
         // (the Gotthard leg's tunnel at km 3.5 and its galleries at km 9.0 and 12.4; the Tremola's ride has none)
-        expect(results['gotthard-north'].tubes.length).toBeGreaterThanOrEqual(3);
+        if (results['gotthard-north']) expect(results['gotthard-north'].tubes.length).toBeGreaterThanOrEqual(3);
         const bad = [];
         for (const t of tubes) for (const view of ['standard', 'high']) if (!(t[view].under >= TUBE.roomM) || !(t[view].bounce <= TUBE.bounceM)) bad.push({ from: t.from, to: t.to, view, ...t[view] });
         expect(bad).toEqual([]);
     });
 
     test('the S at km 0.5 of the Gotthard leg is one of the chicanes, and the camera through it is now calm', () => {
+        if (!results['gotthard-north']) return;
         const near = results['gotthard-north'].chicanes.find(c => Math.abs(c.s - 470) < 40);
         expect(near).toBeDefined();
         // 10.2 rad/s^2 and 1.13 rad/s in the standard view before

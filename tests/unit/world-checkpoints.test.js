@@ -15,6 +15,7 @@ import { execFileSync } from 'node:child_process';
 import { readFileSync } from 'node:fs';
 import { describe, test, expect, beforeAll } from '@jest/globals';
 import { loadGame } from '../helpers/load-game.js';
+import { stagesFor, TOUR_STAGES } from '../helpers/world-stages.js';
 import { diskFetch } from '../helpers/world-fetch.js';
 import { rideSpan } from '../helpers/world-rider.js';
 import { decodeWorld } from '../../tools/world/encode.mjs';
@@ -164,6 +165,38 @@ describe('every checkpoint is real roadworks', () => {
             }
         }
         if (bad.length) throw new Error(`${bad.length} lanes:\n${bad.slice(0, 20).join('\n')}`);
+    });
+});
+
+// The tour's legs (js/world/tour.js): each checkpoint of each leg, as it is ridden, is real roadworks too. A leg ridden
+// against a stage has its own stations (tools/world/tour.mjs), with the works in the lane it rides
+describe.each(stagesFor(TOUR_STAGES))('every checkpoint of the tour\'s %s leg is real roadworks', (stage) => {
+    let leg;
+    beforeAll(async () => {
+        const { fetchFn } = diskFetch();
+        leg = await WorldEnvironment.load(new THREE.Scene(), { id: stage, fetchFn, models: null, digest: async () => '0' });
+    }, 300000);
+
+    test('a site at every checkpoint, each closed with its works, none bare', () => {
+        expect(leg.checkpoints.length).toBeGreaterThan(0);
+        expect(leg.roadworks.sites).toHaveLength(leg.checkpoints.length);
+        const named = leg.roadworks.sites.flatMap(site => Roadworks.problems(site).map(problem => `checkpoint ${site.id} at s ${site.s}: ${problem}`));
+        if (named.length) throw new Error(named.join('\n'));
+        for (const site of leg.roadworks.sites) {
+            expect(site.closed).toBe(true);
+            expect(Roadworks.solid(site)).toBeGreaterThanOrEqual(Roadworks.SOLID_MIN);
+            expect(Roadworks.bare(site)).toBeLessThanOrEqual(Roadworks.BARE_MAX_M);
+        }
+    });
+
+    test('the stations run from the start to the finish in the way the leg is ridden, the first at its start', () => {
+        const s = leg.stationGates.map(st => st.s);
+        expect(s[0]).toBeCloseTo(leg.stage.from, 1);
+        expect(s[s.length - 1]).toBeCloseTo(leg.stage.to, 1);
+        for (let k = 1; k < s.length; k++) expect(s[k]).toBeGreaterThan(s[k - 1] + 900);
+        // (the finish is the stage's end, and the start line START_M past its start)
+        expect(leg.finishGate.s).toBeCloseTo(leg.endS, 1);
+        expect(leg.startS).toBeGreaterThan(leg.stage.from);
     });
 });
 

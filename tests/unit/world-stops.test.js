@@ -126,7 +126,9 @@ describe('the shipped stops (worlds/gotthard)', () => {
 
     test('the hospice square is a stop on the way: found by the same rule, within the stage, moving no end', () => {
         const via = manifest.stops.filter(s => s.at === 'via');
-        expect(via.map(s => s.kind)).toEqual(['restaurant']);
+        // (and the car park at Hospental, where leg 11 of the tour starts: a stop where the group gathers, `legStart`)
+        expect(via.map(s => s.kind)).toEqual(['restaurant', 'carpark']);
+        expect(via.map(s => !!s.legStart)).toEqual([false, true]);
         for (const stop of via) {
             const stage = ride.stages.find(s => s.id === stop.stage);
             expect(stop.s).toBeGreaterThan(stage.from + 500);
@@ -134,7 +136,7 @@ describe('the shipped stops (worlds/gotthard)', () => {
             expect(stop.slots).toHaveLength(STOP.slots);
             for (const slot of stop.slots) expect(areaDistance(stop.ring, slot.x, slot.z)).toBe(0);
         }
-        expect(manifest.stages).toHaveLength(1);
+        expect(manifest.stages.filter(s => !s.base)).toHaveLength(1);
     });
 
     test('a stop on the way is looked for round the ride sample nearest its coordinate and moves no stage end', () => {
@@ -151,7 +153,9 @@ describe('the shipped stops (worlds/gotthard)', () => {
     test('every stage has a stop at its start and its end, with room for the group in its area', () => {
         for (const stage of manifest.stages) {
             for (const at of ['start', 'end']) {
-                const stop = manifest.stops.find(s => s.stage === stage.id && s.at === at);
+                // (a leg of the tour names its stops: js/world/tour.js)
+                const named = at === 'start' ? stage.startStop : stage.endStop;
+                const stop = named ? manifest.stops.find(s => s.id === named) : manifest.stops.find(s => s.stage === stage.id && s.at === at);
                 expect(stop).toBeDefined();
                 expect(stop.slots).toHaveLength(STOP.slots);
                 for (const slot of stop.slots) expect(areaDistance(stop.ring, slot.x, slot.z)).toBe(0);
@@ -165,6 +169,19 @@ describe('the shipped stops (worlds/gotthard)', () => {
             const stage = ride.stages.find(s => s.id === stop.stage);
             expect(stage.to).toBeCloseTo(stop.s - STOP.leadM, 1);
             expect(ride.length).toBeGreaterThanOrEqual(stop.s - 0.1);
+        }
+    });
+
+    test('a leg of the tour starts at its start stop\'s turn-in and ends leadM before its end stop\'s, as it rides', () => {
+        for (const folder of ['world', 'worlds/gotthard', 'worlds/airolo']) {
+            const m = JSON.parse(fs.readFileSync(path.join(REPO, folder, 'manifest.json'), 'utf8'));
+            const L = JSON.parse(fs.readFileSync(path.join(REPO, folder, 'ride.json'), 'utf8')).length;
+            for (const stage of m.stages.filter(s => s.base)) {
+                const turn = id => { const st = m.stops.find(s => s.id === id); return stage.dir === -1 ? L - (st.s1 ?? st.s) : st.s; };
+                const [from, to] = stage.dir === -1 ? [L - stage.to, L - stage.from] : [stage.from, stage.to];
+                expect([stage.id, from]).toEqual([stage.id, expect.closeTo(turn(stage.startStop), 1)]);
+                expect([stage.id, to]).toEqual([stage.id, expect.closeTo(turn(stage.endStop) - STOP.leadM, 1)]);
+            }
         }
     });
 

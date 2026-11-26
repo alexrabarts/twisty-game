@@ -123,12 +123,15 @@ class WorldEnvironment {
         if (resolved.error) throw new Error(resolved.error);
         const data = new WorldData({ base: resolved.base, overridden: resolved.overridden, fetchFn, digest });
         await data.load();
+        const found = id === 'all' ? null : data.manifest.stages.find(s => s.id === id);
+        if (id !== 'all' && !found) throw new Error(`unknown world "${id}"; known: all, ${data.manifest.stages.map(s => s.id).join(', ')}`);
+        // The data as the stage rides it: a stage ridden against the ride reads it turned round (WorldData.useStage)
+        data.useStage(found);
+        const stage = data.stage;
         // The side roads round the junctions and landmarks, which the landmarks keep clear of
         await data.ensureChunks(Scenery.fixtureChunks(data)).catch(error => console.warn(`world fixture chunks: ${error.message}`));
         // The land and cover round the landmarks, which a landmark stands on dry and seated
         await Promise.all(Scenery.fixtureTiles(data).map(key => Promise.all([data.ensureTile(key), data.ensureCover(key)]))).catch(error => console.warn(`world fixture tiles: ${error.message}`));
-        const stage = id === 'all' ? null : data.manifest.stages.find(s => s.id === id);
-        if (id !== 'all' && !stage) throw new Error(`unknown world "${id}"; known: all, ${data.manifest.stages.map(s => s.id).join(', ')}`);
         const loaded = models === undefined && typeof SceneAssets !== 'undefined' ? await Scenery.loadModels(SceneAssets.loadModel) : (models || null);
         // The landmark models: loaded with the scenery's, or given with the models (a stand-in in node)
         const landmarks = models === undefined && typeof SceneAssets !== 'undefined' ? await Scenery.loadLandmarks(data.manifest.landmarks || [], SceneAssets.loadModel) : (models && models.landmarks) || null;

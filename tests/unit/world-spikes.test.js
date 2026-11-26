@@ -126,6 +126,7 @@
 // wall too: 41 overhangs went to 9 (13 to 10)
 import { describe, test, expect, beforeAll } from '@jest/globals';
 import { loadGame } from '../helpers/load-game.js';
+import { stagesFor, TOUR_STAGES } from '../helpers/world-stages.js';
 import { diskFetch } from '../helpers/world-fetch.js';
 import { spikeWindow, spikeReport, SPIKE_LIMITS, SPIKE_RULES } from '../helpers/world-spikes.js';
 
@@ -289,6 +290,26 @@ describe('the Tremola slice: no spike of land beside the ride, no open wall end'
         // Where the wall of the leg above starts inside the hairpin (the owner's picture): 0.6 m open before
         const there = report.flaps.filter(o => Math.hypot(o.x + 1111.2, o.z - 9760.4) < 6);
         if (there.length) throw new Error(`an open side at the wall's end at km 8.0:\n${list(there)}`);
+    });
+});
+
+// The tour's legs (js/world/tour.js): the same rules over each leg as it is ridden. A leg's land is its folder's, so a
+// leg ridden against a stage shares that stage's land; the counts a leg may have are measured, and may only fall
+const TOUR_LIMITS = {};
+const KINDS = ['beside', 'setback', 'bare', 'ends', 'overhangs', 'flaps', 'proud', 'fins', 'unfaced', 'thin', 'folds', 'low', 'jogs', 'strays', 'piers', 'soffits'];
+
+describe.each(stagesFor(TOUR_STAGES))('the tour\'s %s leg: no spike of land beside the ride, no open wall end', (stage) => {
+    let report;
+    beforeAll(async () => {
+        report = await read({ id: stage });
+        console.log(`spikes ${stage}: ${JSON.stringify(Object.fromEntries(KINDS.map(k => [k, report[k].length])))}, ${report.tiles} tiles, ${report.wallEnds} wall ends, ${report.tapers} taper`);
+    }, 3600000);
+
+    test('every kind of fault is within the leg\'s measured count (the Tremola\'s limits where none is measured)', () => {
+        const limits = { ...SPIKE_LIMITS, ...(TOUR_LIMITS[stage] || {}) };
+        const over = KINDS.filter(k => report[k].length > limits[k]).map(k => `${k}: ${report[k].length} (at most ${limits[k]})\n${list(report[k])}`);
+        if (over.length) throw new Error(over.join('\n'));
+        expect(report.tapers).toBe(0);
     });
 });
 

@@ -59,7 +59,10 @@ export const JUNCTION_LIMITS = { steps: 0, holes: 0, sunk: 0, decks: 0, open: 0,
 //   2026-11-25 by laying the paving between the rows: pits at km 1.1, 11.0, 11.2, 11.6, 14.08 and at Hospental's
 //   other junction, land 9 cm over a side road at km 3.3 and the summit's hole of 0.5 m)
 export const JUNCTION_OPEN = Object.freeze({
-    'gotthard-north': { steps: 1, open: 1, strips: 1, pits: 1, physics: 2 }
+    'gotthard-north': { steps: 1, open: 1, strips: 1, pits: 1, physics: 2 },
+    // (the tour's legs over the same junctions at Hospental: js/world/tour.js; the same land, the same debt)
+    'lookout-andermatt': { steps: 1, open: 1, strips: 1, pits: 1, physics: 2 },
+    'hospental-summit': { steps: 1, open: 1, strips: 1, pits: 1, physics: 2 }
 });
 export const junctionLimits = stage => ({ ...JUNCTION_LIMITS, physics: 0, ...(JUNCTION_OPEN[stage] || {}) });
 

@@ -21,6 +21,7 @@
 // road that runs down behind the ride's wall for that wall, and read the ride's wall 88 m out (WORKS_REACH_M).
 import { describe, test, expect, beforeAll } from '@jest/globals';
 import { loadGame } from '../helpers/load-game.js';
+import { stagesFor } from '../helpers/world-stages.js';
 import { diskFetch } from '../helpers/world-fetch.js';
 
 const DT = 1 / 60, G = 9.81, SPEED = 10;
@@ -138,12 +139,15 @@ async function rideWay(env, way) {
     return out;
 }
 
-describe('the Tremola slice: a side road is open, and the off-route rule brings back a rider who takes one', () => {
+// The side roads that leave at a hairpin's angle, which a rider at 10 m/s cannot turn into, by stage (each measured)
+const STEEP_MOUTHS = { tremola: 2 };
+
+describe.each(stagesFor())('the %s stage: a side road is open, and the off-route rule brings back a rider who takes one', (stage) => {
     let env;
     const rides = [];
     beforeAll(async () => {
         const { fetchFn } = diskFetch();
-        env = await WorldEnvironment.load(new THREE.Scene(), { id: 'tremola', fetchFn, models: null, digest: async () => '0' });
+        env = await WorldEnvironment.load(new THREE.Scene(), { id: stage, fetchFn, models: null, digest: async () => '0' });
         // Trees and houses do not change where a road goes; their building is most of the streaming time
         env.scenery.buildTile = () => null;
         for (const junction of env.graph.junctions) {
@@ -177,7 +181,7 @@ describe('the Tremola slice: a side road is open, and the off-route rule brings 
         const bad = kept.filter(r => r.restartM === null || r.restartM > RESTART_M || Math.abs(r.restartT - r.warnedT - WorldGuide.RESTART_AFTER_S) > 2 * DT);
         expect(bad).toEqual([]);
         // The two roads that leave at a hairpin's angle are the only ones a rider at 10 m/s cannot turn into
-        expect(kept.length).toBeGreaterThanOrEqual(rides.length - 2);
+        expect(rides.length - kept.length).toBeLessThanOrEqual(STEEP_MOUTHS[stage] ?? 2);
     });
 
     test('nothing stops a rider on a road, and none leaves the mapped land before the rule fires', () => {

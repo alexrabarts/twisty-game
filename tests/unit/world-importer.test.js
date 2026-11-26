@@ -697,7 +697,9 @@ describe('the board rows', () => {
             const tour = folder === 'world' ? 'tour' : `tour-${path.basename(folder)}`;
             const own = Object.fromEntries(Object.entries(rows).filter(([id]) => manifest.stages.some(s => id === key(s.id)) || id === key(tour)));
             expect(problemsOf(own, manifest)).toEqual([]);
-            ids.push(...manifest.stages.map(s => key(s.id)), ...(manifest.stages.length > 1 ? [key(tour)] : []));
+            // (a folder's tour row is the importer's, over its own stages: the tour's derived legs, js/world/tour.js, are
+            // stages of their own and not part of it)
+            ids.push(...manifest.stages.map(s => key(s.id)), ...(manifest.stages.filter(s => !s.base).length > 1 ? [key(tour)] : []));
         }
         expect(Object.keys(rows).sort()).toEqual(ids.sort());
     });
@@ -778,7 +780,7 @@ describe('the committed Tremola slice (world/)', () => {
         const r = checkStations(decoded);
         expect(r.details.problems).toEqual([]);
         // (a bend within 50 m behind the line: the site runs on from it, so it may begin just out of a hairpin)
-        expect(r.details.tightBend.map(b => b.s)).toEqual([5725.3, 9216.5, 11477.2]);
+        expect(r.details.tightBend.filter(b => b.stage === 'tremola').map(b => b.s)).toEqual([5725.3, 9216.5, 11477.2]);
     });
 
     test('the stacked gate fails when the cap on banked allowance is raised past half the closest pair', () => {

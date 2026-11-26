@@ -10,6 +10,7 @@
 // The rules that hold these are the builders' own, for any world (.agent/system/world.md, "Land and the tunnels").
 import { describe, test, expect, beforeAll } from '@jest/globals';
 import { loadGame } from '../helpers/load-game.js';
+import { stagesFor } from '../helpers/world-stages.js';
 import { diskFetch } from '../helpers/world-fetch.js';
 import { tunnelWindow, tunnelReport, TUNNEL_LIMITS } from '../helpers/world-tunnels.js';
 
@@ -57,7 +58,7 @@ describe('the rule (TerrainMesh.tubeClip)', () => {
 
 const list = (items, kind, n = 8) => items.filter(r => r[kind] > 0).slice(0, n).map(r => JSON.stringify({ key: r.key, kind: r.kind, s: r.s, lengthM: r.lengthM, [kind]: r[kind], worst: r.worst[kind] })).join('\n');
 
-for (const stage of ['tremola', 'gotthard-north']) describe(`the ${stage} stage: no land in a tube or across its portals`, () => {
+for (const stage of stagesFor()) describe(`the ${stage} stage: no land in a tube or across its portals`, () => {
     let found, env;
     beforeAll(async () => {
         const { fetchFn } = diskFetch();

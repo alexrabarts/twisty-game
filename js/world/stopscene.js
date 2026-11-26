@@ -168,10 +168,11 @@ class StopScene {
     }
 
     // Where the fly ends: {eye: {x, y, z}, yaw, pitch, roll, fov} (radians, fov in degrees, vertical, for `aspect`).
-    // The stop's own row of HOLDS when it has one, else its kind's hold. `groundY(x, z)` the drawn ground
+    // The stop's own row of HOLDS when it has one, else the hold its data carries (`hold`: route.json, the importer),
+    // else its kind's hold. `groundY(x, z)` the drawn ground
     static holdOf(stop, groundY = () => 0, aspect = 16 / 9) {
         const r = Math.PI / 180;
-        const own = StopScene.HOLDS[stop.id];
+        const own = StopScene.HOLDS[stop.id] || stop.hold;
         if (own) {
             const g = groundY(own.x, own.z);
             const y = (Number.isFinite(g) ? g : StopScene.planeY(stop, own.x, own.z) || 0) + own.upM;

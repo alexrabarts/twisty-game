@@ -27,7 +27,9 @@ const manifest = JSON.parse(readFileSync(path.join(REPO, 'world/manifest.json'),
 const UNIT = AtmosphereTrack.WORLD_UNIT_M;
 // The transition and grip rules need no heights: a flat route gives every part baseY 0
 const flat = { heightRange: () => ({ min: 0, max: 0 }) };
-const trackOf = (looks, stages = manifest.stages) => AtmosphereTrack.forWorld(stages, flat, looks);
+// (the folder's own stages, one run: the tour's legs made from them, js/world/tour.js, overlap them and are ridden alone)
+const own = manifest.stages.filter(s => !s.base);
+const trackOf = (looks, stages = own) => AtmosphereTrack.forWorld(stages, flat, looks);
 
 // The stages of `stages` with no change of weather or time of day inside them
 function stagesWithoutChange(track, stages) {
@@ -37,19 +39,18 @@ function stagesWithoutChange(track, stages) {
 describe('every stage changes its weather or its light along it', () => {
     test('the manifest names stages, and each has a change inside it', () => {
         expect(manifest.stages.length).toBeGreaterThan(0);
-        const track = trackOf(WorldLooks);
-        expect(stagesWithoutChange(track, manifest.stages)).toEqual([]);
+        // (a ride holds one stage at a time, as the stage rides it: the tour's legs overlap the stages they are made from)
+        expect(manifest.stages.flatMap(stage => stagesWithoutChange(trackOf(WorldLooks, [stage]), [stage]))).toEqual([]);
         manifest.stages.forEach((stage) => {
-            const changes = track.changesWithin(stage.from / UNIT, stage.to / UNIT);
+            const changes = trackOf(WorldLooks, [stage]).changesWithin(stage.from / UNIT, stage.to / UNIT);
             changes.forEach(change => expect(change.from).not.toBe(change.to));
         });
     });
 
-    test('every other shipped folder (worlds/*): its stages build one track and each changes along it', () => {
+    test('every other shipped folder (worlds/*): each stage builds its track and changes along it', () => {
         for (const name of readdirSync(path.join(REPO, 'worlds'))) {
             const stages = JSON.parse(readFileSync(path.join(REPO, 'worlds', name, 'manifest.json'), 'utf8')).stages;
-            const track = trackOf(WorldLooks, stages);
-            expect(stagesWithoutChange(track, stages)).toEqual([]);
+            expect(stages.flatMap(stage => stagesWithoutChange(trackOf(WorldLooks, [stage]), [stage]))).toEqual([]);
         }
     });
 
@@ -76,8 +77,8 @@ describe('every stage changes its weather or its light along it', () => {
 
     test('planted: a stage in one look all the way fails, a stage with no entry fails, and a change of light alone passes', () => {
         const one = { default: WorldLooks.default, tremola: [{ from: 0, to: 1, look: { timeOfDay: 'day', weather: 'clear' } }] };
-        expect(stagesWithoutChange(trackOf(one), manifest.stages)).toEqual(['tremola']);
-        const added = [...manifest.stages, { id: 'not-yet-looked', from: 13187.4, to: 25000 }];
+        expect(stagesWithoutChange(trackOf(one), own)).toEqual(['tremola']);
+        const added = [...own, { id: 'not-yet-looked', from: 13187.4, to: 25000 }];
         expect(stagesWithoutChange(trackOf(WorldLooks, added), added)).toEqual(['not-yet-looked']);
         const light = { default: WorldLooks.default, tremola: [{ from: 0, to: 0.5, look: { timeOfDay: 'day' } }, { from: 0.5, to: 1, look: { timeOfDay: 'golden' } }] };
         expect(stagesWithoutChange(trackOf(light), manifest.stages)).toEqual([]);

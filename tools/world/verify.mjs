@@ -193,25 +193,31 @@ export const RADIUS_MIN_M = 60;
 export function checkStations(decoded) {
   const problems = [];
   const spacing = decoded.manifest.stationSpacingM;
-  const samples = rideOf(decoded);
-  const junctionS = decoded.junctions.flatMap(j => j.passes.map(p => p.sIn));
-  const bounds = decoded.manifest.stages.map(st => ({ id: st.id, from: st.from, to: st.to }));
+  const L = decoded.ride.length;
+  const forward = rideOf(decoded);
+  const reverse = decoded.ride.path.slice().reverse().map(use => ({ ...use, dir: -use.dir }));
   const tightBend = [], tooNear = [];
-  const mapped = (decoded.manifest.places || []).filter(p => p.source === 'map');
   const stationS = id => decoded.ride.stations[id].s;
   const near = (list, s) => list.reduce((m, v) => Math.min(m, Math.abs(v - s)), Infinity);
-  const windowOf = (s, r, test) => {
-    let hit = Infinity;
-    for (let i = 0; i < samples.s.length; i++) {
-      if (samples.s[i] < s - r) continue;
-      if (samples.s[i] > s + r) break;
-      hit = Math.min(hit, test(i));
-    }
-    return hit;
-  };
-  decoded.manifest.stages.forEach((st, k) => {
-    const s = st.stations.map(stationS);
-    if (Math.abs(s[0] - st.from) > 0.01 || Math.abs(s[s.length - 1] - st.to) > 0.01) problems.push(`${st.id}: the stage boundaries are not stations`);
+  decoded.manifest.stages.forEach((st) => {
+    // (a stage of the tour ridden against the ride is checked as it is ridden: its own run, js/world/tour.js)
+    const dir = st.dir === -1 ? -1 : 1;
+    const at = v => (dir === 1 ? v : L - v);
+    const samples = dir === 1 ? forward : rideSamples(decoded.edges, reverse);
+    const junctionS = decoded.junctions.flatMap(j => j.passes.map(p => at(p.sIn)));
+    const mapped = (decoded.manifest.places || []).filter(p => p.source === 'map').map(p => ({ ...p, s: dir === 1 ? p.s : at(p.s + p.length) }));
+    const bound = dir === 1 ? { id: st.id, from: st.from, to: st.to } : { id: st.id, from: at(st.to), to: at(st.from) };
+    const windowOf = (s, r, test) => {
+      let hit = Infinity;
+      for (let i = 0; i < samples.s.length; i++) {
+        if (samples.s[i] < s - r) continue;
+        if (samples.s[i] > s + r) break;
+        hit = Math.min(hit, test(i));
+      }
+      return hit;
+    };
+    const s = st.stations.map(stationS).map(at).sort((p, q) => p - q);
+    if (Math.abs(s[0] - bound.from) > 0.01 || Math.abs(s[s.length - 1] - bound.to) > 0.01) problems.push(`${st.id}: the stage boundaries are not stations`);
     for (let j = 1; j < s.length; j++) {
       const gap = s[j] - s[j - 1];
       if (gap > 2 * spacing) problems.push(`${st.id}: gap ${gap.toFixed(0)} m over ${2 * spacing} m`);
@@ -219,7 +225,7 @@ export function checkStations(decoded) {
     }
     if (s.length - 2 !== st.gates) problems.push(`${st.id}: ${s.length - 2} interior stations, gates ${st.gates}`);
     // The rule as the importer states it: the same picks come out of the decoded ride
-    const again = placeStations(samples, [bounds[k]], junctionS, { spacingM: spacing, places: mapped }).perStage[0].s;
+    const again = placeStations(samples, [bound], junctionS, { spacingM: spacing, places: mapped }).perStage[0].s;
     if (again.length !== s.length || again.some((v, j) => Math.abs(v - s[j]) > 0.5)) problems.push(`${st.id}: the stations are not where the placement rule puts them`);
     s.slice(1, -1).forEach((at, j) => {
       const junction = near(junctionS, at);
