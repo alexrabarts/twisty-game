@@ -269,6 +269,45 @@ describe('his swinging parts', () => {
     });
 });
 
+describe('his frame', () => {
+    test('allocates no vector, quaternion, matrix or euler once he is going: on the pedals, legs out, on foot, throwing', () => {
+        const lane = new HillLane(), b = new HillBicycle(lane), kinds = ['Vector3', 'Quaternion', 'Matrix4', 'Euler'], made = {};
+        const keep = {};
+        // (only what his drawing makes is counted: the bicycle's own physics steps between)
+        let counting = false;
+        const run = (setup, frames) => {
+            setup();
+            for (let i = 0; i < frames; i++) {
+                b.step(DT, { pedal: 0.6, brake: 0, steer: 0.1 });
+                counting = true;
+                rider.update(b, lane, 1 / 60);
+                counting = false;
+            }
+        };
+        const ride = () => {
+            run(() => { b.walking = false; b.reset(40); b.vehicle.speed = 4; rider.foot = 0; }, 30);
+            run(() => { b.vehicle.speed = 9; b.legs = 1; b.legsOut = true; }, 30);
+            run(() => { b.reset(60); b.vehicle.yawAngle += Math.PI; b.walking = true; b.vehicle.speed = 1.5; }, 30);
+            run(() => { b.walking = false; b.reset(150); b.vehicle.speed = 8; rider.throwAt(1); }, 40);
+        };
+        // (once through to warm every lazily made scratch, then counted)
+        ride();
+        for (const kind of kinds) {
+            keep[kind] = THREE[kind];
+            made[kind] = 0;
+            const Base = keep[kind];
+            THREE[kind] = class extends Base { constructor(...args) { super(...args); if (counting) made[kind]++; } };
+        }
+        try {
+            ride();
+        } finally {
+            for (const kind of kinds) THREE[kind] = keep[kind];
+        }
+        console.log(`hill boy frame: made ${kinds.map(k => `${made[k]} ${k}`).join(', ')} over 130 frames`);
+        for (const kind of kinds) expect([kind, made[kind]]).toEqual([kind, 0]);
+    });
+});
+
 describe('his face and his finishes', () => {
     test('are drawn from numbers: no picture is read for any of them, the face is the skin map drawn in the page, and none carries text', () => {
         const maps = HillBoyMaps.all(), mats = HillBoy.materials();
