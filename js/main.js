@@ -2757,8 +2757,36 @@ class Game {
         return Math.max(0, Math.min(env.endS, at) - from);
     }
 
-    // The end of a world stage: the time and the restarts, and R to ride it again. Boards, unlocks and the
-    // next stage belong to the run flow of the world, not to this page.
+    // A finish counts toward the riders, the bikes and the legs only when it is a real one (Game.progressCounts):
+    // not in debug mode (TourSystem `unlockAll` saves nothing), not in free roam, not tuned, and on a world not
+    // after the debug skip, the free-fly camera or a read of `?worldData` (WorldEnvironment submitAllowed)
+    progressCounts() {
+        if (this.rideTuned || this.freeRoam) return false;
+        const env = this.environment;
+        return !(env && env.isWorld) || !!env.submitAllowed;
+    }
+
+    // A world leg finished: the leg in the store that opens the next (TourSystem.markWorldLegFinished) and the
+    // rider's next bike (TourSystem.markRideFinished). Returns what it unlocked for the finish card, or null
+    recordWorldFinish() {
+        const env = this.environment, tour = this.tourSystem;
+        if (!env || !env.stage || !tour || !tour.markWorldLegFinished || !this.progressCounts()) return null;
+        const unlocks = tour.markWorldLegFinished(env.stage.id);
+        const bike = this.selectedCharacter && tour.markRideFinished ? tour.markRideFinished(this.selectedCharacter.id, this.selectedBike()) : null;
+        return bike ? { ...unlocks, bikes: [bike] } : unlocks;
+    }
+
+    // The unlock block of a world finish card: the classic finish's panel (buildUnlockPanel), and until the next rider
+    // is in hand, how far away it is
+    worldUnlockBlock() {
+        const unlocks = this.worldUnlocks;
+        const riders = unlocks && Array.isArray(unlocks.characters) ? unlocks.characters.length : 0;
+        const text = riders === 0 && this.tourSystem && this.tourSystem.unlockProgressText ? this.tourSystem.unlockProgressText() : '';
+        const icon = typeof UiIcons !== 'undefined' ? `${UiIcons.svg('unlock')} ` : '';
+        return `${this.buildUnlockPanel(unlocks)}${text ? `<div class="finish-progress">${icon}${text}</div>` : ''}`;
+    }
+
+    // The end of a world stage: the time and the restarts, what the finish unlocked, and R to ride it again
     showWorldFinish() {
         const banner = document.createElement('div');
         banner.id = 'finishBanner';
@@ -2771,6 +2799,7 @@ class Game {
                 <div class="finish-time">${RaceTiming.formatTime(this.finishTime)}</div>
                 <div class="finish-deltas">${restarts}</div>
                 <div class="finish-meta">${HudRules.number(this.worldRouteDistance())} m</div>
+                ${this.worldUnlockBlock()}
                 <div class="finish-buttons">
                     <button id="restartLegBtn" class="finish-btn primary" data-key="KeyR"><u>R</u>ESTART</button>
                     <button id="returnToMenuBtn" class="finish-btn secondary" data-key="KeyM" data-menu><u>M</u>ENU</button>
@@ -2821,14 +2850,15 @@ class Game {
         const titleText = isLastLeg ? 'TOUR COMPLETE!' : 'LEG COMPLETE!';
 
         // Record progression: completing a leg unlocks the next leg and,
-        // at milestones, new riders
+        // at milestones, new riders. A tuned ride records nothing (progressCounts)
         const finishedLeg = this.tourSystem.getCurrentLeg();
+        const counts = this.progressCounts();
         let unlocks = { legs: [], characters: [] };
-        if (finishedLeg && this.tourSystem.markLegCompleted) {
+        if (counts && finishedLeg && this.tourSystem.markLegCompleted) {
             unlocks = this.tourSystem.markLegCompleted(finishedLeg.id);
         }
         // A ride finished on the rider's best open bike opens their next one (TourSystem.markRideFinished)
-        const newBike = this.selectedCharacter && this.tourSystem.markRideFinished
+        const newBike = counts && this.selectedCharacter && this.tourSystem.markRideFinished
             ? this.tourSystem.markRideFinished(this.selectedCharacter.id, this.selectedBike()) : null;
         if (newBike) unlocks = { ...unlocks, bikes: [newBike] };
         const flow = TourSystem.finishFlow(unlocks, isLastLeg);
@@ -4496,8 +4526,9 @@ class Game {
             this.leaderboardService.recordFinish(Math.round(finishTime))
                 .catch(error => console.error('Failed to record finish:', error));
         }
-        // A finished leg opens the next on the menu (WorldLegs), and a time that may be trusted is the map's best when it beats it
-        if (world && typeof WorldLegs !== 'undefined' && this.environment.stage && !this.freeRoam) WorldLegs.markFinished(this.environment.stage.id);
+        // A finished leg that may be trusted opens the next on the menu (WorldLegs), counts toward the riders and opens
+        // the rider's next bike, as a classic leg does (recordWorldFinish); its time is the map's best when it beats it
+        this.worldUnlocks = world && !this.freeRoam ? this.recordWorldFinish() : null;
         if (world && typeof WorldMap !== 'undefined' && this.environment.stage && !this.freeRoam && this.environment.submitAllowed && !this.rideTuned) WorldMap.recordBest(this.environment.stage.id, finishTime);
         // A leg that ends at a stop rides on into it: the stop scene (js/world/stopscene.js) shows the card in its bar
         if (world && !this.freeRoam && this.startStopScene()) return;
@@ -4623,7 +4654,9 @@ class Game {
 
     // The result card in the lower bar: the time, then what can be done here (a picture, the next leg), restart, menu
     showStopCard(scene) {
-        const next = typeof WorldLegs !== 'undefined' ? WorldLegs.LIST.find(leg => leg.opensAfter === this.environment.stage.id) : null;
+        // (the next leg only once it is open: a finish that did not count opened none, Game.progressCounts)
+        const after = typeof WorldLegs !== 'undefined' ? WorldLegs.LIST.find(leg => leg.opensAfter === this.environment.stage.id) : null;
+        const next = after && WorldLegs.isOpen(after.id, { unlockAll: !!(this.tourSystem && this.tourSystem.unlockAll) }) ? after : null;
         const actions = (StopScene.KINDS[scene.stop.kind] || {}).actions || [];
         const restarts = this.restarts > 0 ? `<div class="finish-board">${this.restarts} ${this.restarts === 1 ? 'restart' : 'restarts'}, +${this.restarts * Game.RESTART_PENALTY_MS / 1000} s in your time</div>` : '';
         const banner = document.createElement('div');
@@ -4634,6 +4667,7 @@ class Game {
                 <div class="finish-title">STAGE COMPLETE</div>
                 <div class="finish-time">${RaceTiming.formatTime(this.finishTime)}</div>
                 <div class="finish-deltas">${restarts}</div>
+                ${this.worldUnlockBlock()}
                 <div class="finish-buttons">
                     ${next ? `<button id="stopNextBtn" class="finish-btn primary" data-key="KeyN"><u>N</u>EXT LEG</button>` : ''}
                     ${actions.includes('photo') && typeof PhotoMode !== 'undefined' ? '<button id="stopPhotoBtn" class="finish-btn secondary" data-key="KeyV">PHOTO (<u>V</u>)</button>' : ''}

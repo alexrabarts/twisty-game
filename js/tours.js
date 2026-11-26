@@ -104,14 +104,21 @@ class TourSystem {
 
         this.currentLeg = null;
 
-        // Progression: legs unlock sequentially; riders unlock at completion
-        // milestones. Everyone starts on Tim's scooter and works up.
-        this.characterUnlocks = { tim: 0, shane: 2, lucy: 3, guy: 4, alex: 5, steve: 6 };
+        // Progression: legs unlock sequentially; riders unlock by the count of legs finished (TourSystem.RIDER_UNLOCKS,
+        // legsFinished). Everyone starts on Tim's scooter and works up.
+        this.characterUnlocks = { ...TourSystem.RIDER_UNLOCKS };
         let savedProgress = {};
         try {
             savedProgress = JSON.parse(localStorage.getItem('twistyProgress') || '{}');
-        } catch (e) { /* corrupted - start fresh */ }
-        this.completedLegs = Array.isArray(savedProgress.completedLegs) ? savedProgress.completedLegs : [];
+        } catch (e) {
+            console.warn('TourSystem: the saved progress could not be read; starting from the first leg:', e);
+        }
+        this.completedLegs = Array.isArray(savedProgress.completedLegs) ? savedProgress.completedLegs.filter(id => typeof id === 'string') : [];
+        // The riders earned, kept so that none locks again when the thresholds move. A save from before the list was
+        // kept has the riders the old thresholds gave its classic legs (TourSystem.LEGACY_UNLOCKS)
+        this.earnedRiders = Array.isArray(savedProgress.riders)
+            ? savedProgress.riders.filter(id => typeof id === 'string')
+            : Object.keys(TourSystem.LEGACY_UNLOCKS).filter(id => this.completedLegs.length >= TourSystem.LEGACY_UNLOCKS[id]);
         // Riders unlocked this session and not yet looked at: badged NEW
         this.freshRiders = new Set();
 
@@ -276,46 +283,92 @@ class TourSystem {
         return this.isLegCompleted(this.legs[index - 1].id);
     }
 
+    // Every leg the rider has finished, once each: the classic legs (twistyProgress) and the world's legs (WorldLegs,
+    // the store that opens the next world leg), so a tour leg and a classic leg count alike
+    finishedLegIds() {
+        const world = typeof WorldLegs !== 'undefined' ? WorldLegs.finished() : [];
+        return [...new Set([...this.completedLegs, ...world])];
+    }
+
+    legsFinished() {
+        return this.finishedLegIds().length;
+    }
+
+    // A rider is open once earned (kept, so it never locks again) or once enough legs are finished
     isCharacterUnlocked(characterId) {
         const required = this.characterUnlocks[characterId];
         if (required === undefined) return false;
-        return this.unlockAll || this.completedLegs.length >= required;
+        return this.unlockAll || this.earnedRiders.includes(characterId) || this.legsFinished() >= required;
     }
 
-    // Records a completed leg; returns what it newly unlocked so the finish
-    // screen can announce it: names (newLegs, newCharacters) and the records
-    // themselves (legs, characters) for pictures, colours and ids
-    markLegCompleted(legId) {
-        if (this.isLegCompleted(legId)) return { newLegs: [], newCharacters: [], legs: [], characters: [] };
+    // The riders open now, by id
+    unlockedRiderIds() {
+        return (typeof CHARACTERS !== 'undefined' ? CHARACTERS : []).filter(c => this.isCharacterUnlocked(c.id)).map(c => c.id);
+    }
 
-        const charactersBefore = (typeof CHARACTERS !== 'undefined' ? CHARACTERS : [])
-            .filter(c => this.isCharacterUnlocked(c.id)).map(c => c.id);
-        const legIndex = this.legs.findIndex(l => l.id === legId);
+    saveProgress() {
+        try {
+            localStorage.setItem('twistyProgress', JSON.stringify({ completedLegs: this.completedLegs, riders: this.earnedRiders }));
+        } catch (e) {
+            console.warn('TourSystem: the progress could not be saved:', e);
+        }
+    }
 
-        this.completedLegs.push(legId);
-        localStorage.setItem('twistyProgress', JSON.stringify({ completedLegs: this.completedLegs }));
-
+    // The riders a finish opened, given the ids open before it: kept as earned, badged NEW, and saved
+    openedRiders(before) {
         const characters = (typeof CHARACTERS !== 'undefined' ? CHARACTERS : [])
-            .filter(c => this.isCharacterUnlocked(c.id) && !charactersBefore.includes(c.id));
+            .filter(c => this.isCharacterUnlocked(c.id) && !before.includes(c.id));
+        for (const c of characters) {
+            if (!this.earnedRiders.includes(c.id)) this.earnedRiders.push(c.id);
+            this.freshRiders.add(c.id);
+        }
+        this.saveProgress();
+        return characters;
+    }
+
+    static unlocks(legs = [], characters = []) {
+        return { newLegs: legs.map(l => l.name), newCharacters: characters.map(c => c.name), legs, characters };
+    }
+
+    // Records a completed classic leg; returns what it newly unlocked so the finish
+    // screen can announce it: names (newLegs, newCharacters) and the records
+    // themselves (legs, characters) for pictures, colours and ids. Debug mode saves nothing
+    markLegCompleted(legId) {
+        if (this.unlockAll || this.isLegCompleted(legId)) return TourSystem.unlocks();
+
+        const before = this.unlockedRiderIds();
+        const legIndex = this.legs.findIndex(l => l.id === legId);
+        this.completedLegs.push(legId);
+        const characters = this.openedRiders(before);
         const legs = [];
         if (legIndex >= 0 && legIndex + 1 < this.legs.length && !this.isLegCompleted(this.legs[legIndex + 1].id)) {
             legs.push(this.legs[legIndex + 1]);
         }
-        characters.forEach(c => this.freshRiders.add(c.id));
-        return {
-            newLegs: legs.map(l => l.name),
-            newCharacters: characters.map(c => c.name),
-            legs,
-            characters
-        };
+        return TourSystem.unlocks(legs, characters);
     }
 
-    // The next rider still locked and how many more completed legs it needs
+    // Records a finished world leg in the store that opens the next one (WorldLegs.markFinished), and returns what it
+    // newly unlocked as markLegCompleted does: the riders, and the world legs it opened ({ id, name, description }).
+    // Debug mode saves nothing
+    markWorldLegFinished(legId) {
+        if (this.unlockAll || typeof WorldLegs === 'undefined') return TourSystem.unlocks();
+        const before = this.unlockedRiderIds();
+        const wasOpen = WorldLegs.LIST.filter(leg => WorldLegs.isOpen(leg.id)).map(leg => leg.id);
+        if (!WorldLegs.markFinished(legId)) return TourSystem.unlocks();
+        const characters = this.openedRiders(before);
+        const legs = WorldLegs.LIST
+            .filter(leg => !wasOpen.includes(leg.id) && WorldLegs.isOpen(leg.id))
+            .map(leg => ({ id: leg.id, name: leg.name, description: leg.note || '' }));
+        return TourSystem.unlocks(legs, characters);
+    }
+
+    // The next rider still locked and how many more finished legs it needs
     nextCharacterUnlock() {
         const next = this.riderDisplayOrder().find(c => !this.isCharacterUnlocked(c.id));
         if (!next) return null;
         const required = this.characterUnlocks[next.id] || 0;
-        return { character: next, required, remaining: Math.max(0, required - this.completedLegs.length) };
+        const done = this.legsFinished();
+        return { character: next, required, done, remaining: Math.max(0, required - done) };
     }
 
     unlockProgressText() {
@@ -364,7 +417,7 @@ class TourSystem {
                     const required = this.characterUnlocks[c.id] || 0;
                     const lockHint = unlocked ? '' : `
                         <div style="color: #cc8833; margin-top: 6px; font-size: 10px;">
-                            🔒 Complete ${required} leg${required === 1 ? '' : 's'} to unlock
+                            🔒 Finish ${required} leg${required === 1 ? '' : 's'} to unlock
                         </div>`;
                     const stats = TourSystem.statsOf(c, this.getSelectedBike(c.id));
                     return `
@@ -556,11 +609,12 @@ class TourSystem {
                     <div class="showcase-sub">LOCKED</div>`;
             } else if (tier === 'dimmed') {
                 const required = this.characterUnlocks[c.id] || 0;
-                const remaining = Math.max(0, required - this.completedLegs.length);
+                const done = this.legsFinished();
+                const remaining = Math.max(0, required - done);
                 card.innerHTML = `
                     <div class="showcase-name">${icon('lock')} ${c.name}</div>
                     <div class="showcase-sub">${c.bikeLabel}</div>
-                    <div class="showcase-hint">${remaining} more leg${remaining === 1 ? '' : 's'} to unlock (${this.completedLegs.length}/${required} completed)</div>`;
+                    <div class="showcase-hint">Finish ${remaining} more leg${remaining === 1 ? '' : 's'} to unlock (${done}/${required} legs finished)</div>`;
             } else {
                 const fresh = this.isRiderFresh(c.id);
                 card.classList.toggle('fresh', fresh);
@@ -859,3 +913,13 @@ class TourSystem {
         }
     }
 }
+
+// The legs finished that open each rider: a tour leg and a classic leg count alike, each leg once
+// (TourSystem.legsFinished). The order is the power of each rider's first bike (BIKE_MODELS `spare`, about 1.75 x its
+// peak kW for each kg of bike and an 80 kg rider): the scooter, then the trail single (about 13 kW), the light naked
+// single (32 kW), the scrambler (53 kW), the retro sports triple (89 kW) and the naked triple (111 kW), spread over
+// the ten legs of the tour
+TourSystem.RIDER_UNLOCKS = Object.freeze({ tim: 0, lucy: 1, shane: 2, guy: 3, steve: 5, alex: 7 });
+
+// The thresholds before 2026-11-26, on classic legs alone: a save from then keeps the riders they gave it
+TourSystem.LEGACY_UNLOCKS = Object.freeze({ tim: 0, shane: 2, lucy: 3, guy: 4, alex: 5, steve: 6 });

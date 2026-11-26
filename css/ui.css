@@ -3734,6 +3734,26 @@ body.stop-scene .virtual-button-pause {
     font-size: clamp(30px, 3vw + 18px, 48px);
 }
 
+/* The unlock panel in the lower bar: names only, so the card keeps to its bar */
+.finish-banner.stop-card .unlock-panel {
+    margin-top: var(--sp-2);
+    padding: var(--sp-2);
+}
+
+.finish-banner.stop-card .unlock-bike-art,
+.finish-banner.stop-card .unlock-leg-art,
+.finish-banner.stop-card .unlock-sub {
+    display: none;
+}
+
+.finish-banner.stop-card .unlock-card {
+    padding: 4px var(--sp-2);
+}
+
+.finish-banner.stop-card .finish-progress {
+    margin-top: var(--sp-1);
+}
+
 .finish-banner.stop-card .finish-buttons {
     margin-top: var(--sp-2);
     flex-wrap: nowrap;

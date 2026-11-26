@@ -29,12 +29,22 @@ describe('unlock detection', () => {
 
     afterEach(() => Modals.reset());
 
-    test('the first leg unlocks the next leg only, so the tour carries on', () => {
+    test('the first leg unlocks the next leg and Lucy, and routes to the rider screen', () => {
         const unlocks = tour.markLegCompleted('mountain-dawn');
         expect(unlocks.newLegs).toEqual(['Valley Run']);
         expect(unlocks.legs.map(l => l.id)).toEqual(['valley-run']);
-        expect(unlocks.characters).toEqual([]);
-        expect(TourSystem.finishFlow(unlocks, false)).toEqual({ primary: 'next-leg', riders: [] });
+        expect(unlocks.characters.map(c => c.id)).toEqual(['lucy']);
+        expect(TourSystem.finishFlow(unlocks, false)).toEqual({ primary: 'choose-rider', riders: ['lucy'] });
+    });
+
+    test('a leg that opens no rider keeps the tour going', () => {
+        tour.markLegCompleted('mountain-dawn');
+        tour.markLegCompleted('valley-run');
+        const unlocks = tour.markLegCompleted('coastal-descent');
+        expect(unlocks.characters.map(c => c.id)).toEqual(['guy']);
+        const leg4 = tour.markLegCompleted('foggy-gorge');
+        expect(leg4.characters).toEqual([]);
+        expect(TourSystem.finishFlow(leg4, false)).toEqual({ primary: 'next-leg', riders: [] });
     });
 
     test('the second completed leg unlocks a bike and routes to the rider screen', () => {
@@ -61,9 +71,13 @@ describe('unlock detection', () => {
     });
 
     test('progress names the next bike and the legs still needed', () => {
-        expect(tour.unlockProgressText()).toBe("2 more legs to unlock Shane's Light naked single");
+        expect(tour.unlockProgressText()).toBe("1 more leg to unlock Lucy's Trail single");
         tour.markLegCompleted('mountain-dawn');
         expect(tour.unlockProgressText()).toBe("1 more leg to unlock Shane's Light naked single");
+        tour.markLegCompleted('valley-run');
+        expect(tour.unlockProgressText()).toBe("1 more leg to unlock Guy's Retro scrambler");
+        tour.markLegCompleted('coastal-descent');
+        expect(tour.unlockProgressText()).toBe("2 more legs to unlock Steve's Retro sports triple");
     });
 
     test('the rider screen opens on the new bike, badged NEW, ready to choose', () => {
@@ -93,11 +107,19 @@ describe('unlock detection', () => {
 });
 
 describe('the riders\' unlock order', () => {
-    test('Guy unlocks after Lucy and before Alex', () => {
+    test('Lucy comes right after Tim, and the rest by the power of their first bike', () => {
         localStorage.clear();
         const tour = new TourSystem();
-        expect(tour.riderDisplayOrder().map(c => c.id)).toEqual(['tim', 'shane', 'lucy', 'guy', 'alex', 'steve']);
-        expect(tour.characterUnlocks.guy).toBeGreaterThan(tour.characterUnlocks.lucy);
+        expect(tour.characterUnlocks).toEqual({ tim: 0, lucy: 1, shane: 2, guy: 3, steve: 5, alex: 7 });
+        const order = tour.riderDisplayOrder().map(c => c.id);
+        expect(order).toEqual(['tim', 'lucy', 'shane', 'guy', 'steve', 'alex']);
+        // Each first bike after the scooter has more power than the one before it (`spare` x (kg + 80): about 1.75 x kW)
+        const kw = id => { const m = BIKE_MODELS[CHARACTERS.find(c => c.id === id).bikes[0]]; return m.spare * (m.kg + 80) / 1.75; };
+        for (let i = 2; i < order.length; i++) expect(kw(order[i])).toBeGreaterThan(kw(order[i - 1]));
+        // Every rider opens within the ten legs of the tour, and no two at once
+        const at = order.map(id => tour.characterUnlocks[id]);
+        expect(Math.max(...at)).toBeLessThanOrEqual(10);
+        expect(new Set(at).size).toBe(at.length);
     });
 });
 

@@ -1152,3 +1152,13 @@ One job at a time, in the order A to H. Each entry: the job, the commit, what th
 - The Tremola's s 250 view: the red pixels are ride sections 1.1 to 1.2 km off and 250 to 290 m over the camera, at s 3 680 to 3 700 (a bridge) and 4 240 to 4 260, with a few of side roads. In node, from the same camera, the line to the bridge meets the land 244 m out, at full detail, so nothing there should show; the page shows it. Not fixed and not explained: I found no rule of the land, road or tile builders behind it.
 - The far-edge table stays at 20 places. Four of the places are stacked legs where the face from a far slope's foot would hang into the carriageway of the leg below, so it is left out.
 - Check: world-spikes passes on every leg but the three of worlds/susten, which fail as on the branch head (bare, thin, jogs, flaps); world-junctions fails on those three as on the branch head; world-far-edges, world-road-cover, world-environment, world-meshes, world-verge, world-parapets pass.
+
+## One progression: a tour leg counts toward the riders, and Lucy comes right after Tim
+
+- The ask (the owner, 2026-11-26): check the logic for unlocking riders; Lucy's dirt bike should come after Tim's scooter.
+- The fault: riders opened only by the count of classic legs, and a world finish recorded nothing but the next leg. A player who rode only the tour, the default ride, never opened a rider or a second bike.
+- Now a finished leg counts toward the riders whether it is a tour leg or a classic leg, each leg once (`TourSystem.legsFinished`). A world finish records its leg in `twistyWorldLegs`, the store that opens the next leg, and opens the rider's next bike. Both world finish cards show the classic finish's UNLOCKED panel.
+- Thresholds: Tim 0, Lucy 1, Shane 2, Guy 3, Steve 5, Alex 7, by the power of each first bike (about 13, 32, 53, 89 and 111 kW from BIKE_MODELS). Steve comes before Alex: his retro sports triple has less power than Alex's naked triple.
+- Only a real finish counts: not in debug mode, free roam, a tuned ride, or a world ride after the debug skip, the free-fly camera or `?worldData`.
+- Migration: saved classic legs still count. A save from before keeps the riders the old thresholds gave it, and earned riders are kept (`twistyProgress.riders`), so none locks again.
+- Check: tests/unit/rider-progression.test.js and unlock-flow pass; restart, world-legs, world-map, ride-mode, world-stop-scene, menu and leg-progression pass; modal-check passes on desktop and touch (62 sequences). One world-run camera test fails as on the branch head.
