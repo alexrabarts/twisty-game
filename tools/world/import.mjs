@@ -341,9 +341,10 @@ export async function buildWorld(source, { stationSpacingM = 2000, log = () => {
       if (!best || d < best.d) best = { d, i };
     }
     if (!best || best.d > LANDMARK_SNAP_M) { log(`landmark ${l.name} is ${best ? Math.round(best.d) : '?'} m from the ride: not in this import`); continue; }
-    // No placeholder ships: a landmark in the import is a model in assets/
+    // No placeholder ships: a landmark in the import is a model in assets/; one with no model yet is left out, and
+    // drawn by the import after its model comes
     const problem = landmarkAssetProblem(l);
-    if (problem) throw new Error(`landmark ${l.name}: ${problem}`);
+    if (problem) { log(`landmark ${l.name}: ${problem}; left out of this import`); continue; }
     landmarks.push({ name: l.name, asset: l.asset, size: l.size ?? null, s: Math.round(samples.s[best.i] * 10) / 10, x: Math.round(l.x * 100) / 100, z: Math.round(l.z * 100) / 100, y: Math.round(samples.y[best.i] * 100) / 100, heading: Math.round(samples.heading[best.i] * 1e4) / 1e4 });
   }
   landmarks.sort((a, b) => a.s - b.s);

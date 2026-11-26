@@ -565,8 +565,20 @@ describe('stations.mjs', () => {
     };
 
     test('a dropped station that leaves a gap over twice the spacing fails loudly', () => {
-        const samples = straight(1001, Object.fromEntries(Array.from({ length: 1001 }, (_, i) => [i, i * 4 > 600 && i * 4 < 3400 ? FLAG.tunnel : 0])));
-        expect(() => placeStations(samples, [{ id: 'a', from: 0, to: 4000 }], [], { spacingM: 1000 })).toThrow(/gap/);
+        const samples = straight(1501, Object.fromEntries(Array.from({ length: 1501 }, (_, i) => [i, i * 4 > 600 && i * 4 < 5400 ? FLAG.tunnel : 0])));
+        expect(() => placeStations(samples, [{ id: 'a', from: 0, to: 6000 }], [], { spacingM: 1000 })).toThrow(/gap/);
+    });
+
+    test('a stage takes one checkpoint fewer where a target has no site, and none where no site fits at all', () => {
+        // (a gorge of tunnels: the Schöllenen's 6.8 km has no checkpoint)
+        const tunnel = (a, b) => straight(1001, Object.fromEntries(Array.from({ length: 1001 }, (_, i) => [i, i * 4 > a && i * 4 < b ? FLAG.tunnel : 0])));
+        const none = placeStations(tunnel(600, 3400), [{ id: 'a', from: 0, to: 4000 }], [], { spacingM: 1000 });
+        expect(none.perStage[0].s).toEqual([0, 4000]);
+        expect(none.dropped.length).toBeGreaterThan(0);
+        // a tunnel over the middle target: three links where the length gives four
+        const fewer = placeStations(tunnel(1700, 2300), [{ id: 'a', from: 0, to: 4000 }], [], { spacingM: 1000 });
+        expect(fewer.perStage[0].s.length).toBeLessThan(5);
+        expect(Math.max(...fewer.perStage[0].s.slice(1).map((s, k) => s - fewer.perStage[0].s[k]))).toBeLessThanOrEqual(2000);
     });
 
     test('picks the place nearest its target where a full roadworks site fits ahead, not one in a bend', () => {

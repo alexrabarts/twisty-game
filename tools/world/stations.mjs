@@ -92,9 +92,34 @@ export function placeStations(samples, stages, junctionS, { spacingM = SPACING_M
   let maxGap = 0;
   for (const stage of stages) {
     const length = stage.to - stage.from;
-    const picks = [stage.from];
+    // (where a checkpoint cannot stand within reach of its target, in a gorge of tunnels and galleries, the stage takes
+    // one checkpoint fewer, evenly placed again, until no gap is over twice the spacing: the Schöllenen's 6.8 km has
+    // one, not two)
+    let n = length >= minGap ? Math.max(1, Math.round(length / spacingM)) : 1;
+    let picks, lost, fewer = false;
+    for (;;) {
+      ({ picks, lost } = stagePicksOf(stage, n));
+      const gap = picks.reduce((m, s, k) => (k ? Math.max(m, s - picks[k - 1]) : m), 0);
+      if (gap <= 2 * spacingM || n <= 1) break;
+      dropped.push(...lost);
+      fewer = true;
+      n--;
+    }
+    if (!fewer) dropped.push(...lost);
+    // (a stage with no place for a checkpoint anywhere, every target in tunnels, galleries and tight bends, has none:
+    // its one link is timed whole, as a stage under twice the spacing is, up to four times the spacing long)
+    if (picks.length === 2 && fewer && length <= 4 * spacingM) { perStage.push({ stage: stage.id, s: picks }); continue; }
+    for (let k = 1; k < picks.length; k++) maxGap = Math.max(maxGap, picks[k] - picks[k - 1]);
+    perStage.push({ stage: stage.id, s: picks });
+  }
+  if (maxGap > 2 * spacingM) throw new Error(`a dropped station leaves a gap of ${Math.round(maxGap)} m (limit ${2 * spacingM} m): widen its window by hand (dropped: ${dropped.map(d => `${d.stage} s ${Math.round(d.target)}, ${d.reason}`).join('; ')})`);
+  return { perStage, dropped, maxGapM: maxGap };
+
+  // The stage's picks with n links: [from, ...gates, to], and the targets with no full site in reach
+  function stagePicksOf(stage, n) {
+    const length = stage.to - stage.from;
+    const picks = [stage.from], lost = [];
     if (length >= minGap) {
-      const n = Math.max(1, Math.round(length / spacingM));
       const h = Math.max(0, Math.min(spacingM / 4, (length / n - minGap) / 2));
       for (let j = 1; j < n; j++) {
         const target = stage.from + (j * length) / n;
@@ -109,15 +134,12 @@ export function placeStations(samples, stages, junctionS, { spacingM = SPACING_M
         }
         if (best) picks.push(best.s);
         // (the reason most of the reach has: what a person would move or widen)
-        else dropped.push({ stage: stage.id, target, reason: [...why].sort((p, q) => q[1] - p[1] || (p[0] < q[0] ? -1 : 1)).map(([k]) => k)[0] ?? 'no sample in reach' });
+        else lost.push({ stage: stage.id, target, reason: [...why].sort((p, q) => q[1] - p[1] || (p[0] < q[0] ? -1 : 1)).map(([k]) => k)[0] ?? 'no sample in reach' });
       }
     }
     picks.push(stage.to);
-    for (let k = 1; k < picks.length; k++) maxGap = Math.max(maxGap, picks[k] - picks[k - 1]);
-    perStage.push({ stage: stage.id, s: picks });
+    return { picks, lost };
   }
-  if (maxGap > 2 * spacingM) throw new Error(`a dropped station leaves a gap of ${Math.round(maxGap)} m (limit ${2 * spacingM} m): widen its window by hand`);
-  return { perStage, dropped, maxGapM: maxGap };
 }
 
 function cmp(a, b) {
