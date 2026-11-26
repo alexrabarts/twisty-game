@@ -1175,6 +1175,9 @@ class Roadworks {
     // retaining wall's coping starts nearer (WorldGround.wallBand), so its `reach` (half its width across the road) stays
     // in front of the coping. Where the coping starts at the carriageway's edge that is a step in onto the road's edge
     // (negative): a gate stood half on the coping
+    // A verge piece on the open side stands at least this far out of the lane, its box clear of the lane's edge line
+    static get OPEN_EDGE_CLEAR_M() { return 0.05; }
+
     vergeOut(s, sign, out, reach, open = false) {
         const ground = this.env && this.env.ground;
         const route = this.route;
@@ -1189,7 +1192,7 @@ class Roadworks {
         // meets on the open side of a bend, drew a gate's box 0.3 m into it; it stands against the wall's face instead.
         // On the closed side the works' own lane takes it)
         const fit = Math.min(out, band.from - loc.width / 2 - reach - Roadworks.COPING_CLEAR_M);
-        return open ? Math.max(reach, fit) : fit;
+        return open ? Math.max(reach + Roadworks.OPEN_EDGE_CLEAR_M, fit) : fit;
     }
 
     // Puts a site's verge pieces (the gates, their triangle, the lights) where vergeOut gives today. True when one moved

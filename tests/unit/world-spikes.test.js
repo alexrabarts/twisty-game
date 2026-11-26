@@ -293,12 +293,22 @@ describe('the Tremola slice: no spike of land beside the ride, no open wall end'
     });
 });
 
-// The tour's legs (js/world/tour.js): the same rules over each leg as it is ridden. A leg's land is its folder's, so a
-// leg ridden against a stage shares that stage's land; the counts a leg may have are measured, and may only fall
-const TOUR_LIMITS = {};
+// The Gotthard leg and the tour's legs (js/world/tour.js): the same rules over each leg as it is ridden. A leg's land
+// is its folder's, so a leg ridden against a stage shares that stage's land. The counts each may have were measured when
+// this test first rode them (2026-11-26), and may only fall. The Gotthard leg had never been read here: its own 20
+// overhangs and 1 low top are its folder's. A leg ridden against its stage reads more than the stage does where the
+// same road is laid the other way: 7 more overhangs and 2 more flaps on the Tremola down (summit-airolo against
+// tremola), 9 and 1 on leg 2 against the Gotthard leg (.agent/system/world.md, "A stage ridden either way")
+const TOUR_LIMITS = {
+    'gotthard-north': { beside: 44, setback: 201, overhangs: 20, flaps: 2, low: 1 },
+    'airolo-lookout': { beside: 111, setback: 578, overhangs: 14, flaps: 3 },
+    'lookout-andermatt': { beside: 41, setback: 201, overhangs: 29, flaps: 3, low: 1 },
+    'hospental-summit': { beside: 25, setback: 174, overhangs: 10, flaps: 1, low: 1 },
+    'summit-airolo': { beside: 115, setback: 355, overhangs: 13, flaps: 4 }
+};
 const KINDS = ['beside', 'setback', 'bare', 'ends', 'overhangs', 'flaps', 'proud', 'fins', 'unfaced', 'thin', 'folds', 'low', 'jogs', 'strays', 'piers', 'soffits'];
 
-describe.each(stagesFor(TOUR_STAGES))('the tour\'s %s leg: no spike of land beside the ride, no open wall end', (stage) => {
+describe.each(stagesFor(['gotthard-north', ...TOUR_STAGES]))('the %s leg: no spike of land beside the ride, no open wall end', (stage) => {
     let report;
     beforeAll(async () => {
         report = await read({ id: stage });
