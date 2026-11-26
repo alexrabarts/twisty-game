@@ -971,7 +971,9 @@ const HillBoyPieces = {
             // The chest a little full ahead, the shoulder blades behind, the knit sagging a little round the waist
             const front = Math.cos(th), side = Math.abs(Math.sin(th));
             const swell = 1 + 0.035 * K.g((y - (y0 + 0.26)) / 0.06) * Math.max(0, front) * side + 0.04 * K.g((y - (y0 + 0.28)) / 0.07) * Math.max(0, -front) * K.g((side - 0.55) / 0.3)
-                + 0.012 * Math.sin(y * 170 + th * 2) * K.g((y - (y0 + 0.08)) / 0.06);
+                + 0.012 * Math.sin(y * 170 + th * 2) * K.g((y - (y0 + 0.08)) / 0.06)
+                // (the knit drawn into folds under the arms, where it gathers)
+                + 0.02 * Math.sin(y * 95 + th * 3) * K.g((y - (y0 + 0.3)) / 0.05) * K.g((side - 0.95) / 0.12);
             o.p.set(x * swell, y, z + d * swell);
             return o;
         };
@@ -1142,6 +1144,9 @@ const HillBoyPieces = {
                 // (the knit hangs a little looser on the outer side of the upper arm)
                 r *= 1 + 0.05 * Math.max(0, out) * K.sm(el.y + 0.02, sh.y - 0.04, y);
                 r += 0.0025 * Math.sin(th * 3 + y * 47) * K.g((y - el.y) / 0.1);
+                // (the knit pushed up the forearm in soft rings over the cuff, and drawn in loose folds down the upper arm)
+                r += 0.0032 * Math.pow(Math.sin((y - end) * 150), 2) * K.g((y - end - 0.06) / 0.035);
+                r += 0.0024 * Math.sin(th * 2 + y * 60 + side) * K.g((y - el.y - 0.13) / 0.08) * Math.max(0, -front);
                 o.p.set(sh.x + Math.sin(th) * r - side * 0.004 * K.sm(sh.y - 0.06, top, y), y, sh.z + Math.cos(th) * r);
                 const upper = 0.35 + 0.65 * K.sm(top - 0.002, sh.y - 0.06, y), fore = K.sm(el.y + 0.035, el.y - 0.04, y);
                 o.w = [[`clavicle_${tag}`, 1 - upper], [`upperarm_${tag}`, upper * (1 - fore)], [`forearm_${tag}`, fore]];
@@ -1277,8 +1282,8 @@ const HillBoyPieces = {
                     o.t[1] = 0.005 + 0.045 * Math.abs(el - edgeAt) / Math.abs(to - from);
                 });
             };
-            lid(`lid_${tag}`, `lid_${tag}`, 0.16, 1.45, 0.16, 1.12);
-            lid(`lidlow_${tag}`, 'skull', -0.36, -1.35, -0.36, 1.1);
+            lid(`lid_${tag}`, `lid_${tag}`, 0.25, 1.45, 0.25, 1.12);
+            lid(`lidlow_${tag}`, 'skull', -0.42, -1.35, -0.42, 1.1);
         }
     },
 
@@ -1402,10 +1407,13 @@ const HillBoyPieces = {
             shape.grid(name, 'knit', shape.k(40, 12), shape.k(12, 6), false, (u, v, o) => {
                 const phi = u * Math.PI * 2, th = v * Math.PI * 2;
                 const front = Math.cos(phi);
-                const lump = 1 + 0.14 * Math.sin(phi * 3 + 1) + 0.08 * Math.sin(phi * 7);
+                // (a band of knitting folded round, taller than it is thick, a little twisted and lumpy along it)
+                const lump = 1 + 0.1 * Math.sin(phi * 3 + 1) + 0.06 * Math.sin(phi * 7);
+                const twist = 0.35 * Math.sin(phi * 2 + 0.5);
                 const cx = Math.sin(phi) * rx, cz = z0 + Math.cos(phi) * rz, cy = y - tilt * front;
                 const out = new THREE.Vector3(Math.sin(phi), 0, Math.cos(phi));
-                o.p.set(cx, cy, cz).addScaledVector(out, Math.cos(th) * tube * lump).add({ x: 0, y: Math.sin(th) * tube * lump * 0.8, z: 0 });
+                const a = Math.cos(th) * tube * 0.62 * lump, b = Math.sin(th) * tube * 1.25 * lump;
+                o.p.set(cx, cy, cz).addScaledVector(out, a * Math.cos(twist) - b * Math.sin(twist) * 0.3).add({ x: 0, y: b * Math.cos(twist) + a * Math.sin(twist), z: 0 });
                 const h = head * K.sm(0, 1, (o.p.y - (N.y - 0.02)) / 0.06);
                 o.w = [['chest', 1 - h], ['head', h]];
                 o.c = C;
@@ -1521,36 +1529,48 @@ HillBoy.HAIR = Object.freeze({ az0: 1.18, p0: 0.78, p1: 2.38 });
 // modelled on the front: the brow, the eyes' sockets, the nose, the cheekbones, the lips and the chin. No one's face:
 // these are numbers of an ordinary boy's proportions
 HillBoy.headPoint = function (polar, az, out, face = true) {
-    const K = HillBoyKit;
-    const sx = Math.sin(polar) * Math.sin(az), sy = Math.cos(polar), sz = Math.sin(polar) * Math.cos(az);
-    let w = 0.0735 * (1 - 0.24 * K.sm(-0.15, -0.78, sy)) * (1 - 0.42 * K.sm(-0.72, -1, sy)) * (1 + 0.015 * K.g((sy - 0.25) / 0.3));
-    const up = sy > 0 ? 0.104 : 0.106;
-    const ahead = 0.089 * (1 - 0.18 * K.sm(-0.3, -0.95, sy)), behind = 0.101 * (1 - 0.42 * K.sm(-0.15, -0.85, sy)) * (1 + 0.02 * K.g((sy - 0.15) / 0.25));
-    const x = sx * w, y = sy * up;
-    let z = sz * (sz > 0 ? ahead : behind);
-    if (face && sz > 0) {
+    const K = HillBoyKit, R = HillBoy.HEAD;
+    // The height from the direction, then the section of the head at that height: its half width, its depth ahead and
+    // behind its middle, the middle's place, and how square it is ahead (a face is flatter than a skull)
+    const sy = Math.cos(polar), y = sy * (sy > 0 ? R.crownM : R.chinM);
+    const w = K.curve(R.rows, y, 1), f = K.curve(R.rows, y, 2), b = K.curve(R.rows, y, 3), zc = K.curve(R.rows, y, 4);
+    const sa = Math.sin(az), ca = Math.cos(az), e = ca > 0 ? 2.5 : 2.05;
+    const x = Math.sign(sa) * Math.pow(Math.abs(sa), 2 / e) * w;
+    let z = zc + Math.sign(ca) * Math.pow(Math.abs(ca), 2 / e) * (ca > 0 ? f : b);
+    if (face && ca > 0) {
         const ax = Math.abs(x), G = K.g;
         let dz = 0;
         // The brow over the eyes, and the eyes' sockets under it
-        dz += 0.0055 * G((y - 0.025) / 0.009) * K.sm(0.006, 0.016, ax) * K.sm(0.058, 0.044, ax);
+        dz += 0.005 * G((y - 0.024) / 0.008) * K.sm(0.006, 0.016, ax) * K.sm(0.058, 0.044, ax);
         dz -= 0.0115 * G((ax - 0.0315) / 0.0155) * G((y - 0.0085) / 0.0112);
-        // The nose: its bridge between the eyes, out to its tip, its wings, in under it
-        const ny = Math.max(0, Math.min(1, (0.012 - y) / 0.047));
-        const nose = (0.0045 + 0.0205 * Math.pow(ny, 1.4)) * K.sm(0.016, 0.004, y) * K.sm(-0.048, -0.036, y);
-        const nw = 0.0058 + 0.0058 * ny;
-        dz += nose * G(x / nw);
-        dz += 0.0065 * G((ax - 0.0125) / 0.0058) * G((y + 0.034) / 0.0055);
-        dz -= 0.0018 * G(x / 0.004) * G((y + 0.045) / 0.003);
-        // The cheekbones and the cheeks
-        dz += 0.004 * G((ax - 0.044) / 0.012) * G((y + 0.012) / 0.01) + 0.0028 * G((ax - 0.036) / 0.018) * G((y + 0.042) / 0.018);
-        // The lips, the mouth between, and the chin under the dip below the lip
-        const lips = Math.exp(-Math.pow(x / 0.017, 4));
-        dz += (0.0048 * G((y + 0.0515) / 0.0045) + 0.0052 * G((y + 0.0635) / 0.005)) * lips - 0.0028 * G((y + 0.0575) / 0.0011) * Math.exp(-Math.pow(x / 0.0195, 4));
-        dz += 0.006 * G((y + 0.088) / 0.0095) * G(x / 0.02) - 0.0018 * G((y + 0.075) / 0.004) * G(x / 0.014);
-        z += dz * K.sm(0.15, 0.55, sz / Math.max(1e-6, Math.sin(polar)));
+        // The nose: its bridge between the eyes, out to its tip, its wings; its underside steep
+        const ny = Math.max(0, Math.min(1, (0.012 - y) / 0.044));
+        const nose = (0.0035 + 0.0175 * Math.pow(ny, 1.5)) * K.sm(0.018, 0.006, y) * K.sm(-0.041, -0.031, y);
+        dz += nose * G(x / (0.0058 + 0.006 * ny));
+        dz += 0.006 * G((ax - 0.0125) / 0.0052) * G((y + 0.033) / 0.0052);
+        dz -= 0.0016 * G(x / 0.0042) * G((y + 0.0455) / 0.0032);
+        // The cheekbones and a boy's full cheeks
+        dz += 0.0035 * G((ax - 0.045) / 0.012) * G((y + 0.01) / 0.01) + 0.0042 * G((ax - 0.04) / 0.017) * G((y + 0.04) / 0.02);
+        // The lips, the mouth between them, the dip under the lower lip and the chin
+        const lips = Math.exp(-Math.pow(x / 0.0185, 4));
+        dz += (0.0042 * G((y + 0.0515) / 0.0042) + 0.0048 * G((y + 0.0632) / 0.0048)) * lips - 0.0032 * G((y + 0.0575) / 0.0011) * Math.exp(-Math.pow(x / 0.0195, 4));
+        dz += 0.0045 * G((y + 0.089) / 0.009) * G(x / 0.021) - 0.0016 * G((y + 0.075) / 0.0042) * G(x / 0.015);
+        z += dz * K.sm(0.15, 0.5, ca);
     }
     out.set(x, y, z);
     return out;
 };
+
+// The head's sections, from his crown to under his chin (m, from the head's centre): [y, half width, depth ahead,
+// depth behind, the section's middle forward]. A boy's proportions: wide over the temples, a rounded jaw, a small
+// chin; the face's plane upright from brow to chin
+HillBoy.HEAD = Object.freeze({
+    crownM: 0.104, chinM: 0.106,
+    rows: [
+        [-0.106, 0.0, 0.012, 0.0, 0.03], [-0.103, 0.021, 0.03, 0.012, 0.03], [-0.095, 0.036, 0.046, 0.025, 0.024], [-0.08, 0.049, 0.06, 0.045, 0.016],
+        [-0.06, 0.059, 0.071, 0.068, 0.008], [-0.035, 0.0675, 0.081, 0.088, 0.002], [-0.01, 0.0725, 0.086, 0.098, 0.0], [0.015, 0.0742, 0.088, 0.101, 0.0],
+        [0.04, 0.073, 0.085, 0.099, 0.0], [0.07, 0.064, 0.068, 0.088, 0.0], [0.09, 0.045, 0.042, 0.06, 0.0], [0.104, 0.0, 0.0, 0.0, 0.0]
+    ]
+});
 
 if (typeof module !== 'undefined' && module.exports) module.exports = { HillBoy, HillBoyShape, HillBoyKit };

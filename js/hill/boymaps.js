@@ -89,18 +89,18 @@ class HillBoyMaps {
         const n1 = HillBoyMaps.noise(11, 64), n2 = HillBoyMaps.noise(12, 256), n3 = HillBoyMaps.noise(13, 32);
         const rand = HillBoyMaps.random(14);
         const g = (x) => Math.exp(-x * x), sm = (a, b, x) => { const t = Math.max(0, Math.min(1, (x - a) / (b - a))); return t * t * (3 - 2 * t); };
-        const base = [212, 168, 145], blush = [206, 124, 104], lip = [176, 116, 102], brow = [104, 76, 52], hair = [112, 84, 58];
+        const base = [214, 174, 152], blush = [206, 128, 110], lip = [176, 116, 102], brow = [104, 76, 52], hair = [112, 84, 58];
         const p = new THREE.Vector3(), q = new THREE.Vector3();
         // A few freckles over the nose and the cheeks (as head points)
         const freckles = [];
-        for (let i = 0; i < 46; i++) freckles.push([(rand() - 0.5) * 0.09, -0.005 - rand() * 0.045, 0.6 + rand() * 0.6]);
+        for (let i = 0; i < 30; i++) freckles.push([(rand() - 0.5) * 0.08, -0.008 - rand() * 0.035, 0.6 + rand() * 0.5]);
         const mix = (c, d, k) => { c[0] += (d[0] - c[0]) * k; c[1] += (d[1] - c[1]) * k; c[2] += (d[2] - c[2]) * k; };
         const c = [0, 0, 0];
         for (let y = 0; y < H; y++) {
             const v = (y + 0.5) / H;
             for (let x = 0; x < W; x++) {
                 const u = (x + 0.5) / W, i = y * W + x;
-                const mottle = (n1(u * 64, v * 64) - 0.5) * 0.06 + (n2(u * 256, v * 256) - 0.5) * 0.03;
+                const mottle = (n1(u * 64, v * 64) - 0.5) * 0.035 + (n2(u * 256, v * 256) - 0.5) * 0.02;
                 c[0] = base[0] * (1 + mottle); c[1] = base[1] * (1 + mottle * 1.2); c[2] = base[2] * (1 + mottle * 1.2);
                 height[i] = n2(u * 256, v * 256) * 0.6 + n3(u * 32, v * 32) * 0.4;
                 if (v >= 0.12 && v <= 0.98) {
@@ -111,12 +111,12 @@ class HillBoyMaps {
                     // (where the face is modelled in, a little shade; where it stands out, a little light)
                     if (front) {
                         const dz = p.z - HillBoy.headPoint(polar, az, q, false).z;
-                        const k = 1 + Math.max(-0.16, Math.min(0.05, dz * 12));
+                        const k = 1 + Math.max(-0.12, Math.min(0.04, dz * 9));
                         c[0] *= k; c[1] *= k; c[2] *= k;
                     }
                     if (front) {
                         // The cheeks' colour, the nose's tip and the chin a little red
-                        mix(c, blush, 0.45 * g((ax - 0.04) / 0.02) * g((p.y + 0.028) / 0.022) + 0.25 * g(p.x / 0.01) * g((p.y + 0.03) / 0.009) + 0.12 * g(p.x / 0.02) * g((p.y + 0.088) / 0.012));
+                        mix(c, blush, 0.32 * g((ax - 0.04) / 0.02) * g((p.y + 0.028) / 0.022) + 0.25 * g(p.x / 0.01) * g((p.y + 0.03) / 0.009) + 0.12 * g(p.x / 0.02) * g((p.y + 0.088) / 0.012));
                         // The lids' crease and under the eyes a shade darker
                         mix(c, [176, 128, 112], 0.35 * g((ax - 0.0315) / 0.014) * g((p.y - 0.019) / 0.004) + 0.22 * g((ax - 0.031) / 0.012) * g((p.y + 0.005) / 0.005));
                         // Deep in the sockets, round the eyes, dark and pink
@@ -140,13 +140,13 @@ class HillBoyMaps {
                         // Freckles
                         for (const f of freckles) {
                             const d = Math.hypot(p.x - f[0], p.y - f[1]);
-                            if (d < 0.0016 * f[2]) mix(c, [176, 112, 80], 0.42 * (1 - d / (0.0016 * f[2])));
+                            if (d < 0.0016 * f[2]) mix(c, [180, 120, 90], 0.24 * (1 - d / (0.0016 * f[2])));
                         }
                     }
                     // The hair's colour where it grows (behind the face, above the nape, round the ears; the shell over
                     // it gives the strands)
                     const behind = Math.abs(az);
-                    const bottom = behind < 1.38 ? 1.68 : behind < 2.15 ? 1.42 : 1.42 + (behind - 2.15) / (Math.PI - 2.15) * 0.88;
+                    const bottom = behind < 1.38 ? 1.5 + 0.12 * Math.max(0, Math.min(1, (behind - 1.18) / 0.2)) : behind < 2.15 ? 1.42 : 1.42 + (behind - 2.15) / (Math.PI - 2.15) * 0.88;
                     const grows = sm(HillBoy.HAIR.az0 - 0.12, HillBoy.HAIR.az0 + 0.03, behind) * sm(bottom + 0.04, bottom - 0.05, polar);
                     if (grows > 0) mix(c, hair, grows * (0.85 + 0.15 * n2(u * 256, v * 64)));
                     // The ears' and the neck's warmth
@@ -219,7 +219,7 @@ class HillBoyMaps {
         for (let y = 0; y < H; y++) for (let x = 0; x < W; x++) {
             const u = (x + 0.5) / W, v = (y + 0.5) / H;
             const az = az0 + (az1 - az0) * u, polar = p0 + (p1 - p0) * v, behind = Math.abs(Math.atan2(Math.sin(az), Math.cos(az)));
-            const bottom = behind < 1.38 ? 1.68 : behind < 2.15 ? 1.42 : 1.42 + (behind - 2.15) / (Math.PI - 2.15) * 0.88;
+            const bottom = behind < 1.38 ? 1.5 + 0.12 * Math.max(0, Math.min(1, (behind - 1.18) / 0.2)) : behind < 2.15 ? 1.42 : 1.42 + (behind - 2.15) / (Math.PI - 2.15) * 0.88;
             const end = bottom + (ends[x] - 0.5) * 0.12;
             const tone = 0.78 + 0.3 * strands[x] + 0.12 * n(u * 32, v * 8);
             const along = 0.5 + 0.5 * Math.sin(v * 90 + strands[x] * 20);

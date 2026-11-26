@@ -104,6 +104,19 @@ shoot('boy-pedals-behind', [0.6, 1.7, -2.6], [0, 1.0, 0], 34);
 shoot('boy-pedals-side', [-2.6, 1.1, 0.2], [0, 0.95, 0.1], 36);
 shoot('boy-pedals-front', [-0.5, 1.45, 2.4], [0, 1.15, 0], 30);
 shoot('boy-pedals-head', [-0.45, 1.6, 0.9], [0, 1.55, -0.05], 26);
+// His face, looking at the camera: from ahead and to his left, and in profile
+{
+    rider.group.updateMatrixWorld(true);
+    const own = ride.lookTarget, eye = rider.group.localToWorld(new THREE.Vector3(0.35, 1.62, 0.75));
+    ride.lookTarget = () => eye;
+    for (let i = 0; i < 40; i++) ride.draw(1 / 60);
+    shoot('boy-portrait', [0.35, 1.62, 0.75], [0, 1.6, -0.03], 22);
+    const ahead = rider.group.localToWorld(new THREE.Vector3(0, 1.6, 8));
+    ride.lookTarget = () => ahead;
+    for (let i = 0; i < 40; i++) ride.draw(1 / 60);
+    shoot('boy-profile', [0.85, 1.6, 0.05], [0, 1.6, 0.0], 22);
+    ride.lookTarget = own;
+}
 // The far body (past HillBoy.FAR.fromM) through a long lens, so its shape can be judged
 if (rider.boy) rider.boy.level(rider.group.localToWorld(new THREE.Vector3(0.8, 2.4, -16)));
 shoot('boy-far', [0.8, 2.4, -16], [0, 1.0, 0], 9);
