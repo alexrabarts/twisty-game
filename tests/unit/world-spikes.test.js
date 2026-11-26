@@ -300,19 +300,19 @@ describe('the Tremola slice: no spike of land beside the ride, no open wall end'
 // same road is laid the other way: 7 more overhangs and 2 more flaps on the Tremola down (summit-airolo against
 // tremola), 9 and 1 on leg 2 against the Gotthard leg (.agent/system/world.md, "A stage ridden either way")
 const TOUR_LIMITS = {
-    'gotthard-north': { beside: 44, setback: 201, overhangs: 20, flaps: 2, low: 1 },
-    'airolo-lookout': { beside: 111, setback: 578, overhangs: 14, flaps: 3 },
-    'lookout-andermatt': { beside: 41, setback: 201, overhangs: 29, flaps: 3, low: 1 },
-    'hospental-summit': { beside: 25, setback: 174, overhangs: 10, flaps: 1, low: 1 },
-    'summit-airolo': { beside: 115, setback: 355, overhangs: 13, flaps: 4 }
+    'gotthard-north': { beside: 44, setback: 201, overhangs: 13, flaps: 2, low: 1 },
+    'airolo-lookout': { beside: 111, setback: 578, overhangs: 1, flaps: 3 },
+    'lookout-andermatt': { beside: 41, setback: 201, overhangs: 20, flaps: 3, low: 1 },
+    'hospental-summit': { beside: 25, setback: 174, overhangs: 2, flaps: 1, low: 1 },
+    'summit-airolo': { beside: 115, setback: 355, overhangs: 10, flaps: 4 }
 };
 // worlds/susten's land stretched beside the ride (`beside`, `setback`): exact counts, as a table that may only shrink.
 // A count that rises fails, and a count that falls fails until the table is brought down to it. Every other kind of
 // fault on these legs is held at the Tremola's limits
 const KNOWN = {
     'andermatt-goeschenen': { beside: 100, setback: 130 },
-    'goeschenen-susten': { beside: 152, setback: 1479 },
-    'susten-gadmen': { beside: 337, setback: 1082 }
+    'goeschenen-susten': { beside: 149, setback: 1479 },
+    'susten-gadmen': { beside: 333, setback: 1082 }
 };
 const KINDS = ['beside', 'setback', 'bare', 'ends', 'overhangs', 'flaps', 'proud', 'fins', 'unfaced', 'thin', 'folds', 'low', 'jogs', 'strays', 'piers', 'soffits'];
 
