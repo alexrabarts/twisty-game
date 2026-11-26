@@ -1,5 +1,6 @@
-// WorldTour: the loop the owner chose (2026-11-26), Airolo round five passes and back, in twelve legs. Each leg starts
-// at the stop where the leg before it ended. The one table the game and the tools read: the menu's leg list
+// WorldTour: the tour the owner chose (2026-11-26), from Airolo over five passes to the car park at Hospental, in ten
+// legs (the loop's last two legs, back over the Gotthard to Airolo, were dropped the same day). Each leg starts at the
+// stop where the leg before it ended. The one table the game and the tools read: the menu's leg list
 // (WorldLegs), the data folder of a stage (WorldData.FOLDERS) and the stages the tools derive from a folder's ride
 // (tools/world/tour.mjs).
 //
@@ -24,12 +25,11 @@ const WorldTour = {
         { n: 7, pass: 'Grimsel', name: 'Innertkirchen to Guttannen', km: 8.5 },
         { n: 8, pass: 'Grimsel', name: 'Guttannen up to the Grimsel pass', km: 17.8 },
         { n: 9, pass: 'Furka', name: 'The Grimsel down to Gletsch and up to the Furka pass', km: 16.4 },
-        { n: 10, pass: 'Furka', name: 'The Furka pass down to Hospental', km: 18.2 },
-        { n: 11, id: 'hospental-summit', folder: 'worlds/gotthard/', base: 'gotthard-north', dir: 1, start: 'gotthard-north-via-2', end: 'gotthard-north-via-1', pass: 'Gotthard', name: 'Hospental up to the Gotthard summit', km: 8.9, note: 'The north road from the village up the open valley to the hospice square.', from: 'The car park at Hospental', to: 'The hospice square at the summit' },
-        { n: 12, id: 'summit-airolo', folder: 'world/', base: 'tremola', dir: -1, start: 'tremola-end', end: 'tremola-start', pass: 'Gotthard', name: 'The summit down the Tremola to Airolo', km: 12.5, note: 'Down the old cobbled road and its stacked hairpins to the valley.', from: 'The hospice square at the summit', to: 'The station car park at Airolo' }
+        { n: 10, pass: 'Furka', name: 'The Furka pass down to Hospental', km: 18.2 }
     ].map(Object.freeze)),
 
-    // The legs shipped before the tour: still on the menu, with their boards, after the tour's
+    // The legs shipped before the tour, with their boards: in the menu's list (WorldLegs) but not on its map; a ride of
+    // one starts from the address (?world=<id>, js/ridemode.js), and free roam and debug mode use their worlds
     EARLIER: Object.freeze([
         { id: 'gotthard-north', folder: 'worlds/gotthard/', pass: 'Earlier legs', name: 'Andermatt over the Gotthard to the lookout over Airolo', km: 14.5, note: 'A gentle run-in from the north, past the hospice square, then down the modern pass road through the galleries.', from: 'A hotel car park in Andermatt', to: 'The lookout over Airolo', open: true },
         { id: 'tremola', folder: 'world/', pass: 'Earlier legs', name: 'Tremola, Airolo to the Gotthard summit', km: 13.2, note: 'The old cobbled road and its hairpins.', from: 'Airolo', to: 'The Gotthard summit', open: true }

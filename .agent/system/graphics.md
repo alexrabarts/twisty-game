@@ -128,10 +128,10 @@ Each stop with a held shot has a `raise` cap in its data (tools/world/route.json
 
 | Stop | Cap: land, scenery share | Held shot |
 |---|---|---|
-| Hospice square (Tremola's end, leg 11's) | 800 / 2 000 m, 1 | 400 560, 420 702 |
-| Lookout over Airolo (legs 1 and 10) | 1 200 / 3 000 m, 0.55 | 421 628, 405 426 |
+| Hospice square (Tremola's end) | 800 / 2 000 m, 1 | 400 560, 420 702 |
+| Lookout over Airolo (leg 1's end, the Gotthard leg's) | 1 200 / 3 000 m, 0.55 | 421 628, 405 426 |
 | Andermatt hotel (leg 2's end) | 700 / 2 000 m, 0.85 | 377 168 |
-| Airolo car park (leg 12's end) | 1 000 / 2 500 m, 1 | 423 076 |
+| Airolo car park (leg 1's start, the Tremola's) | 1 000 / 2 500 m, 1 | 423 076 |
 | Göschenen car park (leg 3's end) | 700 / 2 000 m, 0.85 | 420 351 |
 | Susten pass (leg 4's end) | 1 000 / 2 500 m, 1 | 427 565 |
 | Gadmen car park (leg 5's end) | 1 000 / 2 500 m, 1 | 410 512 |

@@ -297,14 +297,12 @@ describe('the Tremola slice: no spike of land beside the ride, no open wall end'
 // is its folder's, so a leg ridden against a stage shares that stage's land. The counts each may have were measured when
 // this test first rode them (2026-11-26), and may only fall. The Gotthard leg had never been read here: its own 20
 // overhangs and 1 low top are its folder's. A leg ridden against its stage reads more than the stage does where the
-// same road is laid the other way: 7 more overhangs and 2 more flaps on the Tremola down (summit-airolo against
-// tremola), 9 and 1 on leg 2 against the Gotthard leg (.agent/system/world.md, "A stage ridden either way")
+// same road is laid the other way: 9 more overhangs and 1 more flap on leg 2 against the Gotthard leg
+// (.agent/system/world.md, "A stage ridden either way")
 const TOUR_LIMITS = {
     'gotthard-north': { beside: 44, setback: 201, overhangs: 13, flaps: 2, low: 1 },
     'airolo-lookout': { beside: 111, setback: 578, overhangs: 1, flaps: 3 },
-    'lookout-andermatt': { beside: 41, setback: 201, overhangs: 20, flaps: 3, low: 1 },
-    'hospental-summit': { beside: 25, setback: 174, overhangs: 2, flaps: 1, low: 1 },
-    'summit-airolo': { beside: 115, setback: 355, overhangs: 10, flaps: 4 }
+    'lookout-andermatt': { beside: 41, setback: 201, overhangs: 20, flaps: 3, low: 1 }
 };
 // worlds/susten's land stretched beside the ride (`beside`, `setback`): exact counts, as a table that may only shrink.
 // A count that rises fails, and a count that falls fails until the table is brought down to it. Every other kind of

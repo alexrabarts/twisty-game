@@ -151,9 +151,7 @@ const DEBT = {
     tremola: { steep: 2, unrestarted: 0, onRoad: 0 },
     'gotthard-north': { steep: 3, unrestarted: 2, onRoad: 5 },
     'airolo-lookout': { steep: 2, unrestarted: 4, onRoad: 2 },
-    'lookout-andermatt': { steep: 7, unrestarted: 1, onRoad: 5 },
-    'hospental-summit': { steep: 3, unrestarted: 2, onRoad: 5 },
-    'summit-airolo': { steep: 7, unrestarted: 3, onRoad: 0 }
+    'lookout-andermatt': { steep: 7, unrestarted: 1, onRoad: 5 }
 };
 
 describe.each(stagesFor())('the %s stage: a side road is open, and the off-route rule brings back a rider who takes one', (stage) => {

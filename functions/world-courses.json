@@ -56,18 +56,6 @@
       26014
     ]
   },
-  "world-hospental-summit-v1": {
-    "kind": "stage",
-    "gates": 3,
-    "metres": 8928,
-    "floorMs": 110145,
-    "gateFloorsMs": [
-      31097,
-      29397,
-      26672,
-      22979
-    ]
-  },
   "world-lookout-andermatt-v1": {
     "kind": "stage",
     "gates": 6,
@@ -81,20 +69,6 @@
       23538,
       28512,
       22636
-    ]
-  },
-  "world-summit-airolo-v1": {
-    "kind": "stage",
-    "gates": 5,
-    "metres": 12490,
-    "floorMs": 201317,
-    "gateFloorsMs": [
-      37125,
-      40871,
-      33437,
-      34164,
-      26502,
-      29218
     ]
   },
   "world-susten-gadmen-v1": {

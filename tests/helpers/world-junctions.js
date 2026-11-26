@@ -60,17 +60,13 @@ export const JUNCTION_LIMITS = { steps: 0, holes: 0, sunk: 0, decks: 0, open: 0,
 //   other junction, land 9 cm over a side road at km 3.3 and the summit's hole of 0.5 m)
 export const JUNCTION_OPEN = Object.freeze({
     'gotthard-north': { steps: 1, open: 1, strips: 1, pits: 1, physics: 2 },
-    // The tour's legs (js/world/tour.js), measured when first ridden (2026-11-26). Leg 11 rides the Gotthard leg's
-    // junctions its way and has the Hospental debt alone. Leg 2 rides them the other way and reads Hospental from two of
+    // The tour's legs (js/world/tour.js), measured when first ridden (2026-11-26). Leg 2 rides the Gotthard leg's
+    // junctions the other way and reads Hospental from two of
     // its junctions (j21, j22: a step, a strip of 2 cm and a pit each), and two faults the Gotthard leg does not show: a
     // step of 0.23 m at j90 by the lookout and a narrow gap of 2.1 m open to the land at j13 (s 12 661). Leg 1, its own
     // import: a strip of laid ground 2 cm over the mouth at j48 (s 6 444) and a narrow gap of 1.5 m at j34 (s 5 103)
     'lookout-andermatt': { steps: 2, open: 1, strips: 2, pits: 2, clefts: 1, physics: 2 },
-    'hospental-summit': { steps: 1, open: 1, strips: 1, pits: 1, physics: 2 },
-    'airolo-lookout': { strips: 1, clefts: 1 },
-    // Leg 12, the Tremola down: a narrow gap of 2.2 m open to the land at j15 (s 10 898, km 2.3 of the Tremola up),
-    // which the Tremola up does not show
-    'summit-airolo': { clefts: 1 }
+    'airolo-lookout': { strips: 1, clefts: 1 }
 });
 export const junctionLimits = stage => ({ ...JUNCTION_LIMITS, physics: 0, ...(JUNCTION_OPEN[stage] || {}) });
 

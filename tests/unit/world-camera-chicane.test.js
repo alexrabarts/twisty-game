@@ -106,15 +106,11 @@ describe('the road a chase camera reads (WorldCamera.roadMean)', () => {
 // The stages swept: the two legs shipped before the tour and the tour's built legs (WORLD_STAGES narrows them)
 const SWEPT = stagesFor();
 // The chicanes each stage has at the least (a leg ridden the other way has its stage's)
-const CHICANES_MIN = { tremola: 15, 'summit-airolo': 15, 'hospental-summit': 2 };
+const CHICANES_MIN = { tremola: 15 };
 // Places where the camera still swings over the limits, by stage: each place's own ceilings (yaw acceleration, yaw
-// rate), which may only fall. Down the Tremola's two stacks of hairpins the boom, behind and above the bike, closes on
-// the walls of the leg above. Read from each face's plane, it came in by half in a frame (10 to 12 rad/s^2 in both
-// views); read from the faces themselves (WorldCamera.wallShare) the near chase keeps under 4.2 rad/s^2, and the far
-// chase's longer boom still meets the walls' tops at the first stack (.agent/system/world.md, "Down a stack of hairpins")
-const KNOWN = {
-    'summit-airolo': { 2324: [11.5, 2.6], 2337.7: [11.7, 2.6], 2404: [7.4, 1.8], 5220: [4.5, 1.6], 5272.7: [4.6, 1.6], 5336: [4.6, 1.6] }
-};
+// rate), which may only fall. None now: the six were down the Tremola's two stacks of hairpins, ridden downhill by the
+// tour's last leg, which was dropped from the tour (2026-11-26; .agent/system/world.md, "Down a stack of hairpins")
+const KNOWN = {};
 const ceilingOf = (id, s) => Object.entries(KNOWN[id] || {}).find(([k]) => Math.abs(Number(k) - s) < 1);
 
 describe('the chase camera through every chicane and hairpin of the shipped stages', () => {

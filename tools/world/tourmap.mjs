@@ -1,4 +1,4 @@
-// The tour map's lines (js/world/tourmap-data.js): the road of each of the tour's twelve legs, simplified, with the
+// The tour map's lines (js/world/tourmap-data.js): the road of each of the tour's legs, simplified, with the
 // height at each point, and the places the map names. The menu draws them over a relief of the far land
 // (js/world/tourmap.js). Safe to run again: the same input gives the same bytes. Run it again when a leg is built or
 // its ends move (js/world/tour.js).
@@ -32,7 +32,6 @@ export const ROUND_M = 5;
 export const PLACES = [
     { key: 'Airolo', name: 'Airolo', kind: 'town', side: 'e' },
     { stop: ['worlds/airolo/', 'airolo-lookout-end'], name: 'Lookout', kind: 'view', side: 'w' },
-    { key: 'Tremola upper', name: 'Tremola', kind: 'road', side: 'w' },
     { key: 'Gotthard', name: 'Gotthard', kind: 'pass', side: 'w' },
     { key: 'Hospental', name: 'Hospental', kind: 'town', side: 'w' },
     { key: 'Andermatt', name: 'Andermatt', kind: 'town', side: 'e' },

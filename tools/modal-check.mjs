@@ -75,14 +75,14 @@ const worldFromMenu = () => {
     if (document.querySelector('.tour-selector-overlay') && getComputedStyle(document.querySelector('.tour-selector-overlay')).display !== 'none') problems.push('the menu is still shown');
     return problems;
 };
-// The map of the tour (js/world/tourmap.js): a line and a pin for each leg of the tour, the earlier legs listed, leg 1
+// The map of the tour (js/world/tourmap.js): a line and a pin for each leg of the tour, none for an earlier leg, leg 1
 // chosen and its pin focused
 const legsListed = () => {
     const problems = [];
     const tour = WorldLegs.LIST.filter(leg => leg.n);
     const lines = document.querySelectorAll('#world-legs .map-leg').length, pins = document.querySelectorAll('#world-legs .map-pin').length;
     if (lines !== tour.length || pins !== tour.length) problems.push(`the map has ${lines} lines and ${pins} pins for ${tour.length} legs`);
-    if (!document.querySelector('#world-legs .map-earlier-btn')) problems.push('the map lists no earlier leg');
+    if (WorldLegs.LIST.some(leg => !leg.n && document.querySelector(`#world-legs [data-leg="${leg.id}"]`))) problems.push('the map shows an earlier leg');
     if (document.activeElement !== document.querySelector('#world-legs .map-pin[data-leg="airolo-lookout"]')) problems.push('leg 1 is not focused');
     return problems;
 };

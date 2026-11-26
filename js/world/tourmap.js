@@ -5,8 +5,8 @@
 // through the dialog stack (js/modals.js). Which legs are open is WorldLegs' rule, never this file's.
 //
 // A row added to the tour table shows on the map with no change here: its line comes from WorldMapData by the leg's
-// number, and a leg with no line is listed beside the map. The legs shipped before the tour ride a tour leg's road the
-// other way (EARLIER) and stand in the list beside the map.
+// number. The map shows the tour's legs alone: the legs shipped before the tour (WorldTour.EARLIER) are not on it
+// (the owner, 2026-11-26: "the map is a bit confusing. don't display the earlier legs").
 const WorldMap = {
     // Where the best time of each leg is kept: { [leg id]: ms }
     STORE: 'twistyWorldBest',
@@ -23,21 +23,12 @@ const WorldMap = {
     PAN_BELOW_PX: 520,
     PAN_ZOOM: 1.7,
 
-    // The legs shipped before the tour: the tour leg whose road they ride, and the way
-    EARLIER: Object.freeze({
-        'gotthard-north': Object.freeze({ n: 2, dir: -1 }),
-        tremola: Object.freeze({ n: 12, dir: -1 })
-    }),
-
     data() { return typeof WorldMapData !== 'undefined' ? WorldMapData : { legs: {}, places: [] }; },
 
-    // The road of a leg of the menu's list in the order it is ridden ([x, z, y] points), or null
+    // The road of a leg of the tour in the order it is ridden ([x, z, y] points), or null
     lineOf(leg, data = WorldMap.data()) {
-        const earlier = WorldMap.EARLIER[leg.id];
-        const n = earlier ? earlier.n : leg.n;
-        const line = n ? data.legs[n] : null;
-        if (!line || line.length < 2) return null;
-        return earlier && earlier.dir < 0 ? line.slice().reverse() : line;
+        const line = leg.n ? data.legs[leg.n] : null;
+        return line && line.length >= 2 ? line : null;
     },
 
     // Metres up and down along a line, counted in steps of CLIMB_STEP_M
@@ -117,23 +108,22 @@ const WorldMap = {
         try { return typeof localStorage !== 'undefined' ? localStorage : null; } catch (error) { return null; }
     },
 
-    // What the map shows of each row of the menu's list (WorldLegs.LIST), in the list's order: its line, climb, best
-    // time, where its pin stands, and its state ('open', 'locked' or 'planned', and `done` once finished)
+    // What the map shows of each leg of the tour (the rows of WorldLegs.LIST with a number), in ride order: its line,
+    // climb, best time, where its pin stands, and its state ('open', 'locked' or 'planned', and `done` once finished)
     entries({ unlockAll = false, storage = WorldMap.storage(), data = WorldMap.data() } = {}) {
         const done = WorldLegs.finished(storage);
-        const entries = WorldLegs.LIST.map((leg) => {
+        const entries = WorldLegs.LIST.filter(leg => leg.n).map((leg) => {
             const line = WorldMap.lineOf(leg, data);
-            const earlier = !!WorldMap.EARLIER[leg.id] || !leg.n;
             const open = WorldLegs.isOpen(leg.id, { unlockAll, storage });
             const state = leg.planned ? 'planned' : open ? 'open' : 'locked';
             return {
                 id: leg.id, n: leg.n || null, pass: leg.pass, name: leg.name, km: leg.km, note: leg.planned ? '' : leg.note,
-                from: leg.from, to: leg.to, state, done: done.includes(leg.id), earlier, line,
+                from: leg.from, to: leg.to, state, done: done.includes(leg.id), line,
                 ...WorldMap.climb(line), best: leg.planned ? null : WorldMap.best(leg.id, storage),
                 after: leg.opensAfter ? (WorldLegs.find(leg.opensAfter) || {}).n || null : null
             };
         });
-        WorldMap.placePins(entries.filter(e => e.line && !e.earlier), data);
+        WorldMap.placePins(entries.filter(e => e.line), data);
         return entries;
     },
 
@@ -171,7 +161,7 @@ const WorldMap = {
     nearest(entries, x, z, reach) {
         let best = null, gap = reach;
         for (const entry of entries) {
-            if (!entry.line || entry.earlier) continue;
+            if (!entry.line) continue;
             const line = entry.line;
             for (let i = 1; i < line.length; i++) {
                 const [ax, az] = line[i - 1], [bx, bz] = line[i];
@@ -471,7 +461,7 @@ const WorldMap = {
         const groups = new Map();
         const buttons = new Map();
         for (const entry of entries) {
-            if (entry.line && !entry.earlier) {
+            if (entry.line) {
                 const group = svgEl('g', { class: 'map-leg', 'data-leg': entry.id, 'data-state': entry.state });
                 const d = WorldMap.path(entry.line);
                 group.append(svgEl('path', { class: 'map-casing', d }), svgEl('path', { class: 'map-line', d }), svgEl('path', { class: 'map-hit', d }));
@@ -524,27 +514,16 @@ const WorldMap = {
         ride.type = 'button';
         ride.dataset.ride = '';
         card.append(kicker, name, note, stats, state);
-        const earlier = entries.filter(e => e.earlier);
-        const list = el('div', 'map-earlier');
-        if (earlier.length) {
-            list.appendChild(el('div', 'map-earlier-label', 'Earlier legs'));
-            for (const entry of earlier) {
-                const button = el('button', 'map-earlier-btn', entry.name);
-                button.type = 'button';
-                button.dataset.leg = entry.id;
-                button.dataset.state = entry.state;
-                if (entry.state !== 'open') button.setAttribute('aria-disabled', 'true');
-                list.appendChild(button);
-                buttons.set(entry.id, button);
-            }
-        }
         const way = el('div', 'map-go');
-        way.append(ride, list);
+        way.append(ride);
         side.append(card, way);
         area.appendChild(side);
         panel.append(head, area);
 
-        let chosen = WorldLegs.suggested({ unlockAll });
+        // The leg offered first: WorldLegs' (the first open leg not finished), when it is on the map; else the first
+        // open leg of the tour (every built leg finished: the list's next is an earlier leg, not drawn here)
+        const offered = WorldLegs.suggested({ unlockAll });
+        let chosen = byId.has(offered) ? offered : (entries.find(e => e.state === 'open') || entries[0]).id;
         let hovered = null;
         const startEnd = (line) => {
             while (ends.firstChild) ends.removeChild(ends.firstChild);
@@ -558,8 +537,8 @@ const WorldMap = {
             const entry = byId.get(id);
             if (!entry) return;
             groups.forEach((group, key) => {
-                group.classList.toggle('chosen', key === chosen || (WorldMap.EARLIER[chosen] && WorldMap.EARLIER[chosen].n === byId.get(key).n));
-                group.classList.toggle('shown', key === id || (WorldMap.EARLIER[id] && WorldMap.EARLIER[id].n === byId.get(key).n));
+                group.classList.toggle('chosen', key === chosen);
+                group.classList.toggle('shown', key === id);
             });
             buttons.forEach((button, key) => {
                 button.classList.toggle('chosen', key === chosen);
@@ -567,7 +546,7 @@ const WorldMap = {
                 button.setAttribute('aria-pressed', key === chosen ? 'true' : 'false');
             });
             startEnd(entry.line);
-            kicker.textContent = entry.n ? `LEG ${entry.n} · ${String(entry.pass).toUpperCase()}` : 'EARLIER LEG';
+            kicker.textContent = `LEG ${entry.n} · ${String(entry.pass).toUpperCase()}`;
             name.textContent = entry.name;
             note.textContent = entry.from ? `From ${entry.from.charAt(0).toLowerCase()}${entry.from.slice(1)} to ${entry.to.charAt(0).toLowerCase()}${entry.to.slice(1)}` : 'Not built yet';
             lengthValue.textContent = `${entry.km.toFixed(1)} km`;
@@ -622,7 +601,7 @@ const WorldMap = {
             if (onBack) onBack();
         });
 
-        // The arrow keys (and WASD) step the legs in the list's order: the tour's, then the earlier legs
+        // The arrow keys (and WASD) step the legs in ride order
         const onKey = (event) => {
             const back1 = ['ArrowLeft', 'ArrowUp', 'KeyA', 'KeyW'].includes(event.code);
             const next1 = ['ArrowRight', 'ArrowDown', 'KeyD', 'KeyS'].includes(event.code);

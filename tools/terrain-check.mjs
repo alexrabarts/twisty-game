@@ -5999,7 +5999,7 @@ WORLD['world-fairness'] = async (page) => page.evaluate(async (fairSource, place
 // from the north, and the lookout leg, whose one hairpin is past its finish line at the stop) is not failed for having
 // none. The Tremola has 31; the probes ask for 20 of them, as before.
 // (the tour's legs, js/world/tour.js: the Tremola down has the Tremola's hairpins, the modern road up its few)
-const HAIRPINS_LEAST = { tremola: 20, all: 20, 'gotthard-north': 0, 'summit-airolo': 20, 'lookout-andermatt': 0, 'hospental-summit': 0, 'airolo-lookout': 0 };
+const HAIRPINS_LEAST = { tremola: 20, all: 20, 'gotthard-north': 0, 'lookout-andermatt': 0, 'airolo-lookout': 0 };
 const hairpinsLeast = () => HAIRPINS_LEAST[option('world') || 'tremola'] ?? 1;
 
 function fairnessChecks(results, failures) {

@@ -34,10 +34,8 @@ import { stagesFor } from '../helpers/world-stages.js';
 // full detail and a face hung from its foot (world-spikes' overhangs), 20 places. What is left is named in
 // .agent/system/world.md, "A far section's slope goes down to the land at every level"
 const KNOWN = {
-    'summit-airolo': 2,
     'gotthard-north': 2,
     'lookout-andermatt': 3,
-    'hospental-summit': 1,
     'airolo-lookout': 1,
     'andermatt-goeschenen': 1,
     'goeschenen-susten': 6,
