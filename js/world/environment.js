@@ -645,12 +645,20 @@ class WorldEnvironment {
         const points = this.route.points;
         const near = (i, flag) => { for (let j = Math.max(0, i - WorldEnvironment.MOUTH_CUT_ROWS); j <= Math.min(points.length - 1, i + WorldEnvironment.MOUTH_CUT_ROWS); j++) if (styles[j][flag]) return true; return false; };
         const p = points[i];
-        if (!p || p.bits & 7) return null;
+        // (a row in a tunnel or a gallery lays no paving, but its verge stops where a side road leaves it as it does
+        // in the open: drawn on, the walkway lay across the floor of a side road's own tube, leg 3's j39 and j61)
+        if (!p || p.bits & 2) return null;
+        if (p.bits & 5 && !near(i, 'mouthL') && !near(i, 'mouthR')) {
+            // (kept as none, so a pass over the rows reads it once: goreRowsKept)
+            this.goreRows.set(i, null);
+            return null;
+        }
         let held = this.goreRows.get(i);
         if (!held) {
             const cos = Math.cos(p.heading), sin = Math.sin(p.heading), half = p.width / 2;
             const edges = { l: [p.x - half * cos, p.y, p.z + half * sin, -cos, sin], r: [p.x + half * cos, p.y, p.z - half * sin, cos, -sin] };
-            held = { l: !!foot.gore(...edges.l), r: !!foot.gore(...edges.r), edges };
+            const tube = (p.bits & 5) !== 0;
+            held = { l: !tube && !!foot.gore(...edges.l), r: !tube && !!foot.gore(...edges.r), edges };
             const cutL = held.l || near(i, 'mouthL') ? yield* this.mouthCutSteps(i, -1) : null;
             const cutR = held.r || near(i, 'mouthR') ? yield* this.mouthCutSteps(i, 1) : null;
             held.cut = { l: cutL, r: cutR };
@@ -680,7 +688,7 @@ class WorldEnvironment {
         const points = this.route.points;
         let read = 0;
         for (let i = Math.max(0, from - 1); i <= Math.min(points.length - 1, to + 1); i++) {
-            if (points[i].bits & 7 || (this.goreRows && this.goreRows.has(i))) continue;
+            if (points[i].bits & 2 || (this.goreRows && this.goreRows.has(i))) continue;
             yield* this.goreRowSteps(i);
             read++;
             yield;
