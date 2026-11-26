@@ -275,10 +275,12 @@ class Game {
     // The menu's world: a leg ridden on this page has left its systems built, so the world starts on a fresh page
     // (the rider and bike are kept in localStorage); a page that has ridden nothing starts it here
     chooseWorld() {
-        // With more than one world leg the menu asks which (WorldLegs: grouped by pass, the next open leg focused)
-        if (typeof WorldLegs !== 'undefined' && WorldLegs.LIST.length > 1 && !this.rideMode.legPicked) {
-            WorldLegs.open(document, {
-                unlockAll: Game.debugEnabled(window.location.search),
+        // With more than one world leg the menu asks which, on the map of the tour (WorldMap: the next open leg chosen)
+        if (typeof WorldMap !== 'undefined' && WorldLegs.LIST.length > 1 && !this.rideMode.legPicked) {
+            const debug = Game.debugEnabled(window.location.search);
+            WorldMap.open(document, {
+                unlockAll: debug,
+                roam: typeof GameModes !== 'undefined' && GameModes.active(this.rideMode, debug) === 'roam',
                 onPick: (id) => {
                     this.rideMode = { ...this.rideMode, world: id, legPicked: true };
                     this.chooseWorld();
@@ -3618,10 +3620,20 @@ class Game {
         const c = CHARACTERS.find(character => character.id === characterId);
         this.scene.remove(old.group);
         old.onModel = null;
-        old.group.traverse(o => {
-            if (o.isMesh && o.material && o.material !== this.showcaseSilhouette && o.material.dispose) o.material.dispose();
-        });
         this.buildShowcaseBike(c, old.position.x);
+        // What the old bike held is freed, but for what a bike still on the stage wears (the silhouette, a part
+        // shared between bikes): a bike stepped through on the menu leaves nothing on the GPU
+        const kept = new Set([this.showcaseSilhouette]);
+        Object.values(this.showcaseBikes).forEach(v => v.group.traverse((o) => {
+            if (o.geometry) kept.add(o.geometry);
+            (Array.isArray(o.material) ? o.material : [o.material]).forEach(m => m && kept.add(m));
+        }));
+        old.group.traverse((o) => {
+            if (o.geometry && !kept.has(o.geometry)) o.geometry.dispose();
+            (Array.isArray(o.material) ? o.material : [o.material]).forEach((m) => {
+                if (m && !kept.has(m) && m.dispose) m.dispose();
+            });
+        });
         if (this.showcaseFocusId === characterId) this.focusRiderShowcase(characterId);
     }
 
@@ -3705,6 +3717,9 @@ class Game {
 
     endMenuShowcase() {
         this.showcaseMode = null;
+        // The ride's camera draws the whole window again
+        if (this.camera) this.camera.clearViewOffset();
+        this.homeView = null;
         if (this.menuShowcaseRAF) {
             cancelAnimationFrame(this.menuShowcaseRAF);
             this.menuShowcaseRAF = null;
@@ -3724,25 +3739,27 @@ class Game {
             const dt = Math.min((now - this.lastShowcaseTime) / 1000, 0.05);
             this.lastShowcaseTime = now;
 
+            // The menu's stage box (HomeStage): the rider is drawn in it, beside the choices; no box in view, no frame
+            const fov = this.showcaseMode === 'rider' ? Game.SHOWCASE_FOV : 55;
+            const view = this.frameHomeStage(dt, fov);
+            if (!view) return;
             if (this.showcaseMode === 'rider' && this.showcaseBikes) {
-                // Slow orbit around the focused bike
-                this.showcaseOrbitAngle += dt * 0.45;
+                // A slow turn round the focused bike, as far off as the box needs for the whole bike
+                this.showcaseOrbitAngle += dt * Game.SHOWCASE_TURN;
                 const focus = this.showcaseBikes[this.showcaseFocusId] || Object.values(this.showcaseBikes)[0];
                 const target = focus.position;
-                const r = 4.2;
+                const r = view.distance;
                 const camX = target.x + Math.cos(this.showcaseOrbitAngle) * r;
                 const camZ = target.z + Math.sin(this.showcaseOrbitAngle) * r;
                 // Ease toward the orbit point so focus changes glide across
-                this.camera.position.lerp(new THREE.Vector3(camX, target.y + 1.6, camZ), this.showcaseSnap ? 1 : Math.min(1, dt * 4));
+                this.camera.position.lerp(new THREE.Vector3(camX, target.y + 0.9 + r * 0.3, camZ), this.showcaseSnap ? 1 : Math.min(1, dt * 4));
                 this.showcaseSnap = false;
                 // The sun and its shadow frustum follow the stage
                 this.directionalLight.position.set(target.x + 30, target.y + 45, target.z + 22);
                 this.directionalLight.target.position.copy(target);
                 this.directionalLight.target.updateMatrixWorld();
                 this.camera.up.set(0, 1, 0);
-                this.camera.fov = 50;
-                this.camera.updateProjectionMatrix();
-                this.camera.lookAt(target.x, target.y + 0.65, target.z);
+                this.camera.lookAt(target.x, target.y + 0.7, target.z);
             } else if (this.showcaseMode === 'track' && this.previewEnv) {
                 // Slow swaying arc over the valley side of a mid-leg viewpoint,
                 // close to the road, looking back at the course and cliff
@@ -3757,8 +3774,6 @@ class Game {
                     c.z + Math.sin(angle) * r
                 );
                 this.camera.up.set(0, 1, 0);
-                this.camera.fov = 55;
-                this.camera.updateProjectionMatrix();
                 this.camera.lookAt(c.x, c.y + 1.5, c.z);
             }
 
@@ -3766,6 +3781,26 @@ class Game {
             this.graphics.render(this.scene, this.camera);
         };
         this.menuShowcaseRAF = requestAnimationFrame(loop);
+    }
+
+    // Frames the showcase in the menu's stage box (HomeStage.frame): the camera's view is shifted so the box's centre
+    // is the view's centre, eased so a layout change (the map opening beside the rider) glides. Returns the view
+    // ({ distance }), or null when the box is too small to draw in
+    frameHomeStage(dt, fov) {
+        const width = window.innerWidth, height = window.innerHeight;
+        const box = typeof HomeStage !== 'undefined' ? HomeStage.box(document) : null;
+        const want = box ? HomeStage.frame(box, { w: width, h: height }, fov) : { offsetX: 0, offsetY: 0, distance: 4.2, shown: true };
+        if (!want.shown) return null;
+        const view = this.homeView;
+        const k = !view || this.showcaseSnap ? 1 : Math.min(1, dt * 6);
+        this.homeView = view ? {
+            offsetX: view.offsetX + (want.offsetX - view.offsetX) * k,
+            offsetY: view.offsetY + (want.offsetY - view.offsetY) * k,
+            distance: view.distance + (want.distance - view.distance) * k
+        } : { ...want };
+        this.camera.fov = fov;
+        this.camera.setViewOffset(width, height, this.homeView.offsetX, this.homeView.offsetY, width, height);
+        return this.homeView;
     }
 
     showLeaderboardError(message) {
@@ -4452,8 +4487,9 @@ class Game {
             this.leaderboardService.recordFinish(Math.round(finishTime))
                 .catch(error => console.error('Failed to record finish:', error));
         }
-        // A finished leg opens the next on the menu (WorldLegs)
+        // A finished leg opens the next on the menu (WorldLegs), and a time that may be trusted is the map's best when it beats it
         if (world && typeof WorldLegs !== 'undefined' && this.environment.stage && !this.freeRoam) WorldLegs.markFinished(this.environment.stage.id);
+        if (world && typeof WorldMap !== 'undefined' && this.environment.stage && !this.freeRoam && this.environment.submitAllowed && !this.rideTuned) WorldMap.recordBest(this.environment.stage.id, finishTime);
         // A leg that ends at a stop rides on into it: the stop scene (js/world/stopscene.js) shows the card in its bar
         if (world && !this.freeRoam && this.startStopScene()) return;
         this.showFinishScreen();
@@ -5534,6 +5570,10 @@ Game.DEBUG_SKIP_BEFORE_M = 40;
 // The colours of the side roads' cars (SideTraffic): the plain colours of country cars
 Game.SIDE_CAR_COLORS = [0xf2f2f0, 0x2b2f36, 0x8a9199, 0x7a1d1d, 0x1f3f6b, 0x3d5a3a];
 Game.ROAM_TEXT = { edge: 'Edge of the map: turn back', key: 'Back on the road', 'edge-back': 'Turned back at the edge of the map' };
+
+// The menu's rider: the camera's field of view (degrees) and how fast it turns round the bike (rad/s)
+Game.SHOWCASE_FOV = 38;
+Game.SHOWCASE_TURN = 0.22;
 
 // What leaving a world ride for the menu asks
 Game.WORLD_MENU_ASK = 'Leave to the menu? Your ride so far is lost.';

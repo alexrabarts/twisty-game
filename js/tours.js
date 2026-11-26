@@ -467,14 +467,15 @@ class TourSystem {
         // legs goes to the leg screen; without one the rider goes on to the leg screen as before
         const world = typeof this.onWorldSelected === 'function';
         const selectorHTML = `
-            <div class="tour-selector-overlay showcase-mode">
-                <div class="tour-selector-panel showcase-panel">
+            <div class="tour-selector-overlay showcase-mode home">
+                <!-- The stage: the game draws the rider (or the classic leg's preview) in this box (js/home.js) -->
+                <div class="home-stage" aria-hidden="true"></div>
+                <div class="tour-selector-panel showcase-panel home-panel">
                     <h1 class="tour-title">TWISTY CHALLENGE TOUR</h1>
 
-                    <!-- Screen 1: rider carousel -->
+                    <!-- Screen 1: the rider, the bike and the outfit, the modes, and the ways on -->
                     <div class="character-select-screen">
                         <div class="rider-select-label showcase-label">CHOOSE YOUR RIDER</div>
-                        <div class="showcase-spacer"></div>
                         <div class="showcase-controls">
                             <button class="carousel-arrow" id="riderPrevBtn">‹</button>
                             <div class="showcase-info" id="riderInfoCard"></div>
@@ -494,7 +495,6 @@ class TourSystem {
                             <button id="backToRidersBtn" class="carousel-back">← RIDER</button>
                             <span>${world ? 'CHOOSE A CLASSIC LEG' : 'CHOOSE YOUR LEG'}</span>
                         </div>
-                        <div class="showcase-spacer"></div>
                         <div class="showcase-controls">
                             <button class="carousel-arrow" id="legPrevBtn">‹</button>
                             <div class="showcase-info" id="legInfoCard"></div>

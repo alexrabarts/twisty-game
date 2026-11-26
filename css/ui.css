@@ -1037,97 +1037,6 @@ body.world-loading-on .hud {
     opacity: 0.8;
 }
 
-.world-legs {
-    position: fixed;
-    inset: 0;
-    z-index: 200;
-    display: flex;
-    align-items: center;
-    justify-content: center;
-    padding: 16px;
-    box-sizing: border-box;
-    background: rgba(0, 0, 0, 0.55);
-}
-
-.world-legs-box {
-    display: flex;
-    flex-direction: column;
-    gap: 10px;
-    width: min(560px, 100%);
-    max-height: calc(100vh - 32px);
-    padding: 20px 24px;
-    box-sizing: border-box;
-    color: #fff;
-    background: rgba(14, 16, 20, 0.94);
-    font: 14px/1.45 system-ui, sans-serif;
-}
-
-.world-legs-box h2 {
-    margin: 0;
-    font-size: 20px;
-}
-
-.world-legs-list {
-    display: flex;
-    flex-direction: column;
-    gap: 8px;
-    overflow-y: auto;
-}
-
-.world-legs-pass {
-    margin-top: 4px;
-    font-size: 12px;
-    font-weight: 700;
-    letter-spacing: 0.08em;
-    text-transform: uppercase;
-    opacity: 0.7;
-}
-
-.world-legs-row {
-    display: flex;
-    flex-direction: column;
-    align-items: flex-start;
-    gap: 2px;
-    padding: 10px 12px;
-    border: 1px solid rgba(255, 255, 255, 0.14);
-    border-radius: 10px;
-    color: inherit;
-    background: rgba(255, 255, 255, 0.05);
-    font: inherit;
-    text-align: left;
-    cursor: pointer;
-}
-
-.world-legs-row:focus-visible,
-.world-legs-row:hover:not([disabled]) {
-    border-color: var(--c-gold, #f5c542);
-    background: rgba(255, 255, 255, 0.1);
-}
-
-.world-legs-row[disabled] {
-    cursor: default;
-    opacity: 0.5;
-}
-
-.world-legs-name {
-    font-weight: 700;
-}
-
-.world-legs-meta {
-    font-size: 12px;
-    opacity: 0.8;
-}
-
-.world-legs-state {
-    font-size: 12px;
-    font-weight: 600;
-    color: var(--c-gold, #f5c542);
-}
-
-.world-legs-back {
-    align-self: flex-start;
-}
-
 .world-pause {
     position: fixed;
     left: 50%;
@@ -1865,10 +1774,6 @@ body.in-menu .virtual-button-camera {
     min-height: 0;
 }
 
-.showcase-spacer {
-    flex: 1;
-}
-
 .showcase-label {
     display: flex;
     align-items: center;
@@ -2138,6 +2043,709 @@ body.in-menu .virtual-button-camera {
 
 .showcase-secondary:hover {
     border-color: var(--c-gold);
+}
+
+/* The home screen (.agent/system/ui.md, "The home screen"): the stage, where the game draws the chosen rider on the
+   chosen bike (js/home.js frames it), and beside it one panel with the choices. The map of the tour (js/world/tourmap.js)
+   takes the panel's place, wider, and the stage gives it the room. A phone stands the stage over the panel, and its
+   map takes the whole screen */
+:root {
+    --home-panel-w: clamp(380px, 34vw, 500px);
+    --home-map-w: clamp(620px, 64vw, 1100px);
+    --home-pad: var(--sp-5);
+}
+
+.tour-selector-overlay.home {
+    display: grid;
+    grid-template-columns: minmax(0, 1fr) var(--home-panel-w);
+    grid-template-rows: minmax(0, 1fr);
+    align-items: stretch;
+    justify-content: stretch;
+    background: radial-gradient(ellipse at 30% 55%, rgba(4, 8, 16, 0) 40%, rgba(4, 8, 16, 0.45) 100%);
+}
+
+body.home-map-on .tour-selector-overlay.home {
+    grid-template-columns: minmax(0, 1fr) var(--home-map-w);
+}
+
+.home-stage {
+    min-width: 0;
+    min-height: 0;
+}
+
+.tour-selector-panel.showcase-panel.home-panel {
+    width: auto;
+    height: 100%;
+    max-height: 100vh;
+    max-height: 100dvh;
+    overflow-x: hidden;
+    overflow-y: auto;
+    justify-content: flex-start;
+    gap: var(--sp-3);
+    padding: calc(var(--home-pad) + env(safe-area-inset-top, 0px)) calc(var(--home-pad) + env(safe-area-inset-right, 0px)) calc(var(--home-pad) + env(safe-area-inset-bottom, 0px)) var(--home-pad);
+    background: var(--panel-bg-strong);
+    border-left: 1px solid var(--panel-border);
+    box-shadow: -24px 0 64px rgba(0, 0, 0, 0.45), var(--panel-highlight);
+    pointer-events: auto;
+}
+
+/* The map is the choice while it is open: the rider's panel is under it */
+body.home-map-on .home-panel {
+    visibility: hidden;
+}
+
+.home .tour-title {
+    margin: 0;
+    font-size: clamp(26px, 1.4vw + 14px, 40px);
+    text-align: left;
+}
+
+.home .menu-notice {
+    align-self: stretch;
+}
+
+.home .character-select-screen,
+.home .track-select-screen {
+    gap: var(--sp-3);
+}
+
+.home .showcase-label {
+    justify-content: flex-start;
+    margin: 0;
+    text-align: left;
+}
+
+/* The rider's card fills the panel; the arrows that step the riders stand in its top corners, beside the name */
+.home .showcase-controls {
+    position: relative;
+    display: block;
+}
+
+.home .showcase-controls .carousel-arrow {
+    position: absolute;
+    top: var(--sp-3);
+    z-index: 1;
+    width: 40px;
+    height: 40px;
+    font-size: 24px;
+    box-shadow: none;
+}
+
+.home .showcase-controls .carousel-arrow:first-child {
+    left: var(--sp-3);
+}
+
+.home .showcase-controls .carousel-arrow:last-child {
+    right: var(--sp-3);
+}
+
+.home .showcase-info {
+    width: 100%;
+    padding: var(--sp-3) var(--sp-4) var(--sp-4);
+    background: rgba(255, 255, 255, 0.04);
+    box-shadow: var(--panel-highlight);
+}
+
+.home .showcase-name {
+    min-height: 40px;
+    padding: 0 48px;
+    line-height: 40px;
+}
+
+.home .showcase-mode {
+    align-items: stretch;
+    margin-top: 0;
+}
+
+.home .mode-picker {
+    width: 100%;
+}
+
+.home .mode-picker-label {
+    text-align: left;
+}
+
+.home .mode-picker-hint,
+.home .mode-picker-note {
+    text-align: left;
+}
+
+/* RIDE takes the whole row; the other ways on share the row under it */
+.home .showcase-actions {
+    margin-top: auto;
+    padding-top: var(--sp-2);
+    justify-content: stretch;
+}
+
+.home .showcase-actions .showcase-continue {
+    flex: 1 1 100%;
+    min-width: 0;
+}
+
+.home .showcase-actions .showcase-secondary {
+    flex: 1 1 0;
+    min-width: 0;
+    min-height: 44px;
+    justify-content: center;
+    padding: 10px 8px;
+    font-size: var(--fs-xs);
+    white-space: nowrap;
+}
+
+/* The map of the tour */
+.world-legs.home-map {
+    position: fixed;
+    top: 0;
+    right: 0;
+    bottom: 0;
+    width: var(--home-map-w);
+    display: flex;
+    flex-direction: column;
+    gap: var(--sp-3);
+    padding: calc(var(--sp-4) + env(safe-area-inset-top, 0px)) calc(var(--home-pad) + env(safe-area-inset-right, 0px)) calc(var(--sp-4) + env(safe-area-inset-bottom, 0px)) var(--home-pad);
+    box-sizing: border-box;
+    background: var(--panel-bg-strong);
+    border-left: 1px solid var(--panel-border);
+    box-shadow: -24px 0 64px rgba(0, 0, 0, 0.45), var(--panel-highlight);
+    color: var(--c-text);
+    font-family: var(--font-ui);
+}
+
+.map-head {
+    display: flex;
+    align-items: center;
+    gap: var(--sp-3);
+    min-width: 0;
+}
+
+.map-title {
+    margin: 0;
+    font: italic 800 var(--fs-xl) / 1 var(--font-display);
+    letter-spacing: 0.06em;
+    text-transform: uppercase;
+    white-space: nowrap;
+}
+
+.map-count {
+    margin-left: auto;
+    font: 600 var(--fs-xs) / 1.3 var(--font-ui);
+    letter-spacing: 0.08em;
+    text-align: right;
+    text-transform: uppercase;
+    color: var(--c-text-dim);
+}
+
+.map-area {
+    flex: 1;
+    min-height: 0;
+    display: flex;
+    flex-direction: column;
+    gap: var(--sp-3);
+}
+
+.map-box {
+    flex: 1;
+    min-width: 0;
+    min-height: 0;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+}
+
+/* A phone's map pans under a finger (WorldMap.PAN_ZOOM): the box scrolls, the frame sits in it at its full size */
+.map-box.pans {
+    display: block;
+    overflow: auto;
+    overscroll-behavior: contain;
+    border-radius: var(--r-md);
+    -webkit-overflow-scrolling: touch;
+}
+
+.map-frame {
+    position: relative;
+    flex: none;
+    overflow: hidden;
+    border: 1px solid var(--panel-border);
+    border-radius: var(--r-md);
+    background: #1b2330;
+    box-shadow: inset 0 0 40px rgba(0, 0, 0, 0.45);
+}
+
+.map-svg {
+    position: absolute;
+    inset: 0;
+    display: block;
+    width: 100%;
+    height: 100%;
+}
+
+.map-relief {
+    pointer-events: none;
+}
+
+.map-leg path {
+    fill: none;
+    stroke-linecap: round;
+    stroke-linejoin: round;
+    vector-effect: non-scaling-stroke;
+}
+
+.map-casing {
+    stroke: rgba(0, 0, 0, 0.6);
+    stroke-width: 6px;
+}
+
+.map-line {
+    stroke: var(--c-gold);
+    stroke-width: 3px;
+    transition: stroke-width var(--dur-fast) ease;
+}
+
+.map-leg[data-state="locked"] .map-line {
+    stroke: color-mix(in srgb, var(--c-gold) 55%, #6b7380);
+}
+
+.map-leg[data-state="planned"] .map-casing {
+    stroke: rgba(0, 0, 0, 0.4);
+    stroke-width: 4px;
+}
+
+.map-leg[data-state="planned"] .map-line {
+    stroke: rgba(230, 236, 245, 0.7);
+    stroke-width: 2px;
+    stroke-dasharray: 1 6;
+}
+
+.map-leg.shown .map-casing {
+    stroke-width: 10px;
+}
+
+.map-leg.shown .map-line {
+    stroke-width: 5px;
+}
+
+.map-leg.chosen .map-line {
+    stroke: #fff3c2;
+}
+
+.map-leg[data-state="planned"].chosen .map-line,
+.map-leg[data-state="planned"].shown .map-line {
+    stroke: #fff;
+    stroke-width: 3px;
+}
+
+/* The line's hit area: wider than the line, so a pointer finds the road */
+.map-hit {
+    stroke: transparent;
+    stroke-width: 22px;
+    pointer-events: stroke;
+    cursor: pointer;
+}
+
+.map-end {
+    stroke: rgba(0, 0, 0, 0.75);
+    stroke-width: 2px;
+    vector-effect: non-scaling-stroke;
+    pointer-events: none;
+}
+
+.map-start {
+    fill: var(--c-go);
+}
+
+.map-finish {
+    fill: var(--c-text);
+}
+
+.map-places,
+.map-pins {
+    position: absolute;
+    inset: 0;
+    pointer-events: none;
+}
+
+.map-mark {
+    position: absolute;
+    width: 6px;
+    height: 6px;
+    margin: -3px 0 0 -3px;
+    border-radius: 50%;
+    background: var(--c-text);
+    box-shadow: 0 0 0 1.5px rgba(0, 0, 0, 0.7);
+}
+
+.map-mark-pass {
+    width: 0;
+    height: 0;
+    margin: -6px 0 0 -5px;
+    border-radius: 0;
+    border-left: 5px solid transparent;
+    border-right: 5px solid transparent;
+    border-bottom: 8px solid var(--c-text);
+    background: none;
+    box-shadow: none;
+    filter: drop-shadow(0 0 1.5px rgba(0, 0, 0, 0.9));
+}
+
+.map-place {
+    position: absolute;
+    font: 600 var(--fs-xs) / 1 var(--font-ui);
+    letter-spacing: 0.02em;
+    white-space: nowrap;
+    color: var(--c-text);
+    text-shadow: 0 1px 2px rgba(0, 0, 0, 0.95), 0 0 6px rgba(0, 0, 0, 0.8);
+}
+
+.map-place-pass {
+    font-weight: 800;
+    text-transform: uppercase;
+    letter-spacing: 0.08em;
+}
+
+.map-place-road {
+    font-style: italic;
+    color: var(--c-text-dim);
+}
+
+.map-place.side-e { transform: translate(8px, -50%); }
+.map-place.side-w { transform: translate(calc(-100% - 8px), -50%); }
+.map-place.side-n { transform: translate(-50%, calc(-100% - 9px)); }
+.map-place.side-s { transform: translate(-50%, 8px); }
+
+/* A pin for each leg of the tour, with its number: the keys and a thumb choose by it */
+.map-pin {
+    position: absolute;
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    width: 26px;
+    height: 26px;
+    padding: 0;
+    transform: translate(-50%, -50%);
+    border: 2px solid rgba(0, 0, 0, 0.7);
+    border-radius: 50%;
+    background: var(--c-gold);
+    color: #241800;
+    font: 800 13px / 1 var(--font-display);
+    pointer-events: auto;
+    cursor: pointer;
+    transition: transform var(--dur-fast) ease, box-shadow var(--dur-fast) ease;
+}
+
+.map-pin[data-state="locked"] {
+    background: color-mix(in srgb, var(--c-gold) 45%, #39414e);
+    color: var(--c-text);
+}
+
+.map-pin[data-state="planned"] {
+    background: #343c49;
+    border-color: rgba(230, 236, 245, 0.55);
+    color: var(--c-text-dim);
+}
+
+.map-pin.shown,
+.map-pin:hover {
+    transform: translate(-50%, -50%) scale(1.15);
+}
+
+.map-pin.chosen {
+    transform: translate(-50%, -50%) scale(1.15);
+    box-shadow: 0 0 0 2px var(--c-text), 0 0 16px color-mix(in srgb, var(--c-gold) 70%, transparent);
+}
+
+.map-pin:focus-visible,
+.map-earlier-btn:focus-visible,
+.map-back:focus-visible {
+    outline: 3px solid var(--c-accent);
+    outline-offset: 2px;
+}
+
+body.touch .map-pin {
+    width: 32px;
+    height: 32px;
+    font-size: 15px;
+}
+
+/* Under the map: the card of the leg shown, and the way on */
+.map-side {
+    flex: none;
+    display: flex;
+    gap: var(--sp-4);
+    align-items: stretch;
+    min-width: 0;
+}
+
+.map-card {
+    flex: 1;
+    min-width: 0;
+    display: flex;
+    flex-direction: column;
+    gap: 2px;
+}
+
+.map-kicker {
+    font: 700 var(--fs-xs) / 1.3 var(--font-ui);
+    letter-spacing: 0.14em;
+    color: var(--c-gold);
+}
+
+.map-card[data-state="planned"] .map-kicker {
+    color: var(--c-text-dim);
+}
+
+/* The card keeps one height whatever leg it shows (two lines of name, one of note), so the map over it never moves */
+.map-name {
+    display: -webkit-box;
+    -webkit-box-orient: vertical;
+    -webkit-line-clamp: 2;
+    overflow: hidden;
+    min-height: 2.3em;
+    font: 700 var(--fs-lg) / 1.15 var(--font-display);
+    color: var(--c-text);
+}
+
+.map-note {
+    overflow: hidden;
+    white-space: nowrap;
+    text-overflow: ellipsis;
+    font: 500 var(--fs-sm) / 1.35 var(--font-ui);
+    color: var(--c-text-dim);
+}
+
+.map-stats {
+    display: grid;
+    grid-template-columns: repeat(4, minmax(0, 1fr));
+    gap: var(--sp-2);
+    margin: var(--sp-2) 0 0;
+}
+
+.map-stat {
+    min-width: 0;
+    padding: 6px var(--sp-2);
+    border-radius: var(--r-sm);
+    background: rgba(255, 255, 255, 0.05);
+}
+
+.map-stat dt {
+    font: 700 10px / 1.2 var(--font-ui);
+    letter-spacing: 0.1em;
+    text-transform: uppercase;
+    color: var(--c-text-faint);
+}
+
+.map-stat dd {
+    margin: 2px 0 0;
+    font: 700 var(--fs-lg) / 1.1 var(--font-display);
+    font-variant-numeric: tabular-nums;
+    white-space: nowrap;
+    color: var(--c-text);
+}
+
+.map-state {
+    margin-top: var(--sp-1);
+    font: 600 var(--fs-xs) / 1.3 var(--font-ui);
+    letter-spacing: 0.04em;
+    color: var(--c-text-dim);
+}
+
+.map-state[data-state="done"] { color: var(--c-go); }
+.map-state[data-state="locked"],
+.map-state[data-state="planned"] { color: var(--c-warn); }
+
+.map-go {
+    flex: 0 0 clamp(200px, 30%, 280px);
+    display: flex;
+    flex-direction: column;
+    gap: var(--sp-2);
+    min-width: 0;
+}
+
+.map-go .map-ride {
+    min-width: 0;
+    width: 100%;
+    padding-left: var(--sp-3);
+    padding-right: var(--sp-3);
+}
+
+.map-earlier {
+    display: flex;
+    flex-direction: column;
+    gap: var(--sp-1);
+}
+
+.map-earlier-label {
+    font: 700 var(--fs-xs) / 1.3 var(--font-ui);
+    letter-spacing: 0.1em;
+    text-transform: uppercase;
+    color: var(--c-text-faint);
+}
+
+.map-earlier-btn {
+    min-height: 36px;
+    padding: 6px 10px;
+    border: 1px solid var(--panel-border);
+    border-radius: var(--r-sm);
+    background: rgba(255, 255, 255, 0.04);
+    color: var(--c-text-dim);
+    font: 600 var(--fs-xs) / 1.25 var(--font-ui);
+    text-align: left;
+    cursor: pointer;
+}
+
+.map-earlier-btn:hover,
+.map-earlier-btn.shown {
+    border-color: rgba(255, 255, 255, 0.3);
+    color: var(--c-text);
+}
+
+.map-earlier-btn.chosen {
+    border-color: var(--c-gold);
+    color: var(--c-text);
+    box-shadow: inset 0 0 0 1px var(--c-gold);
+}
+
+body.touch .map-earlier-btn {
+    min-height: 44px;
+}
+
+/* A short window: the title and the panel's spacing give the rows their room */
+@media (min-width: 700px) and (max-height: 760px) {
+    :root {
+        --home-pad: var(--sp-4);
+    }
+
+    .home .tour-title {
+        font-size: 26px;
+    }
+
+    .home .character-select-screen,
+    .home .track-select-screen {
+        gap: var(--sp-2);
+    }
+
+    .home .rider-select-label {
+        display: none;
+    }
+
+    .home .showcase-stats {
+        grid-template-columns: auto auto auto auto;
+        column-gap: var(--sp-2);
+        row-gap: 5px;
+    }
+
+    .home .mode-picker-hint {
+        min-height: 1.35em;
+    }
+
+    .home .showcase-continue {
+        min-height: 46px;
+    }
+
+    .map-note {
+        display: none;
+    }
+
+    body:not(.touch) .map-pin {
+        width: 22px;
+        height: 22px;
+        font-size: 12px;
+    }
+}
+
+/* A phone held upright, or any narrow window: the stage over the panel, a smaller rider; the map takes the screen */
+@media (max-width: 699px) {
+    :root {
+        --home-pad: var(--sp-4);
+    }
+
+    .tour-selector-overlay.home,
+    body.home-map-on .tour-selector-overlay.home {
+        grid-template-columns: minmax(0, 1fr);
+        grid-template-rows: clamp(170px, 30vh, 320px) minmax(0, 1fr);
+    }
+
+    /* No rider behind the map: nothing would show it, and the frame is not drawn (HomeStage.MIN_PX) */
+    body.home-map-on .home-stage {
+        display: none;
+    }
+
+    .tour-selector-panel.showcase-panel.home-panel {
+        border-left: 0;
+        border-top: 1px solid var(--panel-border);
+        border-radius: var(--r-lg) var(--r-lg) 0 0;
+        padding-top: var(--sp-4);
+        /* (a control scrolled into view stops above the buttons that stay at the foot) */
+        scroll-padding-bottom: 150px;
+        box-shadow: 0 -18px 48px rgba(0, 0, 0, 0.45), var(--panel-highlight);
+    }
+
+    .home .tour-title {
+        font-size: 26px;
+        text-align: center;
+    }
+
+    .home .rider-select-label {
+        display: none;
+    }
+
+    /* The panel scrolls; RIDE and the ways on stay at its foot */
+    .home .character-select-screen .showcase-actions,
+    .home .track-select-screen .showcase-actions {
+        position: sticky;
+        bottom: calc(-1 * (var(--home-pad) + env(safe-area-inset-bottom, 0px)));
+        z-index: 1;
+        margin: auto calc(-1 * var(--home-pad)) calc(-1 * (var(--home-pad) + env(safe-area-inset-bottom, 0px)));
+        padding: var(--sp-3) var(--home-pad) calc(var(--sp-3) + env(safe-area-inset-bottom, 0px));
+        background: var(--panel-bg-strong);
+        border-top: 1px solid var(--panel-border);
+    }
+
+    .home .showcase-label {
+        justify-content: center;
+    }
+
+    .world-legs.home-map {
+        width: 100%;
+        padding-left: calc(var(--sp-4) + env(safe-area-inset-left, 0px));
+        padding-right: calc(var(--sp-4) + env(safe-area-inset-right, 0px));
+        border-left: 0;
+    }
+
+    .map-title {
+        font-size: var(--fs-lg);
+    }
+
+    .map-count {
+        display: none;
+    }
+
+    .map-side {
+        flex-direction: column;
+        gap: var(--sp-3);
+    }
+
+    .map-stats {
+        grid-template-columns: repeat(2, minmax(0, 1fr));
+    }
+
+    .map-go {
+        flex: none;
+    }
+
+    .map-earlier {
+        flex-direction: row;
+        flex-wrap: wrap;
+        align-items: center;
+    }
+
+    .map-earlier-label {
+        flex: 1 1 100%;
+    }
+
+    .map-earlier-btn {
+        flex: 1 1 0;
+        min-width: 0;
+    }
 }
 
 /* Leaderboard name entry */

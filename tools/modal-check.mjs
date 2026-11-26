@@ -63,7 +63,7 @@ const pause = { eval: () => game.pauseRace(), touch: '.virtual-button-pause', to
 const finish = { eval: () => { game.finishRun(); if (game.stopScene) game.skipStopScene(); }, top: 'finishBanner' };
 // A world ride is up: the world's environment, the bike and the run
 const WORLD_READY = 'window.game && window.game.environment && window.game.environment.isWorld && window.game.vehicle && window.game.worldRun';
-// The world chosen on the menu is the leg picked on the leg list (js/world/legs.js): leg 1 of the tour, Airolo up the pass road to the lookout (js/world/tour.js)
+// The world chosen on the menu is the leg picked on the map (js/world/tourmap.js): leg 1 of the tour, Airolo up the pass road to the lookout (js/world/tour.js)
 const worldFromMenu = () => {
     const problems = [];
     const env = game.environment;
@@ -75,13 +75,15 @@ const worldFromMenu = () => {
     if (document.querySelector('.tour-selector-overlay') && getComputedStyle(document.querySelector('.tour-selector-overlay')).display !== 'none') problems.push('the menu is still shown');
     return problems;
 };
-// The leg list: grouped by pass, leg 1 focused, each open leg a button
+// The map of the tour (js/world/tourmap.js): a line and a pin for each leg of the tour, the earlier legs listed, leg 1
+// chosen and its pin focused
 const legsListed = () => {
     const problems = [];
-    const rows = [...document.querySelectorAll('#world-legs .world-legs-row')];
-    if (!rows.length) problems.push('the leg list has no legs');
-    if (!document.querySelector('#world-legs .world-legs-pass')) problems.push('the leg list names no pass');
-    if (document.activeElement !== document.querySelector('#world-legs [data-leg="airolo-lookout"]')) problems.push('leg 1 is not focused');
+    const tour = WorldLegs.LIST.filter(leg => leg.n);
+    const lines = document.querySelectorAll('#world-legs .map-leg').length, pins = document.querySelectorAll('#world-legs .map-pin').length;
+    if (lines !== tour.length || pins !== tour.length) problems.push(`the map has ${lines} lines and ${pins} pins for ${tour.length} legs`);
+    if (!document.querySelector('#world-legs .map-earlier-btn')) problems.push('the map lists no earlier leg');
+    if (document.activeElement !== document.querySelector('#world-legs .map-pin[data-leg="airolo-lookout"]')) problems.push('leg 1 is not focused');
     return problems;
 };
 const creditShown = () => {
@@ -336,7 +338,8 @@ const SEQUENCES = [
         { click: '#riderNextBtn', top: MENU },
         { click: '#riderPrevBtn', top: MENU },
         { click: '#riderContinueBtn', top: 'world-legs', check: legsListed },
-        { click: '#world-legs [data-leg="airolo-lookout"]', watch: "/swisstopo/.test((document.querySelector('.world-loading-credit') || {}).textContent || '')", ready: WORLD_READY, top: 'none', check: worldFromMenu },
+        // (leg 1 is chosen: a click on its pin rides it)
+        { click: '#world-legs .map-pin[data-leg="airolo-lookout"]', watch: "/swisstopo/.test((document.querySelector('.world-loading-credit') || {}).textContent || '')", ready: WORLD_READY, top: 'none', check: worldFromMenu },
         pause,
         { click: '#world-pause [data-credits]', top: 'world-credits', check: creditShown },
         { click: '#world-credits button', top: 'world-pause' },
@@ -349,15 +352,18 @@ const SEQUENCES = [
         { click: '#riderClassicBtn', top: MENU, check: legScreen },
         { click: '#legStartBtn', ready: 'window.game && window.game.environment && !window.game.environment.isWorld && window.game.vehicle', top: 'none', check: legRide }
     ] },
-    // A host that does not serve the world: the legs take over with the note, and a leg rides
-    // The leg list goes back to the rider screen with Back (Escape)
+    // The map goes back to the rider screen with Back (Escape); a leg not built stays on the map
     { name: 'menu-world-legs-back', page: 'menu', steps: [
         { click: '#riderContinueBtn', top: 'world-legs', check: legsListed },
-        { click: '#world-legs .world-legs-back', top: MENU }
+        { click: '#world-legs .map-pin[data-state="planned"]', top: 'world-legs', check: () => (document.querySelector('#world-legs .map-ride').disabled ? [] : ['RIDE is on for a leg not built']) },
+        { key: 'Escape', tap: '#world-legs .map-back', top: MENU },
+        { click: '#riderContinueBtn', top: 'world-legs', check: legsListed },
+        { click: '#world-legs .map-back', top: MENU }
     ] },
+    // A host that does not serve the world: the legs take over with the note, and a leg rides (RIDE on the map)
     { name: 'menu-world-fallback', page: 'menu', noWorld: true, steps: [
         { click: '#riderContinueBtn', top: 'world-legs' },
-        { click: '#world-legs [data-leg="airolo-lookout"]', ready: "document.querySelector('.tour-selector-overlay .menu-notice')", top: MENU, check: fallbackShown },
+        { click: '#world-legs .map-ride', ready: "document.querySelector('.tour-selector-overlay .menu-notice')", top: MENU, check: fallbackShown },
         { click: '#legStartBtn', ready: 'window.game && window.game.environment && !window.game.environment.isWorld && window.game.vehicle', top: 'none', check: legRide }
     ] },
 
