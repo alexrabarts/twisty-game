@@ -7,7 +7,7 @@ Scripts that build the modelled scenery, the trees, the traffic cars, the four b
 From the repository root:
 
 ```sh
-for script in gorge_rocks gorge_portal rockface_detail village_houses village_props bike_sport bike_adventure bike_scooter bike_dirt rider car_hatchback car_van tree_conifer tree_broadleaf tree_bush; do
+for script in gorge_rocks gorge_portal rockface_detail village_houses village_props bridge_stone bike_sport bike_adventure bike_scooter bike_dirt rider car_hatchback car_van tree_conifer tree_broadleaf tree_bush; do
   blender --background --factory-startup --python tools/blender/$script.py
 done
 ```
@@ -19,6 +19,8 @@ Each script is deterministic (fixed seeds, fixed sources) and writes its output 
 | `gorge_rocks.py` | `rocks.glb` | Five rock variants, 700 to 900 triangles each, centred, mean radius 1. Each is baked from a high-poly sculpt (cut faces, voxel remesh, layered displacement, a scanned rock surface) into one shared 1024 px atlas: base colour, normal, and AO with roughness in one 512 px map. |
 | `gorge_portal.py` | `portal.glb` | `portal_arch` (masonry headwall, voussoirs, keystone, string course, cornice, parapet, piers) and `portal_wing` (one wing wall, the game mirrors it). Modelled for an opening 11 m wide each way and 7.5 m high. |
 | `rockface_detail.py` | `rockface/detail.webp`, `rockface/normal.webp` | The rock face's detail: the grain of a rock surface and a few broken fractures, made from seeded noise (no photo, no download), as a grey map and a normal map that tile, 1024 px, 152 KB together. It holds no beds: the shader draws those. |
+
+| `bridge_stone.py` | `bridge/stone.glb` | `bridge_span`: Mountain Dawn's stone bridge, one segmental arch over the river gully, masonry spandrels, a ring of voussoirs, a string course, parapets and coping, and the arch barrel. Made with the village kit (every stone a face of its own shade, occlusion baked into the vertex colours, no photo texture). Modelled 60 m long for a 20 m road; `dressBridge` in `js/sceneassets.js` stretches it to the span. 6202 triangles, 187 KB. |
 
 `common.py` holds the shared steps: scene reset, Poly Haven fetch, WebP save, glTF export.
 

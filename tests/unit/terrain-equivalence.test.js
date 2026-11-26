@@ -6,7 +6,8 @@
 // still bound, the exact left wall (D6). Mountain-dawn was bound too until it
 // became the open valley (trackVersion 2); its bindings moved to high-pass.
 import { readFileSync } from 'fs';
-import { D6_CLASSES, LATERALS, buildEnvironment, captureLeg, fingerprints, groundedRecords, loadGame, rayDown, ribbonMeshes } from '../helpers/load-game.js';
+import { D6_CLASSES, LATERALS, buildEnvironment, captureLeg, fingerprints, groundedRecords, loadSharedGame as loadGame, rayDown, ribbonMeshes } from '../helpers/load-game.js';
+// Leg 1 is a converted leg now: these tests are of the shared course, with leg 1 put back on it (Course.release)
 
 const golden = JSON.parse(readFileSync(new URL('../golden/terrain-baseline.json', import.meta.url), 'utf8'));
 const LEG_IDS = ['mountain-dawn', 'valley-run', 'coastal-descent', 'foggy-gorge', 'high-pass', 'storm-valley', 'night-ride', 'winter-pass'];

@@ -172,6 +172,27 @@ describe('Hud', () => {
         expect(document.getElementById('hudGateCount').textContent).toBe('2/5');
     });
 
+    test('many gates: a long leg has up to 20 pips, which shrink; 5 gates keep the full size', () => {
+        const pips = document.getElementById('hudGatePips');
+        hud.setGates(7, 20);
+        expect(document.querySelectorAll('#hudGatePips i')).toHaveLength(20);
+        expect(document.querySelectorAll('#hudGatePips i.on')).toHaveLength(7);
+        expect(document.getElementById('hudGateCount').textContent).toBe('7/20');
+        expect('many' in pips.dataset).toBe(true);
+        hud.setGates(0, HudRules.MANY_GATES);
+        expect('many' in pips.dataset).toBe(false);
+        hud.setGates(0, 14);
+        expect('many' in pips.dataset).toBe(true);
+        hud.setGates(0, 5);
+        expect('many' in pips.dataset).toBe(false);
+    });
+
+    test('the many-gates pips are smaller and closer in css/ui.css', () => {
+        const css = readFileSync(new URL('../../css/ui.css', import.meta.url), 'utf8');
+        expect(css).toMatch(/#hudGatePips\[data-many\] \{\s*gap: 2px;/);
+        expect(css).toMatch(/#hudGatePips\[data-many\] i \{\s*width: calc\(var\(--fs-meta\) \* 0\.4\);/);
+    });
+
     test('call-outs stack without overlap, cap at CALLOUT_LIMIT, merge repeats and leave on time', () => {
         const box = document.getElementById('callouts');
         hud.callout('Cone hit +50', 'warn', 1000);

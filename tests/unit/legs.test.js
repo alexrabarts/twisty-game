@@ -1,6 +1,7 @@
 // The per-leg table (Terrain.LEGS) and the world build that reads it, on the
 // real modules and real three r150.
-import { buildEnvironment, loadGame } from '../helpers/load-game.js';
+import { buildEnvironment, loadSharedGame as loadGame } from '../helpers/load-game.js';
+// Leg 1 is a converted leg now: these tests are of the shared course, with leg 1 put back on it (Course.release)
 
 const ROAD_WIDTHS = [20, 20, 20, 20, 16, 16, 16, 16];
 // Rockfall rate: the gorge (0.5), the mirrored cliff and the hairpin leg (0.25) are the

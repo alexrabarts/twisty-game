@@ -15,28 +15,44 @@ All rendering goes through `Graphics` in `js/graphics.js`. `main.js` never calls
 2. Bloom: threshold, five-level blur chain, additive upsample. The threshold is 1.0, or the preset's `threshold` (night: 1.8, with bloom 0.6), so at night only lamp heads, the moon and the middle of a lit window of the modelled village bloom (the window by little: its glass is 1.9 to 2.3); headlit paint does not.
 3. Composite: radial speed blur, height fog, light shafts, bloom, ACES tone map, saturation, contrast, tint, vignette, sRGB encode, dither.
 
-`renderer.toneMappingExposure` is still the exposure control. `setTimeOfDay` sets it.
+`renderer.toneMappingExposure` is still the exposure control. `Game.writeTime` sets it.
 
 If the browser has no WebGL2 float render targets, `postEnabled` is false. The renderer then tone-maps to the canvas, and the CSS speed overlay in `main.js` is used.
 
 ## Depth atmosphere
 
-`Graphics.setAtmosphere(atmosphere, render, baseY)` takes a leg's `config.atmosphere` and `config.render` from `Terrain.LEGS`, and `baseY`, the leg's lowest road height (`Game.lowestRoadHeight`). Pass `null` to reset. `main.js` calls it when a ride starts, when a track preview starts and when the rider showcase starts. Call it before `setWeather`: `applySky` reads `ringStrength`.
+`Graphics.setAtmosphere(atmosphere, render, baseY)` takes `{ heightFog, shafts }`, `{ ring }` and `baseY`, the lowest road height of the part. Pass `null` to reset. Only `Game.writeAtmosphere` calls it, from a look sampled off the atmosphere track (see "Atmosphere along the road"). It runs before the sky is written: `writeSky` reads `ringStrength`.
 
 - **Depth texture.** `sceneTarget` has a `DepthTexture` (`DepthFormat`, `UnsignedIntType`) set in the constructor options. Rules: set it before the first render into the target and never attach it later; never use `DepthStencilFormat`; sample depth only in a pass that draws to another target (the composite pass draws to the canvas); `setSize` resizes it with the target.
 - **Guard.** `atmosphereSupported` is false when `postEnabled` is false or the renderer has `WEBGL_multisampled_render_to_texture` (three r150 takes a different branch there). Then there is no depth texture, no `shaftTarget`, and height fog and shafts stay off. Material `FogExp2` still applies, so the game looks as before.
 - **Height fog.** It lives in the composite pass: no new full-resolution pass or target. The shader rebuilds the world position from `tDepth`, `uProjInv` and `uCamWorld`, integrates a density that falls off exponentially with height along the view ray, and mixes toward `uFogColor` (`scene.fog.color`). It runs after the speed blur and before bloom and the tone map. Sky pixels (depth 1) reach `uFogReach`, which makes the mist band at the horizon. `heightFog` is `{ density, falloff }`: density per metre at `baseY`, falloff per metre of climb.
 - **Light shafts.** `shaftTarget` is a half-float target at a quarter of the scene target's size. One pass marches 24 steps toward the sun's screen position and gathers bright sky pixels. The composite adds the result. `shaftsActive` is false when `atmosphere.shafts` is 0, the sun is behind the camera or the time of day uses the moon. Shafts are on for legs 1, 2, 4 and 5.
-- **Far ring.** `Graphics.ringStrength` (default 1, `render.ring`) multiplies `uMountains` in `applySky` and in the thick-fog branch of `update`. The environment bake keeps it at 0. Only coastal-descent differs (0.35). A leg with `render.ringRise: [from, to]` (mountain-dawn: 0.15 to 1) starts the ring at `from`; each frame `main.js` calls `Graphics.setRingProgress()` with the bike's progress along the leg, and the ring rises to `to` at the finish.
+- **Far ring.** `Graphics.ringStrength` (default 1, `render.ring`) multiplies `uMountains` in `applySky` and in the thick-fog branch of `update`. The environment bake keeps it at 0. Only coastal-descent differs (0.35). A look with `ring: [from, to]` (mountain-dawn, from `render.ringRise`: 0.15 to 1) ramps the ring over its part; each frame `Game.applyAtmosphere` calls `Graphics.setRingStrength()` with the value for the bike's progress, and the ring reaches `to` at the end of the part.
 - **Cull distance and shadows.** `main.js` clamps the cull distance to `render.cullMax` (600, or 800 on mountain-dawn, coastal-descent and winter-pass). `applyShadowBox` sets the sun's shadow box to `render.shadowSpan` wide (120, or 200 on foggy-gorge, with the shadow far plane at least 300 and twice the span). The shadow map stays 2048.
-- **Weather.** `WeatherSystem.baseY` is the same `baseY`; `updateFogDensity` thins the fog above it.
+- **Weather.** `WeatherSystem.baseY` is the same `baseY`; `updateFogDensity` thins the fog above it. `WeatherSystem.writeFogDensity` is the only writer of `scene.fog.density` on a ride: the fog of the part, replaced by the weather's fog by its share.
+
+## Atmosphere along the road
+
+`js/atmosphere.js` holds `AtmosphereTrack`: plain data, no scene access. A leg is a list of parts, and each part has one look: `{ timeOfDay, weather, weatherIntensity, fogDensity, heightFog, shafts, ring, baseY, shadowSpan }`. A leg with `config.parts` is a track of those parts. Every other leg is a track of one part, made by `AtmosphereTrack.forLeg`, so all legs use one code path.
+
+- **Blend zone.** `sample(segment)` gives `{ a, b, t, u }`. The zone is 15 segments (300 m) wide, centred on each part boundary, with a smoothstep weight. Outside it `t` is exactly 0 and `a === b`. Two zones may not touch.
+- **Resolve and write.** `Graphics.resolveSky` and `Game.resolveTime` return plain values, the same object for the same arguments. `blendSky` and `blendTime` mix two of them. `writeSky` and `writeTime` copy them into existing objects, so a frame allocates no `THREE.Color`. What has no middle (the moon, the names) switches at `t = 0.5`.
+- **Two entry points.** `Game.snapAtmosphere(track, segment, { environment, weatherSystem })` writes everything at once, in this order: ring and height fog, light, sky (it marks the environment for a bake), then the road surface and the tint of the ground (`environment`), then the particles, base height and fog density (`weatherSystem`). A leg start, a checkpoint restart, the menu preview and the rider showcase use it. With `weatherSystem: null` it writes no particles and no fog density. `Game.applyAtmosphere` runs once per rendered frame: on a part it writes only the far ring; in a zone it blends light, sky, road surface and weather; the first frame after a zone writes the part's own values.
+- **Fixed leg-start order.** `applyLandscapeConfig` (it writes the part's fog density), `applyShadowBox`, build the track, `new WeatherSystem`, `prepare`, `snapAtmosphere`, then cones, rockfalls and traffic. The light moved after the environment build: no builder reads the time of day, the fog colour or `Graphics` state while it builds. If one does, the `atmostate` ride arm fails.
+- **The preview and the showcase.** The menu preview snaps to the first settled segment of the part that holds the orbit pivot, with no weather system: its fog density is the one `applyLandscapeConfig` wrote. The rider showcase snaps a one-look track (golden, clear, no height fog, ring 1), then sets its own fog colour and density `0.0018`.
+- **`Game.setTimeOfDay(key)`** changes the light and sky time only, in clear air, and sets `atmosphereHold`. While the hold is set `applyAtmosphere` writes the ring only. The next snap clears it. Only `tools/village-shots.mjs` calls it.
+- **Rebake.** `Graphics.requestRebake` asks for a bake of the environment map only if 30 frames passed since the last one and the blend moved 0.125 since it. Outside a zone nothing bakes. `graphics.stats = { envBakes, lastBakeFrame }` counts them.
+- **Weather.** `WeatherSystem.prepare(types)` makes the particle systems once per leg. `setMix({ rain, snow, fog, intensity, fogDensity, baseY })` changes only the draw range, the fog colour and density, and the grip. It allocates nothing. `weatherType` is the weather with the largest share. Grip is blended by share; a share of 1 gives today's multipliers exactly. `Game.initializeGameWithLeg` disposes the old weather system before it makes a new one.
+- **Random source.** `WeatherSystem` takes every random number from `this.random`. A one-part track passes `Math.random`, so cones, rockfalls and traffic read the same stream as before. A track of several parts passes `AtmosphereTrack.seededRandom(boardId)`.
+- **Fog thickness.** `Graphics.update` blends the thick-fog sky by `fogShare` (the share of fog in the sky), so a fog-to-clear boundary does not jump. `Game.updateCullDistance` reads the fog density again in every zone frame.
+- **Looks left out.** A part that leaves out a field takes it from the part before it. The weather defaults to clear, and an intensity left out is 1.0. A tunnel or gallery part can therefore name only its fog.
 
 ## Sky
 
 - `SKY_PRESETS` has one look for each time of day. `SKY_WEATHER` overrides it for rain, snow and fog.
 - The horizon colour is always `scene.fog.color`. Distant geometry fades into the sky because of this. Change the fog colour, not the sky, to change the horizon.
 - Gradient and clouds are baked into a 1024 x 512 panorama every 8 frames. The dome samples it and adds the sun or moon disc, stars and two far mountain ranges.
-- The same sky is baked with PMREM into `scene.environment` when the time of day or weather changes.
+- The same sky is baked with PMREM into `scene.environment` when a snap writes the sky, and, in a blend zone, at the pace of `requestRebake`.
 - The sky mesh has `userData.isSky`. `setupPerformanceCulling` must skip it, and any mesh with `userData.skipCulling` (the instanced forest, the headlight beam).
 
 ## Rock face

@@ -24,6 +24,15 @@ class Traffic {
     }
     
     initializeCars() {
+        // A converted leg sends its oncoming cars into the drawn window as the
+        // rider goes (followWindow): one each `oncomingEvery` segments
+        if (this.environment.sections) {
+            const course = this.environment.course();
+            this.oncomingEvery = (course.traffic && course.traffic.oncomingEvery) || 100;
+            this.nextOncoming = this.oncomingEvery;
+            this.oncomingEncounters = 0;
+            return;
+        }
         // Oncoming traffic lives on the active leg: only that part of the
         // course has geometry
         const range = legSegmentRange(this.environment);
@@ -205,7 +214,41 @@ class Traffic {
         return colors[Math.floor(Math.random() * colors.length)];
     }
     
-    update(deltaTime, playerPosition) {
+    // A converted leg: a car spawns at the far end of the drawn window each
+    // `oncomingEvery` segments the rider covers (at most 2 alive; never in a
+    // set piece), and goes when it leaves the window; a rider of the crew
+    // outside the drawn sections is hidden (it still rides along the path)
+    followWindow(segment) {
+        const env = this.environment;
+        const k = env.sectionAt(segment);
+        const from = Math.max(0, (k - 1) * 25);
+        const to = Math.min((k + 3) * 25, env.endSegment + 16);
+        if (segment >= this.nextOncoming) {
+            this.nextOncoming += this.oncomingEvery;
+            let at = to - 1;
+            while (at > segment + 10 && env.inSetPiece(at, 2)) at--;
+            if (this.cars.length < 2 && at > segment + 10) {
+                this.cars.push(new Car(this.scene, env, {
+                    direction: -1,
+                    speed: 15 + Math.random() * 10,
+                    startSegment: at,
+                    lane: 'right',
+                    color: this.getRandomCarColor()
+                }));
+                this.oncomingEncounters++;
+            }
+        }
+        this.cars = this.cars.filter(car => {
+            if (car.currentSegment >= from && car.currentSegment < to) return true;
+            car.remove();
+            return false;
+        });
+        this.motorcycles.forEach(bike => {
+            if (bike.currentSegment < from || bike.currentSegment >= to) bike.bikeGroup.visible = false;
+        });
+    }
+
+    update(deltaTime, playerPosition, playerSegment = null) {
         let collisionResult = null;
         
         // Update all cars
@@ -228,6 +271,9 @@ class Traffic {
             //     collisionResult = { hit: true, vehicle: motorcycle };
             // }
         });
+
+        // After the riders moved: their visibility is the window's
+        if (this.environment.sections && playerSegment !== null) this.followWindow(playerSegment);
         
         if (collisionResult) {
             return collisionResult;
@@ -270,6 +316,23 @@ class Traffic {
         return { hit: false };
     }
     
+
+    // A checkpoint restart: a car within `radius` segments of the rider moves
+    // to the first free slot ahead, by a fixed rule with no random draw, so a
+    // restart never puts a car on the rider and never skips traffic further on
+    clearAround(segment, radius) {
+        if (this.environment.sections) this.nextOncoming = Math.max(this.oncomingEvery, Math.ceil((segment + 1) / this.oncomingEvery) * this.oncomingEvery);
+        const range = legSegmentRange(this.environment);
+        const taken = (slot, except) => this.cars.some(other => other !== except && Math.abs(other.currentSegment - slot) <= 2);
+        this.cars.forEach(car => {
+            if (Math.abs(car.currentSegment - segment) > radius) return;
+            let slot = segment + radius + 1;
+            while (taken(slot, car) && slot < range.end) slot++;
+            car.currentSegment = Math.min(slot, range.end);
+            car.segmentProgress = 0;
+            car.updatePosition();
+        });
+    }
 
     reset() {
         this.cars.forEach(car => car.remove());

@@ -121,5 +121,7 @@ window.twistyDev = {
         v.leanAngle = 0;
         v.leanVelocity = 0;
         v.findNearestRoadSegment();
+        // A converted leg draws the window round the bike's new place at once
+        if (game.environment.sections) game.environment.ensureWindow(segment, { sync: true });
     }
 };

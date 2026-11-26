@@ -350,4 +350,143 @@ describe('LeaderboardService', () => {
             expect(leaderboardService.proofChain).toEqual([]);
         });
     });
+
+    // The server states its protocol and gate count when the session starts;
+    // the client submits only when they match the leg it built
+    describe('handshake and gate count', () => {
+        const TOKEN = '0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef';
+        const LONG = { protocol: 2, gates: 14 };
+
+        function serviceWith(reply) {
+            const calls = { startRun: [], submitRun: [] };
+            const functions = {
+                httpsCallable: name => async payload => {
+                    calls[name].push(payload);
+                    if (name === 'startRun') return { data: { sessionId: 's1', sessionToken: TOKEN, ...reply } };
+                    return { data: { rank: 1, flagged: false, entryId: 'e1' } };
+                }
+            };
+            const service = new LeaderboardService(functions);
+            service.deviceFingerprint = 'f';
+            return { service, calls };
+        }
+
+        async function ride(service, gates, { finish } = {}) {
+            for (let i = 0; i < gates; i++) service.recordCheckpoint(i, (i + 1) * 20000);
+            if (finish) service.recordFinish(finish);
+            await service.recordQueue;
+        }
+
+        let errors;
+        beforeEach(() => {
+            errors = jest.spyOn(console, 'error').mockImplementation(() => {});
+            jest.spyOn(console, 'log').mockImplementation(() => {});
+            jest.spyOn(console, 'warn').mockImplementation(() => {});
+        });
+        afterEach(() => jest.restoreAllMocks());
+
+        test('a converted leg on a server that states no gates: no session, no submit, no error', async () => {
+            const { service, calls } = serviceWith({});
+            const started = await service.startRun('mountain-dawn-v3', LONG);
+            expect(started).toMatchObject({ error: 'not-submitted' });
+            expect(service.unsupported).toBe(true);
+            expect(service.isActive()).toBe(false);
+            await ride(service, 14, { finish: 300000 });
+            const result = await service.submitRun('ALEX');
+            expect(result).toEqual({ success: false, state: 'not-submitted' });
+            expect(calls.submitRun).toHaveLength(0);
+            expect(errors).not.toHaveBeenCalled();
+        });
+
+        test('a server that states another gate count gets no submit', async () => {
+            const { service, calls } = serviceWith({ protocol: 2, gates: 15 });
+            await service.startRun('mountain-dawn-v3', LONG);
+            expect(service.unsupported).toBe(true);
+            expect(service.isActive()).toBe(false);
+            expect((await service.submitRun('ALEX')).state).toBe('not-submitted');
+            expect(calls.submitRun).toHaveLength(0);
+        });
+
+        test('a leg that builds 13 gates against a table of 14 gets no submit', async () => {
+            const { service } = serviceWith({ protocol: 2, gates: 14 });
+            await service.startRun('mountain-dawn-v3', { protocol: 2, gates: 13 });
+            expect(service.unsupported).toBe(true);
+            expect(service.isActive()).toBe(false);
+        });
+
+        test('a long leg on a server that answers protocol 1 with 5 gates gets no submit', async () => {
+            const { service } = serviceWith({ protocol: 1, gates: 5 });
+            await service.startRun('mountain-dawn-v3', LONG);
+            expect(service.unsupported).toBe(true);
+            expect(service.isActive()).toBe(false);
+        });
+
+        test('a leg on the shared course takes a reply with no protocol field and submits 5 and 5', async () => {
+            const { service, calls } = serviceWith({});
+            expect(await service.startRun('valley-run-v2')).toBe(true);
+            expect(service.unsupported).toBe(false);
+            expect(service.isActive()).toBe(true);
+            await ride(service, 5);
+            expect(await service.submitRun('ALEX')).toMatchObject({ success: true, state: 'submitted' });
+            expect(calls.submitRun).toHaveLength(1);
+            expect(calls.submitRun[0].checkpointTimes).toHaveLength(5);
+            expect(calls.submitRun[0].proofChain).toHaveLength(5);
+            expect(calls.submitRun[0].finishTime).toBeUndefined();
+        });
+
+        test('a new server on a leg of the shared course sending extra fields still matches', async () => {
+            const { service } = serviceWith({ protocol: 1, gates: 5 });
+            expect(await service.startRun('valley-run-v2', { protocol: 1, gates: 5 })).toBe(true);
+        });
+
+        test('a converted leg on a server that states the same gates sends 14 times, 14 proofs and the finish', async () => {
+            const { service, calls } = serviceWith({ protocol: 2, gates: 14 });
+            expect(await service.startRun('mountain-dawn-v3', LONG)).toBe(true);
+            await ride(service, 14, { finish: 300000 });
+            expect(await service.submitRun('ALEX')).toMatchObject({ success: true, state: 'submitted' });
+            const [payload] = calls.submitRun;
+            expect(payload.checkpointTimes).toHaveLength(14);
+            expect(payload.proofChain).toHaveLength(14);
+            expect(payload).toMatchObject({ finishTime: 300000, restarts: 0 });
+            expect(payload.finishProof).toMatch(/^[a-f0-9]{64}$/);
+        });
+
+        test('the finish link chains on the last gate proof, even when recorded in the same tick', async () => {
+            const { service } = serviceWith({ protocol: 2, gates: 3 });
+            await service.startRun('mountain-dawn-v3', { protocol: 2, gates: 3 });
+            service.recordCheckpoint(0, 20000);
+            service.recordCheckpoint(1, 40000);
+            service.recordCheckpoint(2, 60000);
+            service.recordRestart();
+            service.recordFinish(75000);
+            await service.recordQueue;
+            expect(service.finishProof).toBe(await service.sign(`mountain-dawn-v3:F:75000:1:${service.proofChain[2]}`));
+        });
+
+        test('a restart keeps the session and is counted', async () => {
+            const { service } = serviceWith({ protocol: 2, gates: 3 });
+            await service.startRun('mountain-dawn-v3', { protocol: 2, gates: 3 });
+            service.recordRestart();
+            service.recordRestart();
+            expect(service.isActive()).toBe(true);
+            expect(service.restarts).toBe(2);
+        });
+
+        test('a converted leg run without a finish is incomplete', async () => {
+            const { service, calls } = serviceWith({ protocol: 2, gates: 3 });
+            await service.startRun('mountain-dawn-v3', { protocol: 2, gates: 3 });
+            await ride(service, 3);
+            expect(await service.submitRun('ALEX')).toEqual({ success: false, error: 'Incomplete run' });
+            expect(calls.submitRun).toHaveLength(0);
+        });
+
+        test('a later start clears the not-submitted state', async () => {
+            const { service } = serviceWith({});
+            await service.startRun('mountain-dawn-v3', LONG);
+            expect(service.unsupported).toBe(true);
+            await service.startRun('valley-run-v2');
+            expect(service.unsupported).toBe(false);
+            expect(service.isActive()).toBe(true);
+        });
+    });
 });

@@ -1,6 +1,7 @@
 // Phase 7: per-leg atmosphere and render settings, and the code that applies them.
 import { jest } from '@jest/globals';
-import { buildEnvironment, canvasStub, gameMethods, loadGame, loadScript, realThree } from '../helpers/load-game.js';
+import { buildEnvironment, canvasStub, gameMethods, loadSharedGame as loadGame, loadScript, realThree } from '../helpers/load-game.js';
+// Leg 1 is a converted leg now: these tests are of the shared course, with leg 1 put back on it (Course.release)
 
 const game = loadGame();
 const THREE = realThree();
@@ -52,11 +53,11 @@ describe('leg atmosphere and render table', () => {
 
 describe('Game helpers', () => {
     test('lowestRoadHeight is the minimum road y over the leg', () => {
-        const { lowestRoadHeight } = gameMethods(['lowestRoadHeight']);
+        const { lowestRoadHeight } = game.AtmosphereTrack;
         const { env, leg } = buildEnvironment(game, 1);
         const heights = env.roadPath.slice(leg.startSegment, leg.endSegment + 1).map(p => p.y || 0);
-        expect(lowestRoadHeight(env, leg)).toBe(Math.min(...heights));
-        expect(lowestRoadHeight({ roadPath: [] }, { startSegment: 0, endSegment: 5 })).toBe(0);
+        expect(lowestRoadHeight(env.roadPath, leg.startSegment, leg.endSegment)).toBe(Math.min(...heights));
+        expect(lowestRoadHeight([], 0, 5)).toBe(0);
     });
 
     test('applyShadowBox sizes the box and the far plane from the span', () => {
@@ -79,6 +80,7 @@ describe('Game helpers', () => {
                 scene: { traverse() {}, fog: { density } },
                 environment: { config: { render: { cullMax } } }
             };
+            Object.assign(self, gameMethods(['updateCullDistance'], self));
             gameMethods(['setupPerformanceCulling'], self, { THREE }).setupPerformanceCulling();
             return self.cullDistance;
         };
@@ -92,7 +94,8 @@ describe('Game helpers', () => {
 describe('Graphics.setAtmosphere', () => {
     const Graphics = loadGraphics();
     const fresh = (atmosphereSupported) => Object.assign(Object.create(Graphics.prototype), {
-        atmosphereSupported, atmosphere: null, ringStrength: 1
+        atmosphereSupported, atmosphere: null, ringStrength: 1,
+        skyBase: { fogBlend: 0, mountains: 1 }, skyUniforms: { uMountains: { value: 1 } }
     });
     const atmosphere = { heightFog: { density: 0.004, falloff: 0.04 }, shafts: 0.35 };
 
@@ -118,24 +121,15 @@ describe('Graphics.setAtmosphere', () => {
         expect(graphics.ringStrength).toBe(0.35);
     });
 
-    test('a rising ring starts faint and follows the ride to full, under the weather', () => {
+    test('the ring strength sits under the weather and moves only when it changes', () => {
         const graphics = fresh(true);
-        graphics.skyUniforms = { uMountains: { value: 1 } };
-        graphics.weatherType = 'clear';
-        graphics.setAtmosphere(atmosphere, { ring: 1, ringRise: [0.15, 1] }, 0);
-        expect(graphics.ringStrength).toBe(0.15);
-        graphics.setRingProgress(0.5);
-        expect(graphics.ringStrength).toBeCloseTo(0.575, 9);
-        expect(graphics.skyUniforms.uMountains.value).toBeCloseTo(0.575, 9);
-        // Past either end of the leg it holds its end value
-        graphics.setRingProgress(1.3);
-        expect(graphics.ringStrength).toBe(1);
-        graphics.setRingProgress(-0.2);
-        expect(graphics.ringStrength).toBe(0.15);
-        // A leg with no rise keeps its ring whatever the progress
-        graphics.setAtmosphere(atmosphere, { ring: 0.35 }, 0);
-        graphics.setRingProgress(0.9);
-        expect(graphics.ringStrength).toBe(0.35);
+        graphics.skyBase.fogBlend = 0.4;
+        graphics.setRingStrength(0.5);
+        expect(graphics.ringStrength).toBe(0.5);
+        expect(graphics.skyUniforms.uMountains.value).toBeCloseTo(0.3, 9);
+        graphics.skyUniforms.uMountains.value = -1;
+        graphics.setRingStrength(0.5);
+        expect(graphics.skyUniforms.uMountains.value).toBe(-1);
     });
 });
 

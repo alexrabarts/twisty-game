@@ -1,4 +1,6 @@
 import { jest } from '@jest/globals';
+import { loadGame, buildEnvironment } from '../helpers/load-game.js';
+import { createHash } from 'node:crypto';
 
 describe('Cones System', () => {
     describe('Cone placement', () => {
@@ -318,5 +320,40 @@ describe('Cones System', () => {
             
             expect(shouldRender).toBe(true);
         });
+    });
+});
+
+// The real class on the real shared course, pinned per leg: a change to how
+// cones are placed (per section, on a long leg) must not move one cone on a
+// leg that is still on the shared course.
+describe('Cones on the shared course (real class)', () => {
+    const PINS = [
+        ['valley-run', 10, 'b11ea656095051ab'],
+        ['coastal-descent', 8, '97a039ae0a44423b'],
+        ['foggy-gorge', 11, 'ba8f5b062306f1d6'],
+        ['high-pass', 9, 'd02eececa719e049'],
+        ['storm-valley', 13, '6b275e94ba7bda48'],
+        ['night-ride', 11, '3882874582f3d56a'],
+        ['winter-pass', 10, 'f85a54a6d06e44a9']
+    ];
+    let game;
+    beforeAll(() => {
+        game = loadGame();
+    });
+
+    test.each(PINS.map((pin) => [...pin, ['mountain-dawn', 'valley-run', 'coastal-descent', 'foggy-gorge', 'high-pass', 'storm-valley', 'night-ride', 'winter-pass'].indexOf(pin[0])]))('%s keeps its cone count and positions', (id, count, digest, index) => {
+        const quiet = console.log;
+        console.log = () => {};
+        let cones;
+        try {
+            const { env, scene, leg } = buildEnvironment(game, index);
+            expect(leg.id).toBe(id);
+            cones = new game.Cones(scene, env);
+        } finally {
+            console.log = quiet;
+        }
+        const flat = cones.cones.flatMap(cone => [cone.position.x, cone.position.y, cone.position.z]);
+        expect(cones.cones).toHaveLength(count);
+        expect(createHash('sha256').update(Buffer.from(new Float64Array(flat).buffer)).digest('hex').slice(0, 16)).toBe(digest);
     });
 });

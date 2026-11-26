@@ -4,7 +4,7 @@ Every leg has a terrain profile: what lies on each side of the road (a wall, a f
 
 | Leg | Profile | Left | Right | Board |
 |---|---|---|---|---|
-| 1 mountain-dawn | `valleyFloor` | run-off meadow, closing to foothills | run-off meadow, river, closing to foothills | `mountain-dawn-v2` |
+| 1 mountain-dawn | a course of six parts (see "Long legs") | meadow, wood, valley, village, cliff wall, snow ridge | meadow and river, wood and bridge, valley, village, drop to the lake, snow ridge | `mountain-dawn-v3` |
 | 2 valley-run | `cliffLakeMirrored` | drop to the lake | wall | `valley-run-v2` |
 | 3 coastal-descent | `coast` | wall | sea cliff, then beach | `coastal-descent-v2` |
 | 4 foggy-gorge | `canyon` | wall; drop after the second tunnel | wall; drop between the tunnels | `foggy-gorge-v2` |
@@ -157,6 +157,7 @@ The village is built procedurally first (boxes for houses), and that is what jes
 - **Light.** No light is added. Lit glass and lamp glass are a `MeshBasicMaterial` whose colours are a little over the night's bloom threshold (1.8). The lamplight on the walls is baked: each vertex of the opaque mesh carries, in the alpha of its colour, what the lamps near it would give, and the material's emissive term is multiplied by it in the shader.
 - **Colours.** No texture: every board, stone and roof slab is a face with its own shade. The opaque mesh's colours are linear and stored as 16-bit shares, not floats. `Graphics.fixColorSpaces()` decodes every float colour attribute it finds as sRGB, within 1.5 s of its appearing: a float attribute added after the build is drawn pale and then darkens.
 - **Cost.** The merge runs on the main thread when the files arrive, once a build: 45 to 120 ms on an Apple M5. A frame in the village costs about 0.3 ms more than the procedural one (`node tools/village-shots.mjs <dir> <label> --gpu --times`).
+- **Instanced, by day (Mountain Dawn).** A converted leg names the files in its course with `instanced: true` (`js/course.js`). Merged, Mountain Dawn's 44 plots would be about 230000 triangles in 18 MB of vertices, over a window's 12 MB. `dressVillageInstanced` lays the same houses, washes, walls and lamp posts (`villageLayout`, shared with the merged village, which it does not change) and draws each model once as instances: one `InstancedMesh` per model, tint kind (plaster takes the wash, shutters the paint, the rest neither, as instance colours) and handedness (a mirrored house draws its back faces). That is 35 meshes, about 235000 triangles drawn and 1.5 MB held. Its glass is dark and its lanterns unlit, with no baked lamplight: the leg rides it at golden hour. The same files give the meadow's farmstead its house (`house_farm`) and barn (`house_barn`) at the boxes' places, front to the road (`dressFarmstead`); the shed stays a box. Without the files both stay procedural. `tests/unit/villagemodels.test.js` holds this.
 
 Both legs have `trackVersion` 2: `foggy-gorge-v2` and `night-ride-v2`. High-pass is the only leg with a plain board id.
 
@@ -174,9 +175,43 @@ Grip: `Terrain.LEGS[i].grip` (default 1) is the road's own grip on a leg, and `W
 
 `js/terrain.js` holds the ground model and the profiles. `js/environment.js` still builds every mesh: the ribbon, road, walls, forest, set pieces, roadworks plant and gates. A new profile should add its builders next to the existing ones by profile, and keep ground, height and zone rules in `terrain.js`, so `environment.js` does not grow with each leg.
 
+## Long legs: courses, parts and sections
+
+A converted leg has an entry in `Course.LEGS` (js/course.js) and its own road: local segments `0..segments - 1` and a 30-segment straight tail. `Terrain.adopt` makes it the leg's table row (`trackVersion` + 1, so a new board). Every other leg still cuts its range from the shared course, byte for byte as before; the pins of `tests/unit/course-path.test.js`, `scene-pin.test.js`, `cones.test.js`, `traffic.test.js` and the `scene` probe hold the legs not yet converted. A conversion removes its own leg's pins.
+
+A course is a list of parts (`Terrain.partsProfile`): each part has its own ground (sides), floor, dressing, look, time of day, weather and one landmark. Neighbouring heightfield parts `morph` over 10 to 30 segments; other joins `cut` on a straight. `Terrain.validateCourse` holds the 12 rules.
+
+### Sections and the drawn window
+
+- A converted leg is built in sections of 25 segments (`SECTION`, `env.sections`); the last also builds the run-off. What is built once (`env.fixed`): the path, the plane floors, the start and finish, the gates, the roadworks, the hairpin signs, the set pieces, the landmarks and part scenery.
+- Range builders read their range from `buildRange()`: on a shared-course leg the whole leg as before, on a converted leg the current piece (a section's share of one part). While a step runs, `this.scene` is the step's group and `this.config` is the part's row (`partConfig`). Each step has its own seeded stream (`sectionSeed`), so a section is the same in any build order (`tests/unit/sections.test.js`).
+- Ribbons number their columns leg-wide and, on a converted leg, hash their vertex grey (`vertexHash`) and take the grass of the road position (`Terrain.lookAt`), so neighbouring sections share a seam column with equal position, colour and normal. The ground model reads no mesh, so a disposed section reads the same ground.
+- The window: one section behind the bike, its own, two ahead; the next one builds hidden. `env.update(segment, 4, lastGateSegment)` runs each frame (`Game.SECTION_BUDGET_MS`); a section first drawn appears one step a frame. Sections below `min(k - 1, last gate's section)` are disposed, so a restart finds its gate's section built (`ensureWindow(..., { sync: true })`).
+- A set piece (bridge, village) is built once but drawn only while one of its segments is in a drawn section (`pieceGroups`, `moveWindow`), so the modelled village counts only in the windows that hold it: at most 426000 triangles there.
+- No cut edge of the ground shows from the road (`updateFarGround`, one mesh `far-ground` rebuilt as the window moves, about 7700 triangles, 4 to 8 ms a rebuild). A side that ends above the road has a back slope from its last row (`FAR_GROUND.back`: 30 m out and 12 m down, then 330 m out and 420 m down), column for column with the drawn ribbons: without it a side was a sheet that ended in the air, and where the valley jogs (segments 432 to 460) the rider saw its back and its edge as a pale slab. Past the window the ground goes on, coarse, for 150 segments (a column every 5, every row as drawn, the window's last column vertex for vertex, the road in its own colour), so the window's end is no longer a cross-section 1 to 1.5 km ahead; its own end is 4 km or more off, past 99% of every part's fog. The plane floors show for the parts it covers. `tests/unit/course-mountain-dawn.test.js` finds every edge of the drawn ground that one triangle alone uses, at twelve window positions, and allows none more than 5 m over the road ahead of the bike unless its part's fog hides 99% of it.
+- At the leg start `Game.prewarmCourse` builds one sample section of every part, shows everything, compiles every shader and puts the samples away. Without it a part's first ground, water or weather compiled its shader mid-ride (up to 1.9 s on Apple M5).
+- A converted leg shares one rock texture and one water material (`sharedRockTexture`, `sharedWater`); its face rocks are icosahedra of detail 1, not 3; a part may set its slope forest (`dressing.forest.slope`) and the course its cone spacing (`cones.straightEvery`). These keep every window inside the budgets (800 meshes, 450000 triangles, 1400 instances, 1500 solid boulders, 12 MB).
+- A converted leg's roadworks plant follows the run-off rule of the part its zone stands in (`createRoadworks`), and its wall decals (cracks, seepage, vines, snow) lie on the drawn face (`layDecalsOnFace`); upright, as the shared course still places them, they stood off a wall that leans back.
+- Cones, cars and the crew follow the window (`Cones.createSectionCones`, `Traffic.followWindow`): a car spawns at the window's far end each `traffic.oncomingEvery` segments; rocks fall only in drawn sections of parts with a rate.
+
+### Leg 1, Mountain Dawn (700 segments, 14 km, `mountain-dawn-v3`)
+
+| Part | Segments | Ground | Light | Landmark |
+|---|---|---|---|---|
+| meadow | 0-120 | open valley, river right | dawn, ground mist | farmstead (the modelled farm house and barn, a box shed) |
+| wood | 120-250 | broadleaf wood close to the road (morph) | dawn | stone bridge over a gully (`bridge` set piece, `assets/bridge/stone.glb`) |
+| valley | 250-400 | valley closing in (morph) | dawn | mountains rising ahead |
+| village | 400-470 | closed valley, village 410-431 | golden | the village (night-ride's modelled houses, drawn as instances: see "The modelled village") and a church spire behind it |
+| lake | 470-620 | cliff road, wall left, drop to the lake right (cut) | golden, light shafts | twin snow peaks across the lake |
+| pass | 620-700 | snow ridge, crest 165 m at 660 (cut) | golden | summit cairn; pass peaks, snow poles, cairns, summit sign |
+
+A landmark peak (the valley's `range`, the lake's `twinPeaks`) keeps off the leg's whole road, not only the road near its anchor: `Environment.standPeakClear` moves it outward in 30 m steps until `peakClearOfRoad` holds, which bounds each face by its rings (no further out than its lower ring, no higher than its upper one) and asks that within 40 m of either road edge the flanks stay 5 m under the road. Without it a range peak placed ahead of segment 383 stood across the road at segments 392 to 411, where the road bends into the valley head. `tests/unit/course-mountain-dawn.test.js` drops a vertical line through the road and 40 m either side at every segment and allows no mountain mesh there.
+
+Road height 12 to 166 m, largest step 0.57 m, gates every 50 segments and the last at 698 (finish line 704). The `bridge` span (`Terrain`'s `bridgeSide`) drops 8.6 m to the river bed beside a parapet that crashes 0.9 m past the road edge. `stone.glb` is built with the village kit, which writes no normals and keeps sRGB colours, so `dressBridge` draws it from the houses' daylight geometry (`daylightParts`: decoded colours, normals from the faces). Drawn as loaded it has no `normal` attribute, and every face lights black against the dawn sun. `tests/unit/villagemodels.test.js` checks that its outer faces face out, the parapets' inner faces face the road and the coping faces up. Proofs: `tests/unit/course-mountain-dawn.test.js`, and `node tools/terrain-check.mjs course,window,stream,preview,finish --legs mountain-dawn` (`--fixture` runs them on the 150-segment test course; `course --mutate flat-parts` must fail).
+
 ## Only the active leg exists
 
-`roadPath` holds all 744 segments. Geometry is built for `startSegment` to `endSegment + 20` only. Anything placed or spawned outside that range hangs in empty space. Traffic uses `legSegmentRange()`; cones and checkpoints read `startSegment` / `endSegment`.
+`roadPath` holds all 744 segments on a shared-course leg (a converted leg: its own `segments + 30`). Geometry is built for `startSegment` to `endSegment + 20` only. Anything placed or spawned outside that range hangs in empty space. Traffic uses `legSegmentRange()`; cones and checkpoints read `startSegment` / `endSegment`.
 
 Offsets from the road must use the road's perpendicular: `(cos(heading), -sin(heading))`. A world-X offset is only correct where the road heads north.
 
