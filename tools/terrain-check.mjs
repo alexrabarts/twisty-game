@@ -9282,6 +9282,9 @@ function worldChecks(report) {
     clearanceChecks(results, failures);
     fairnessChecks(results, failures);
     shotChecks(results, failures);
+    // No thing of the window's scenery pops in view because the room changed (world-pops)
+    const pops = results['world-pops'];
+    if (pops && pops.summary && pops.summary.inViewByCause.room) failures.push(`world-pops: ${pops.summary.inViewByCause.room.n} pops in view from a change of the window's room, want none`);
     const steps = results['world-steps'];
     if (steps) for (const list of Object.values(steps.slowestByKind || {})) for (const t of list) if (t.ms > STEPS_MOST_MS) failures.push(`world-steps: ${t.id} took ${t.ms} ms, over ${STEPS_MOST_MS}: ${JSON.stringify(t.parts)}`);
     camWallChecks(results, failures);
@@ -9705,6 +9708,256 @@ WORLD['hill-look'] = async (page) => {
         files.push(shot);
     }
     return { said: result.said, file, files };
+};
+
+// world-pops: rides a stretch with the world pilot (--from, --to: ride metres, the stage's first 4 km by default;
+// --speed, 18 m/s; --mode, the far chase) with every frame drawn, and logs every change of the window's scenery: each
+// house, boulder, tuft and tree that appears, vanishes or changes its level of detail. A change is a pop when the drawn
+// share of the thing (1 less its fade's cut: Fade) moves by more than POP_STEP in one frame; a fade is one that starts
+// or ends over several frames. Each is logged with its distance from the camera, whether it was in the view frustum,
+// and its cause: `room` when the window's room changed (Game.budgetWindow, Scenery.setWindowRoom; the caps and trees are
+// chosen again at once at the same place, so the change is the room's alone), with what changed the room by kind (land,
+// roads, riders, the player's bike, structures, scenery), else `tiles` when a tile came or went in the last second,
+// else `move`. Fails on a pop in view caused by the room. `--out <dir>` writes frame strips round the first --strips
+// pops and fades in view (the frame before, the frame of the change, then 8, 16 and 32 frames on, cropped round it)
+//   node tools/terrain-check.mjs world-pops --world tremola --gpu [--from s] [--to s] [--speed 18] [--mode far] [--out <dir>] [--strips 24]
+const POP_STEP = 0.5;
+const POP_OUT = join(process.env.HOME || '.', 'Library/Caches/twisty-world/pop-shots');
+function popRide(placeSource, pilotSource, opts) {
+    return (async () => {
+        const placeAt = new Function('game', `return (${placeSource})`)(game);
+        const env = game.environment, sc = env.scenery, v = game.vehicle, cam = game.camera, route = env.route;
+        twistyDev.freeze();
+        game.setCameraView(opts.mode);
+        const start = opts.from || Math.max(20, (env.startS ?? 0) + 20);
+        const end = Math.min(route.length - 30, opts.to || start + 4000, (env.endS ?? route.length) - 30);
+        await placeAt(start);
+        game.worldCamera.reset(v.yawAngle);
+        new Function('game', 'cruise', `return (${pilotSource})(game, cruise)`)(game, opts.speed);
+        const frustum = new THREE.Frustum(), pv = new THREE.Matrix4(), sphere = new THREE.Sphere(), at = new THREE.Vector3();
+        const view = () => {
+            cam.updateMatrixWorld(true);
+            pv.multiplyMatrices(cam.projectionMatrix, cam.matrixWorldInverse);
+            frustum.setFromProjectionMatrix(pv);
+        };
+        const seen = (x, y, z, r) => { sphere.center.set(x, y, z); sphere.radius = r; return frustum.intersectsSphere(sphere); };
+        // What the window draws of each thing: key to { kind, x, y, z, r, levels: { level: drawn share } }
+        const shareOf = (a, o) => 1 - Math.min(1, Math.abs(a[o + 3]));
+        const snap = () => {
+            const out = new Map();
+            const put = (kind, key, level, share, x, y, z, r) => {
+                let e = out.get(key);
+                if (!e) out.set(key, e = { kind, x, y, z, r, levels: {} });
+                e.levels[level] = Math.max(e.levels[level] || 0, share);
+            };
+            for (const [key, mesh] of sc.forestMeshes) {
+                if (!key.endsWith(':0') || !mesh.visible || !mesh.parent) continue;
+                const a = mesh.instanceMatrix.array, level = mesh.userData.treeLevel;
+                for (let i = 0; i < mesh.count; i++) {
+                    const o = i * 16, h = Math.hypot(a[o + 4], a[o + 5], a[o + 6]);
+                    put('tree', `t${a[o + 12].toFixed(1)},${a[o + 14].toFixed(1)}`, level, shareOf(a, o), a[o + 12], a[o + 13] + h * 0.5, a[o + 14], Math.max(2, h * 0.6));
+                }
+            }
+            for (const mesh of sc.houseGroup.children) {
+                if (!mesh.isInstancedMesh || !mesh.visible) continue;
+                const a = mesh.instanceMatrix.array;
+                for (let i = 0; i < mesh.count; i++) {
+                    const o = i * 16;
+                    put('house', `h${a[o + 12].toFixed(1)},${a[o + 14].toFixed(1)}`, 'house', shareOf(a, o), a[o + 12], a[o + 13] + 4, a[o + 14], 9);
+                }
+            }
+            for (const mesh of (sc.boulderMeshes || new Map()).values()) {
+                if (!mesh.visible) continue;
+                const a = mesh.instanceMatrix.array;
+                for (let i = 0; i < mesh.count; i++) {
+                    const o = i * 16;
+                    put('boulder', `b${a[o + 12].toFixed(1)},${a[o + 14].toFixed(1)}`, 'boulder', shareOf(a, o), a[o + 12], a[o + 13], a[o + 14], 2);
+                }
+            }
+            for (const held of sc.perTile.values()) {
+                for (const mesh of held.group.children) {
+                    if (mesh.name !== 'tufts' || !mesh.userData.tufts) continue;
+                    const cut = mesh.geometry.attributes.fadeCut, first = mesh.userData.tuftFirst;
+                    mesh.userData.tufts.forEach((t, i) => put('tuft', `u${t.x.toFixed(1)},${t.z.toFixed(1)}`, 'tuft', cut && first ? 1 - Math.min(1, Math.abs(cut.array[first[i]])) : 1, t.x, t.y, t.z, 0.6));
+                }
+            }
+            return out;
+        };
+        // What all but the scenery's houses, boulders and trees draw, by kind (as Game.budgetWindow counts it)
+        const kindOf = (o, kind) => {
+            if (o === v.group) return 'player';
+            if (game.traffic && (game.traffic.motorcycles || []).some(b => b.bikeGroup === o)) return 'riders';
+            if (game.traffic && (game.traffic.cars || []).some(c => c.carGroup === o)) return 'traffic';
+            const n = o.name || '';
+            if (/^world-(terrain|farland|horizon)/.test(n) || n === 'ground-cover') return 'land';
+            if (/^world-(road-section|side)/.test(n)) return 'roads';
+            if (/^world-scenery/.test(n) || n === 'world-houses') return 'scenery';
+            if (o === env.group && kind === 'other') return 'structures';
+            return kind;
+        };
+        const restByKind = () => {
+            const kinds = {};
+            const skip = new Set([sc.boulderGroup, sc.forest]);
+            const walk = (o, kind) => {
+                if (skip.has(o) || o.name === 'ground-cover' || (!o.visible && !o.isMesh)) return;
+                kind = kindOf(o, kind);
+                if (o.isMesh && o.geometry && o.geometry.attributes.position && !(o.parent === sc.houseGroup && o.name !== 'houses:footing')) {
+                    const g = o.geometry;
+                    kinds[kind] = (kinds[kind] || 0) + (g.index ? g.index.count : g.attributes.position.count) / 3 * (o.isInstancedMesh ? o.count : 1);
+                }
+                for (const child of o.children) walk(child, kind);
+            };
+            walk(game.scene, 'other');
+            for (const k of Object.keys(kinds)) kinds[k] = Math.round(kinds[k]);
+            return kinds;
+        };
+        const events = [], rooms = [], fades = [];
+        let frame = 0, last = snap(), lastRest = restByKind(), cause = null;
+        const tick = (now, why, room) => {
+            for (const [key, e] of now) {
+                const was = last.get(key);
+                for (const [level, share] of Object.entries(e.levels)) {
+                    const before = was ? was.levels[level] || 0 : 0;
+                    const step = share - before;
+                    if (Math.abs(step) > opts.popStep) events.push({ frame, key, kind: e.kind, level, step: Math.round(step * 100) / 100, why, room, x: e.x, y: e.y, z: e.z, r: e.r, d: Math.round(Math.hypot(e.x - cam.position.x, e.y - cam.position.y, e.z - cam.position.z)) });
+                    else if (step && (before === 0 || share === 0 || before === 1 || share === 1) && Math.abs(step) <= opts.popStep) fades.push({ frame, key, kind: e.kind, level, from: before, to: share, x: e.x, y: e.y, z: e.z, r: e.r });
+                }
+            }
+            for (const [key, e] of last) {
+                const is = now.get(key);
+                for (const [level, before] of Object.entries(e.levels)) {
+                    if (is && is.levels[level] !== undefined) continue;
+                    if (before > opts.popStep) events.push({ frame, key, kind: e.kind, level, step: -Math.round(before * 100) / 100, why, room, x: e.x, y: e.y, z: e.z, r: e.r, d: Math.round(Math.hypot(e.x - cam.position.x, e.y - cam.position.y, e.z - cam.position.z)) });
+                }
+            }
+            last = now;
+        };
+        // A room the window takes changes the caps and the trees at once, here, so what changes then is the room's
+        const setRoom = sc.setWindowRoom.bind(sc);
+        sc.setWindowRoom = (value) => {
+            const taken = setRoom(value);
+            if (!taken) return taken;
+            const rest = restByKind();
+            const delta = {};
+            for (const k of new Set([...Object.keys(rest), ...Object.keys(lastRest)])) { const d = (rest[k] || 0) - (lastRest[k] || 0); if (d) delta[k] = d; }
+            lastRest = rest;
+            const room = { frame, s: Math.round(v.routeS), room: value, delta };
+            rooms.push(room);
+            if (!sc.capsBusy) sc.rankCaps(sc.capsBike || v.position, true);
+            sc.rankTrees(sc.treeBike || v.position, true);
+            view();
+            tick(snap(), 'room', rooms.length - 1);
+            return taken;
+        };
+        const tileSig = () => [...sc.perTile.keys()].join('|');
+        let tiles = tileSig(), tilesAt = -1e9;
+        // The frames kept for the strips: the last drawn, and the ones asked for after a change
+        const W = 320, H = 200;
+        const ring = [document.createElement('canvas'), document.createElement('canvas')];
+        ring.forEach(c => { c.width = game.graphics.renderer.domElement.width; c.height = game.graphics.renderer.domElement.height; });
+        const strips = [];
+        const grab = (into) => into.getContext('2d').drawImage(game.graphics.renderer.domElement, 0, 0);
+        let stripAt = -1e9;
+        const wantStrip = (e, kind) => {
+            // (spread over the ride: one in 90 frames at the most)
+            if (strips.length >= opts.strips || frame - stripAt < 90) return;
+            at.set(e.x, e.y, e.z).project(cam);
+            if (at.z < -1 || at.z > 1 || Math.abs(at.x) > 1 || Math.abs(at.y) > 1) return;
+            const c = game.graphics.renderer.domElement;
+            const sx = (at.x + 1) / 2 * c.width, sy = (1 - at.y) / 2 * c.height;
+            const sheet = document.createElement('canvas');
+            sheet.width = W * 5 + 16;
+            sheet.height = H + 18;
+            const ctx = sheet.getContext('2d');
+            ctx.fillStyle = '#000';
+            ctx.fillRect(0, 0, sheet.width, sheet.height);
+            const crop = [Math.max(0, Math.min(c.width - W, sx - W / 2)), Math.max(0, Math.min(c.height - H, sy - H / 2))];
+            const put = (src, k) => {
+                ctx.drawImage(src, crop[0], crop[1], W, H, k * (W + 4), 18, W, H);
+                ctx.strokeStyle = 'rgba(255,220,0,0.7)';
+                ctx.strokeRect(k * (W + 4) + sx - crop[0] - 12, 18 + sy - crop[1] - 12, 24, 24);
+            };
+            put(ring[(frame + 1) % 2], 0);
+            put(c, 1);
+            ctx.fillStyle = '#fff';
+            ctx.font = '12px sans-serif';
+            ctx.fillText(`${kind} ${e.kind} ${e.level} ${e.why || ''} s ${Math.round(v.routeS)} d ${Math.round(Math.hypot(e.x - cam.position.x, e.y - cam.position.y, e.z - cam.position.z))} m: before, the frame, +8, +16, +32`, 4, 13);
+            stripAt = frame;
+            strips.push({ sheet, ctx, put, left: [8, 16, 32].map(n => frame + n), k: 2, name: `${String(strips.length + 1).padStart(2, '0')}-${kind}-${e.kind}-s${Math.round(v.routeS)}` });
+        };
+        let ticks = 0, crashes = 0, checked = 0;
+        const t0 = performance.now();
+        while (v.routeS < end && !game.finished && ticks < 60 * 60 * 30) {
+            twistyDev.step(1, { render: true });
+            ticks++;
+            frame++;
+            if (v.crashed) crashes++;
+            if (ticks % 60 === 0) await new Promise(resolve => setTimeout(resolve, 0));
+            const sig = tileSig();
+            if (sig !== tiles) { tiles = sig; tilesAt = frame; }
+            view();
+            const firstFade = fades.length;
+            tick(snap(), frame - tilesAt < 60 ? 'tiles' : 'move', null);
+            // (the room's own were logged inside the step, from the view of the frame before)
+            for (const e of events.slice(checked)) e.inView = seen(e.x, e.y, e.z, e.r);
+            for (const e of fades.slice(firstFade)) e.inView = seen(e.x, e.y, e.z, e.r);
+            for (const e of events.slice(checked)) if (e.inView) wantStrip(e, 'pop');
+            checked = events.length;
+            for (const e of fades.slice(firstFade)) if (e.inView && (e.from === 0 || e.to === 0 || e.from === 1 || e.to === 1)) wantStrip(e, e.from === 0 ? 'fade-in' : e.to === 0 ? 'fade-out' : 'fade-level');
+            for (const s of strips) while (s.left.length && s.left[0] === frame) { s.left.shift(); s.put(game.graphics.renderer.domElement, s.k++); }
+            grab(ring[frame % 2]);
+        }
+        const ms = performance.now() - t0;
+        sc.setWindowRoom = setRoom;
+        const player = restByKind().player || 0;
+        return {
+            start: Math.round(start), end: Math.round(end), reached: Math.round(v.routeS), frames: frame, crashes, seconds: Math.round(ms / 1000),
+            playerTriangles: player, bike: v.bike || null, riderRoom: game.riderRoom ?? null, rooms, fadeCount: fades.length, fadesInView: fades.filter(f => f.inView).length,
+            events: events.map(e => ({ frame: e.frame, kind: e.kind, level: e.level, step: e.step, why: e.why, room: e.room, inView: e.inView, d: e.d, x: Math.round(e.x), z: Math.round(e.z) })),
+            strips: strips.map(s => ({ name: s.name, png: s.sheet.toDataURL('image/png') }))
+        };
+    })();
+}
+WORLD_PROBES.push('world-pops');
+WORLD['world-pops'] = async (page) => {
+    const opts = { mode: option('mode') || 'far', speed: Number(option('speed') || 18), from: Number(option('from') || 0), to: Number(option('to') || 0), strips: Number(option('strips') || (option('out') ? 24 : 0)), popStep: POP_STEP };
+    const ride = await page.evaluate(popRide, placeAt.toString(), pilotWorld.toString(), opts);
+    const files = [];
+    if (ride.strips.length) {
+        const out = option('out') || POP_OUT;
+        mkdirSync(out, { recursive: true });
+        for (const s of ride.strips) {
+            const file = join(out, `${option('tag') || 'pops'}-${s.name}.png`);
+            writeFileSync(file, Buffer.from(s.png.split(',')[1], 'base64'));
+            files.push(file);
+        }
+    }
+    delete ride.strips;
+    // The shares: of the pops, by cause, by the kind of thing, in view; of the room's, by what changed the room
+    const share = (list, key) => {
+        const out = {};
+        for (const e of list) out[key(e)] = (out[key(e)] || 0) + 1;
+        return Object.fromEntries(Object.entries(out).sort((a, b) => b[1] - a[1]).map(([k, n]) => [k, { n, share: Math.round(n / Math.max(1, list.length) * 1000) / 10 }]));
+    };
+    const events = ride.events;
+    const inView = events.filter(e => e.inView);
+    // What changed the room for a pop of the room's: the kind whose count moved most the way the room moved
+    const roomKind = e => {
+        const r = ride.rooms[e.room];
+        if (!r) return 'none';
+        const list = Object.entries(r.delta).filter(([, d]) => d !== 0).sort((a, b) => Math.abs(b[1]) - Math.abs(a[1]));
+        return list.length ? list[0][0] : 'none';
+    };
+    const roomPops = events.filter(e => e.why === 'room');
+    const summary = {
+        pops: events.length, inView: inView.length, inViewShare: Math.round(inView.length / Math.max(1, events.length) * 1000) / 10,
+        byCause: share(events, e => e.why), inViewByCause: share(inView, e => e.why), byKind: share(events, e => e.kind), inViewByKind: share(inView, e => e.kind),
+        roomByKind: share(roomPops, roomKind), roomInViewByKind: share(roomPops.filter(e => e.inView), roomKind),
+        roomChanges: ride.rooms.length, roomChangesByKind: share(ride.rooms.map((r, k) => ({ room: k })), roomKind),
+        medianInViewM: inView.length ? [...inView].sort((a, b) => a.d - b.d)[Math.floor(inView.length / 2)].d : null,
+        fades: ride.fadeCount, fadesInView: ride.fadesInView
+    };
+    return { ...ride, events: option('dump') ? events : events.filter(e => e.inView).slice(0, 40), summary, files };
 };
 
 // world-look: a script of the caller's in a world page (--script <file>: the body of an async function given `game`,
