@@ -27,6 +27,7 @@ export function tunnelWindow(game, env, store, at, { nearM = 300, stepM = 1, acr
     store.grids = store.grids || new Map();
     const gridOf = (mesh, ranges, cell = 4) => {
         const id = `g:${mesh.geometry.uuid}:${cell}:${ranges.map(r => r.join('+')).join(',')}`;
+        used.add(id);
         if (store.grids.has(id)) return store.grids.get(id);
         mesh.updateMatrixWorld(true);
         const pos = mesh.geometry.attributes.position, index = mesh.geometry.index;
@@ -74,6 +75,7 @@ export function tunnelWindow(game, env, store, at, { nearM = 300, stepM = 1, acr
     };
     const facesOf = (mesh, ranges) => {
         const id = `f:${mesh.geometry.uuid}`;
+        used.add(id);
         if (store.grids.has(id)) return store.grids.get(id);
         mesh.updateMatrixWorld(true);
         const pos = mesh.geometry.attributes.position, index = mesh.geometry.index;
@@ -115,11 +117,25 @@ export function tunnelWindow(game, env, store, at, { nearM = 300, stepM = 1, acr
     for (const group of [...env.roadMeshes.values(), ...env.sideMeshes.values()]) group.traverse(o => { if (o.isMesh && o.geometry) live.add(o.geometry.uuid); });
     for (const mesh of [env.horizon, ...(env.farLand || [])]) if (mesh && mesh.geometry) live.add(mesh.geometry.uuid);
     for (const id of [...store.grids.keys()]) if (!live.has(id.split(':')[1])) store.grids.delete(id);
+    // (and of those, only the ones this window reads: the rest are made again when the bike comes back near them)
+    const used = new Set();
+    const keep = () => { for (const id of [...store.grids.keys()]) if (!used.has(id)) store.grids.delete(id); };
+    // (and only the meshes that reach within nearM of `at`, where every tube row read lies, and the mouth, the face and
+    // the walls past it: a grid of every tile and section drawn held 3.8 GB on the 22 km Susten climb, and the worker
+    // ran out of heap on the next stage)
+    const box = new THREE.Box3();
+    const reaches = (mesh) => {
+        if (!mesh.geometry.boundingBox) mesh.geometry.computeBoundingBox();
+        mesh.updateMatrixWorld(true);
+        box.copy(mesh.geometry.boundingBox).applyMatrix4(mesh.matrixWorld);
+        const dx = Math.max(box.min.x - at.x, 0, at.x - box.max.x), dz = Math.max(box.min.z - at.z, 0, at.z - box.max.z);
+        return Math.hypot(dx, dz) <= nearM + mouthM + faceM + 2 * wallM;
+    };
     // The drawn land: every tile's land and closing faces as drawn now (not its skirts, under its edge)
     const land = [];
     for (const tile of env.tileMeshes.values()) {
         const mesh = tile.mesh || tile;
-        if (!mesh || !mesh.isMesh || !mesh.visible) continue;
+        if (!mesh || !mesh.isMesh || !mesh.visible || !reaches(mesh)) continue;
         const parts = mesh.userData.parts || { land: mesh.geometry.index ? mesh.geometry.index.count : 0, faces: [0, 0] };
         land.push(gridOf(mesh, [[0, parts.land], parts.faces]));
     }
@@ -134,12 +150,13 @@ export function tunnelWindow(game, env, store, at, { nearM = 300, stepM = 1, acr
     const floors = [], uprights = [];
     for (const group of [...env.roadMeshes.values(), ...env.sideMeshes.values()]) {
         group.traverse(o => {
-            if (!o.isMesh) return;
+            if (!o.isMesh || !reaches(o)) return;
             const whole = [[0, o.geometry.index ? o.geometry.index.count : o.geometry.attributes.position.count]];
             if (/road-(ribbon|side)/.test(o.name)) floors.push(gridOf(o, whole));
             else { floors.push(gridOf(o, whole)); uprights.push(facesOf(o, whole)); }
         });
     }
+    keep();
     const landYs = (x, z) => { const out = []; for (const g of land) g.ys(x, z, out); return out; };
     const floorAt = (x, z, y) => { const out = []; for (const g of floors) g.ys(x, z, out); return out.some(h => Math.abs(h - y) <= 0.15); };
     const fronted = (x, z, y0, y1) => covers(uprights.flatMap(f => f.spans(x, z)), y0, y1);
