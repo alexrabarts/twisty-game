@@ -1151,6 +1151,8 @@ class RoadMesh {
     // A far ribbon draws a wall no farther than this past the row its run ends on (RoadMesh.section)
     static get WALL_PAST_M() { return 8; }
     static get WALL_RUN_M() { return 10; }
+    // The grid a retaining wall's style is picked on (StructureStyles.wall): walls that start in one square agree
+    static get WALL_STYLE_M() { return 120; }
 
     // The outward direction of each side of a row's edge points
     static outward(side) {
@@ -1511,6 +1513,32 @@ class RoadMesh {
         const apron = { positions: [], shades: [] }, wall = { positions: [], shades: [] }, stone = { positions: [], shades: [], face: [] }, paving = { positions: [], shades: [] };
         // The metres along each edge at each row, from the first row's own metres of road: where a wall's courses lie
         const alongMemo = { l: null, r: null };
+        // The style of the retaining wall segment k of edge `key` stands in (StructureStyles.wall): one per wall, by the
+        // place of its first row on a grid of WALL_STYLE_M (so the walls of one bend agree) and the most its face drops,
+        // read on the plan of every row of the ride where there is one, so every section draws one wall alike
+        const wallStyleMemo = new Map();
+        const wallStyleOf = (k, key) => {
+            const id = `${key}${k}`;
+            if (wallStyleMemo.has(id)) return wallStyleMemo.get(id);
+            const fine = sides.plan && sides.plan.base !== undefined ? sides.plan : null;
+            const segs = fine ? fine.seg[key] : plan.seg[key], ends = fine ? fine.end[key] : plan.end[key];
+            let i = fine ? sides[k].i - fine.base : k;
+            if (fine) while (i + 1 < sides[k + 1].i - fine.base && !segs[i]) i++;
+            let a = i, b = i;
+            while (a > 0 && segs[a - 1]) a--;
+            while (b + 1 < segs.length && segs[b + 1]) b++;
+            let height = 0, start = null;
+            for (let j = a; j <= b + 1; j++) {
+                const e = ends[j];
+                if (!e || !e.at) continue;
+                if (!start) start = e.at;
+                height = Math.max(height, e.at[1] - e.y);
+            }
+            const p = start || (fine ? sides[k][key] : sides[a][key]), M = RoadMesh.WALL_STYLE_M;
+            const style = StructureStyles.wall(Math.floor(p[0] / M) * 7919 + Math.floor(p[2] / M) * 31 + (key === 'l' ? 0 : 3), height);
+            wallStyleMemo.set(id, style);
+            return style;
+        };
         const alongOf = (k, key) => {
             if (!alongMemo[key]) {
                 const list = [Number.isFinite(sides[0].s) ? sides[0].s : 0];
@@ -2288,9 +2316,12 @@ class RoadMesh {
                     const up = RoadMesh.COPING_UP_M;
                     const qa = [pa[0] + oa[0] * Pa, pa[1] + up, pa[2] + oa[1] * Pa], qb = [pb[0] + ob[0] * Pb, pb[1] + up, pb[2] + ob[1] * Pb];
                     while (stoneOut.face.length < (stoneOut.positions.length / 3) * 4) stoneOut.face.push(0, 0, 0, 0);
-                    RoadMesh.quad(stoneOut, qa, qb, [qb[0], depth(fb, pb), qb[2]], [qa[0], depth(fa, pa), qa[2]], colors.stone);
+                    const ya = depth(fa, pa), yb = depth(fb, pb);
+                    RoadMesh.quad(stoneOut, qa, qb, [qb[0], yb, qb[2]], [qa[0], ya, qa[2]], colors.stone);
                     const ua = alongOf(k, key), ub = alongOf(k + 1, key);
-                    for (const [u, n] of [[ua, oa], [ub, ob], [ub, ob], [ua, oa], [ub, ob], [ua, oa]]) stoneOut.face.push(u, 1, n[0], n[1]);
+                    // (its style's code and each corner's metres down from the top, StructureStyles.wallFace)
+                    const code = wallStyleOf(k, key).code, F = (d) => StructureStyles.wallFace(code, d);
+                    for (const [u, n, w] of [[ua, oa, F(0)], [ub, ob, F(0)], [ub, ob, F(qb[1] - yb)], [ua, oa, F(0)], [ub, ob, F(qb[1] - yb)], [ua, oa, F(qa[1] - ya)]]) stoneOut.face.push(u, w, n[0], n[1]);
                     const ca = coping[key][k], cb = coping[key][k + 1];
                     const ia = [qa[0] - oa[0] * ca, qa[1], qa[2] - oa[1] * ca], ib = [qb[0] - ob[0] * cb, qb[1], qb[2] - ob[1] * cb];
                     RoadMesh.quad(stoneOut, qa, qb, ib, ia, colors.stone);
@@ -2336,7 +2367,7 @@ class RoadMesh {
         while (stone.face.length < (stone.positions.length / 3) * 4) stone.face.push(0, 0, 0, 0);
         // (each run's segments say whether they carry a parapet, `rail`: the camera's faces and a piece joining two
         // roads' walls read it, WorldEnvironment.runParapet)
-        const walls = RoadMesh.wallRuns(sides, plan, drawFrom, drawTo).map(run => Object.assign(run, { rail: run.rows.map(k => parapetOn(k, run.key)) }));
+        const walls = RoadMesh.wallRuns(sides, plan, drawFrom, drawTo).map(run => Object.assign(run, { rail: run.rows.map(k => parapetOn(k, run.key)), style: wallStyleOf(run.rows[0], run.key).name }));
         return { apron, wall, stone, paving, walls };
     }
 
