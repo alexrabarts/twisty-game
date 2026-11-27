@@ -218,7 +218,7 @@ class TubeLining {
             // (a side road's tube is seen from the ride: its lamps alone, at every level, so its mouth reads as a way
             // through and not as a dark recess, `fittings: 'lamps'`)
             if (near && opts.fittings !== false && opts.fittings !== 'lamps') TubeLining.fit(fittings, k, rows, frames, attr, point, roofOf, share, seg);
-            else if (opts.fittings === 'lamps') TubeLining.fit(fittings, k, rows, frames, attr, point, roofOf, share, { ...seg, lampsOnly: true });
+            else if (opts.fittings === 'lamps') TubeLining.fit(lining, k, rows, frames, attr, point, roofOf, share, { ...seg, lampsOnly: true });
         }
         return parts;
     }
@@ -406,12 +406,13 @@ class TubeLining {
         const down = [0, -1, 0];
         // A box under the roof from t0 to t1 along, lat0 to lat1 across, its bottom `deep` under the roof: its bottom
         // and its four sides (no top: it hangs a hand under the roof, never in the roof's plane)
-        const hung = (t0, t1, lat0, lat1, deep, gap, kind, color, bottomKind = kind, bottomColor = color) => {
+        const hung = (t0, t1, lat0, lat1, deep, gap, kind, color, bottomKind = kind, bottomColor = color, bare = false) => {
             const r = (t) => roofOf(k, t);
             const p = (t, lat, h) => point(k, t, lat, h);
             const hb0 = r(t0) - gap - deep, hb1 = r(t1) - gap - deep, ht0 = r(t0) - gap, ht1 = r(t1) - gap;
             const uv = [[0, 0], [1, 0], [1, 1], [0, 1]];
             TubeLining.quad(buf, p(t0, lat0, hb0), p(t1, lat0, hb1), p(t1, lat1, hb1), p(t0, lat1, hb0), down, bottomKind, bottomColor, (q, j) => attr(k, [t0, t1, t1, t0][j], [lat0, lat0, lat1, lat1][j], [hb0, hb1, hb1, hb0][j], uv[j][0], uv[j][1]), share);
+            if (bare) return;
             const along = [(fa.ax + fb.ax) / 2, 0, (fa.az + fb.az) / 2], right = [(fa.rx + fb.rx) / 2, 0, (fa.rz + fb.rz) / 2];
             for (const [lat, n] of [[lat0, right.map(v => -v)], [lat1, right]]) TubeLining.quad(buf, p(t0, lat, hb0), p(t1, lat, hb1), p(t1, lat, ht1), p(t0, lat, ht0), n, kind, color, (q, j) => attr(k, [t0, t1, t1, t0][j], lat, [hb0, hb1, ht1, ht0][j]), share);
             for (const [t, n, hb, ht] of [[t0, along.map(v => -v), hb0, ht0], [t1, along, hb1, ht1]]) TubeLining.quad(buf, p(t, lat0, hb), p(t, lat1, hb), p(t, lat1, ht), p(t, lat0, ht), n, kind, color, (q, j) => attr(k, t, [lat0, lat1, lat1, lat0][j], [hb, hb, ht, ht][j]), share);
@@ -426,7 +427,10 @@ class TubeLining {
             if (!(s >= a.s && s < b.s)) continue;
             // (whole: a lamp that reaches past the segment's end is laid on along its way)
             const t0 = tOf(s - Lp.long / 2), t1 = tOf(s + Lp.long / 2);
-            hung(t0, t1, -Lp.wide / 2, Lp.wide / 2, Lp.deep, Lp.gap, K.metal, C.metal, K.lens, C.lens);
+            // (a side road's lamp is its lens alone, flush a few centimetres under the roof, in the lining's mesh: a side
+            // chunk keeps its three meshes)
+            if (opts.lampsOnly) hung(t0, t1, -Lp.wide / 2, Lp.wide / 2, 0, StructureStyles.LENS_GAP_M, K.lens, C.lens, K.lens, C.lens, true);
+            else hung(t0, t1, -Lp.wide / 2, Lp.wide / 2, Lp.deep, Lp.gap, K.metal, C.metal, K.lens, C.lens);
         }
         if (opts.lampsOnly) return;
         // A conduit beside the lamps' line, the length of the segment

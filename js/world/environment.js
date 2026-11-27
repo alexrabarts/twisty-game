@@ -869,7 +869,11 @@ class WorldEnvironment {
                     const width = Math.max(3, RoadSurface.realWidth(classOf(branch.edgeId)));
                     const reach = Math.min(16, (width / 2 + 2.5) / Math.max(0.4, Math.abs(lean)));
                     const key = lean > 0 ? 'right' : 'left';
+                    // (and the rows the side road's own tube opens across, out to its verges' edges: a ride tube's wall is left
+                    // out there only, TubeLining.run `mouth`)
+                    const tube = Math.min(16, (width / 2 + RoadSurface.VERGE_M) / Math.max(0.4, Math.abs(lean)));
                     points.forEach((p, i) => {
+                        if (Math.abs(p.s - pass.sIn) <= tube) styles[i][key === 'right' ? 'tubeMouthR' : 'tubeMouthL'] = true;
                         if (Math.abs(p.s - pass.sIn) > reach) return;
                         styles[i][key === 'right' ? 'mouthR' : 'mouthL'] = true;
                         if (styles[i][key] === E.solid) styles[i][key] = E.broken;

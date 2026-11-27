@@ -74,6 +74,9 @@ class RoadMesh {
     static get PIER_SINK_M() { return 0.5; }
     // Metres between a deck's piers, and how far past a road's verge a pier keeps
     static get PIER_EVERY_M() { return 24; }
+    // A side road's deck's pier, across and along its deck: no wider than a pier (2 m: wider is a wall,
+    // tests/unit/world-environment.test.js)
+    static get SIDE_PIER_M() { return [2, 1.6]; }
     static get PIER_CLEAR_M() { return 0.3; }
     // How far a retaining wall's end returns under the road where it has no coping of its own over it
     static get WALL_RETURN_M() { return 0.6; }
@@ -608,7 +611,7 @@ class RoadMesh {
                 // (a row where the section's drawing starts or ends, or the tube's kind changes, keeps the rock's face
                 // on the wall's line, so a neighbour at another level of detail or of another kind meets it)
                 const turn = i > from && (rows[i - 1].tubeRun || plain(rows[i - 1])) !== run && !!(row.tubeRun && rows[i - 1].tubeRun);
-                tubeRows.push({ l: side(row, -1), r: side(row, 1), s: along[i], inM: depth ? depth[i] : row.tubeIn, cap: row.tubeCap, roof, floor: floor(row), pin: i === from || i === to || turn || (i < to && rows[i + 1].tubeRun !== row.tubeRun), gallery: run.gallery, rock: run.rock, open: run.open, shotcrete: run.shotcrete, profile: run.profile || 'box', mouth: { l: !!row.mouthL, r: !!row.mouthR } });
+                tubeRows.push({ l: side(row, -1), r: side(row, 1), s: along[i], inM: depth ? depth[i] : row.tubeIn, cap: row.tubeCap, roof, floor: floor(row), pin: i === from || i === to || turn || (i < to && rows[i + 1].tubeRun !== row.tubeRun), gallery: run.gallery, rock: run.rock, open: run.open, shotcrete: run.shotcrete, profile: run.profile || 'box', mouth: { l: !!row.tubeMouthL, r: !!row.tubeMouthR } });
             }
             const whole = (rows[from].tubeRun || plain(rows[from])).tube;
             TubeLining.run(lining, tubeRows, { lod, groundAt, run: whole });
@@ -854,16 +857,17 @@ class RoadMesh {
     static get LOW_DECK_M() { return 5; }
     static get LOW_DECK_SINK_M() { return 0.8; }
     static lowDeck(out, rows, from, to, groundAt, guard, ends, style) {
-        // (a girder's underside steps in per segment: a low deck is a beam's, StructureStyles.overpass gives a girder
-        // only to a long or high one)
-        if (style.deck === 'girder') return;
         const D = RoadMesh.DECK_M, I = StructureBuild.BEAM_IN_M, L = RoadMesh.LOW_DECK_M, sink = RoadMesh.LOW_DECK_SINK_M;
-        // (each wall's top on the deck's own corner under its edge beam, as StructureBuild.deck lays it: its edge point
-        // moved BEAM_IN_M toward the other edge, DECK_M down, so the two share their corners)
+        // (each wall's top on the deck's own corner under its edge beam, or under a girder its box's web, as
+        // StructureBuild.deck steps the segment in: its edge point moved in toward the other edge, DECK_M down)
         const edge = (row, sign) => { const q = RoadMesh.place(row, sign * (row.width / 2 + RoadMesh.BRIDGE_DECK_M)); return [q.x, row.y, q.z]; };
-        const under = (row, sign) => {
+        const inset = (a, b) => {
+            const span = Math.min(Math.hypot(edge(a, 1)[0] - edge(a, -1)[0], edge(a, 1)[2] - edge(a, -1)[2]), Math.hypot(edge(b, 1)[0] - edge(b, -1)[0], edge(b, 1)[2] - edge(b, -1)[2]));
+            return style.deck === 'girder' && span > 4 ? span * 0.26 + 0.6 : I;
+        };
+        const under = (row, sign, m) => {
             const e = edge(row, sign), o = edge(row, -sign), len = Math.hypot(o[0] - e[0], o[2] - e[2]) || 1;
-            const p = [e[0] + (o[0] - e[0]) / len * I, e[1] - D, e[2] + (o[2] - e[2]) / len * I];
+            const p = [e[0] + (o[0] - e[0]) / len * m, e[1] - D, e[2] + (o[2] - e[2]) / len * m];
             const land = groundAt(p[0], p[2]);
             return Number.isFinite(land) && p[1] - land < L ? { p, foot: land - sink } : null;
         };
@@ -876,13 +880,15 @@ class RoadMesh {
         };
         for (const sign of [-1, 1]) {
             for (let i = from; i < to; i++) {
-                const a = under(rows[i], sign), b = under(rows[i + 1], sign);
+                const m = inset(rows[i], rows[i + 1]);
+                const a = under(rows[i], sign, m), b = under(rows[i + 1], sign, m);
                 if (a && b && clear(a, b)) face(a, b);
             }
         }
-        for (const [on, i] of [[ends[0], from], [ends[1], to]]) {
-            if (!on) continue;
-            const l = under(rows[i], -1), r = under(rows[i], 1);
+        for (const [on, i, j] of [[ends[0], from, from + 1], [ends[1], to, to - 1]]) {
+            if (!on || j < from || j > to) continue;
+            const m = inset(rows[Math.min(i, j)], rows[Math.max(i, j)]);
+            const l = under(rows[i], -1, m), r = under(rows[i], 1, m);
             if (l && r && clear(l, r)) face(l, r);
         }
     }
@@ -2852,10 +2858,9 @@ class RoadMesh {
             for (const key of ['l', 'r']) StructureBuild.parapet(out, rails[key].filter(seg => segStyle[seg.k] === style), RoadMesh.PARAPET_W_M, H, style, colors.concrete);
         }
         yield;
-        // (sized to the deck it carries, as the ride's are: a cap most of the deck's width, so a pier does not read as a
-        // post under a 24 m span; placed and kept clear of every road at that size)
-        const across = sides.length ? Math.hypot(sides[0].r[0] - sides[0].l[0], sides[0].r[2] - sides[0].l[2]) : 0;
-        const piers = RoadMesh.placePiers(out, runs, { groundAt, footAt, guard, styles: runStyles, width: Math.max(RoadMesh.PIER_W_M, Math.min(3.5, across * 0.55)), depth: Math.max(RoadMesh.PIER_D_M, 1.6) });
+        // (a side road's pier as wide as a pier may be, SIDE_PIER_M, not a post under a 24 m span; placed and kept clear
+        // of every road at that size)
+        const piers = RoadMesh.placePiers(out, runs, { groundAt, footAt, guard, styles: runStyles, width: RoadMesh.SIDE_PIER_M[0], depth: RoadMesh.SIDE_PIER_M[1] });
         yield;
         // The lining of each tube run: metres along from the road's first row, metres in from its portals (none where
         // it goes on past the drawn rows), its rock on the side where the land outside stands higher. A side road is

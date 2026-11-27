@@ -97,17 +97,15 @@ class StructureStyles {
 
     // The style of an overpass whose deck starts at (x, z): `length` its run's metres, `height` the most its deck
     // stands over the land, `ride` whether it is the ride's own bridge. Long high decks are girders on round columns;
-    // short low ones slabs or stone-faced; a side road may have a steel rail. The ride's own bridge is a slab or
-    // stone-faced, with a solid parapet (its physics wall stands there)
+    // short low ones slabs or stone-faced; a side road may have a steel rail. The ride's own bridge keeps a solid
+    // parapet (its physics wall stands there)
     static overpass({ x = 0, z = 0, length = 0, height = 0, ride = false } = {}) {
         const h = StructureStyles.hash(x, z, ride ? 1 : 0);
         let name;
         if (length > 60 || height > 14) name = h < 0.75 ? 'girder' : 'slab';
         else if (height < 6 && length < 40) name = h < 0.4 ? 'stone' : h < 0.7 ? 'slab' : 'steel';
         else name = h < 0.45 ? 'slab' : h < 0.7 ? 'girder' : h < 0.85 ? 'stone' : 'steel';
-        // (picked by its block of ride, not its size, a ride bridge is a slab or stone-faced: its low deck is closed by
-        // walls under its edge beams, RoadMesh.lowDeck)
-        if (ride && (name === 'steel' || name === 'girder')) name = 'slab';
+        if (ride && name === 'steel') name = 'slab';
         return { name, ...StructureStyles.OVERPASS[name] };
     }
 
@@ -122,6 +120,9 @@ class StructureStyles {
     // carriageway's edge, so the full roof stands over the whole carriageway) and from how far under the roof it rises
     // (`riseM`). Over the walkway the roof is lower than the box's: the camera reads it (StructureStyles.roofAt)
     static get ROUND() { return { inM: RoadMesh.TUBE_WALL_M - RoadMesh.TUBE_FLOOR_M, riseM: 3.0, pieces: 6, farPieces: 6, minRoofM: 5.5 }; }
+
+    // How far under a side tube's roof its lamps' lenses hang (TubeLining.fit `lampsOnly`): out of the roof's plane
+    static get LENS_GAP_M() { return 0.04; }
 
     // The roof's height over the floor `d` metres in from the nearer wall of a tube `roof` high, by its profile
     static roofAt(profile, d, roof) {
