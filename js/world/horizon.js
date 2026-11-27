@@ -176,4 +176,13 @@ class FarLand {
         });
         return out;
     }
+
+    // The far land of a world's data as drawn: far.bin's grid (Horizon.build, with its cover shares and sinks) and the
+    // levels round it (FarLand.build). {horizon, levels, triangles}
+    static assemble(far, cover, sinks, levels) {
+        const horizon = Horizon.build(far, cover, sinks);
+        const outer = FarLand.build(levels || [], far);
+        const triangles = horizon.triangles + outer.reduce((n, o) => n + o.triangles, 0);
+        return { horizon: horizon.mesh, levels: outer.map(o => o.mesh), triangles };
+    }
 }

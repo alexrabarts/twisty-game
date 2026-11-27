@@ -333,8 +333,8 @@ class Scenery {
     static get HOUSE_SCALE_MIN() { return 0.45; }
     // How a building meets the land (Scenery.seat): its floor (the model's y 0, its door sill) stands FLOOR_SINK_M under
     // the highest land under its walls, so no door is sunk, and a footing of stone runs from FOOTING_UNDER_M under the
-    // lowest land up FOOTING_OVER_M into the walls, so no corner floats. A model's walls are its parts named `wall`, or
-    // its plan box FOOTING_INSET_M in from every side (the eaves stand out past the walls)
+    // lowest land up FOOTING_OVER_M into the walls, so no corner floats. A model's walls are its plinth (Scenery.wallsOf),
+    // or its plan box FOOTING_INSET_M in from every side (the eaves stand out past the walls)
     static get FLOOR_SINK_M() { return 0.1; }
     static get FOOTING_UNDER_M() { return 0.3; }
     static get FOOTING_OVER_M() { return 0.3; }
@@ -389,7 +389,7 @@ class Scenery {
                 trees.push({ kind: species.kind, name: species.name, node: species.node, share: species.share, high: species.high, parts: lods.mid, lods });
             }
             if (trees.length === before) for (const name of ['bush_round', 'bush_low']) if (bush.meshes.get(name)) trees.push({ kind: 'bush', name, parts: Vegetation.shape(bush.meshes.get(name), 'bush') });
-            const homes = [...houses.meshes.keys()].filter(name => name.startsWith('house_') && !name.includes(':')).sort().map(name => ({ name, parts: LandShade.adopt(houses.meshes.get(name)) }));
+            const homes = [...houses.meshes.keys()].filter(name => name.startsWith('house_') && !name.includes(':')).sort().map(name => ({ name, parts: LandShade.adopt(houses.meshes.get(name)), wallBox: Scenery.wallBoxOf(houses.places, name) }));
             if (!trees.length || !homes.length) return null;
             return { trees, houses: homes };
         } catch (error) {
@@ -568,11 +568,11 @@ class Scenery {
         return false;
     }
 
-    // The lowest and highest drawn land under a rectangle (2 m apart at most, the corners included): {low, high}, or
-    // null where a tile under it is not resident
+    // The lowest and highest drawn land under a rectangle (1 m apart at most, the corners included): {low, high}, or
+    // null where a tile under it is not resident. (2 m apart, a hut's door stood up to 0.2 m in the land between them)
     seat(x, z, heading, along, across) {
         let low = Infinity, high = -Infinity;
-        for (const [px, pz] of Scenery.rectPoints(x, z, heading, along, across)) {
+        for (const [px, pz] of Scenery.rectPoints(x, z, heading, along, across, 1)) {
             const y = this.ground.tileHeight(px, pz);
             if (y === null || !Number.isFinite(y)) return null;
             low = Math.min(low, y);
@@ -650,19 +650,37 @@ class Scenery {
         return Math.min(b.h || 6, 2.2 + 0.6 * Math.min(b.w, b.d));
     }
 
-    // A model's walls in its own plan: { x0, x1, z0, z1 } of its parts named `wall`, or of all its parts
-    // FOOTING_INSET_M in from every side (measured once)
+    // A house file's walls in its own plan, from its anchors `<house>:walls_min` and `<house>:walls_max` (the corners
+    // of its plinth, village_houses.py shell): { x0, x1, z0, z1 }, or null for a file without them
+    static wallBoxOf(places, name) {
+        const a = places && places.get(`${name}:walls_min`), b = places && places.get(`${name}:walls_max`);
+        if (!a || !b) return null;
+        return { x0: Math.min(a.x, b.x), x1: Math.max(a.x, b.x), z0: Math.min(a.z, b.z), z1: Math.max(a.z, b.z) };
+    }
+
+    // The plinth of a model reaches under its y 0 (its door sill) by this much at least, and nothing else does
+    static get PLINTH_UNDER_M() { return 0.3; }
+
+    // A model's walls in its own plan: { x0, x1, z0, z1 } from its file's anchors (wallBox), else of the faces that
+    // reach PLINTH_UNDER_M under its y 0 (the plinth stands under every wall), else of all its parts FOOTING_INSET_M in
+    // from every side (measured once). (They were the parts named `wall`, the plaster: the barn's only plaster is its
+    // chimney's, so it was seated on the land under its chimney, its uphill corner sunk and its downhill side floating)
     static wallsOf(shape) {
         if (!shape.walls) {
-            const all = new THREE.Box3(), walls = new THREE.Box3();
+            if (shape.wallBox) {
+                shape.walls = { ...shape.wallBox };
+                return shape.walls;
+            }
+            const all = new THREE.Box3(), plinth = new THREE.Box3(), v = new THREE.Vector3();
             for (const part of shape.parts) {
                 part.geometry.computeBoundingBox();
                 all.union(part.geometry.boundingBox);
-                if (part.material && part.material.name === 'wall') walls.union(part.geometry.boundingBox);
+                const pos = part.geometry.attributes.position;
+                for (let i = 0; i < pos.count; i++) if (pos.getY(i) < -Scenery.PLINTH_UNDER_M) plinth.expandByPoint(v.fromBufferAttribute(pos, i));
             }
             const inset = Scenery.FOOTING_INSET_M;
-            shape.walls = !walls.isEmpty()
-                ? { x0: walls.min.x, x1: walls.max.x, z0: walls.min.z, z1: walls.max.z }
+            shape.walls = !plinth.isEmpty() && plinth.max.y < all.min.y + 0.5
+                ? { x0: plinth.min.x, x1: plinth.max.x, z0: plinth.min.z, z1: plinth.max.z }
                 : { x0: Math.min(all.min.x + inset, (all.min.x + all.max.x) / 2), x1: Math.max(all.max.x - inset, (all.min.x + all.max.x) / 2), z0: Math.min(all.min.z + inset, (all.min.z + all.max.z) / 2), z1: Math.max(all.max.z - inset, (all.min.z + all.max.z) / 2) };
         }
         return shape.walls;

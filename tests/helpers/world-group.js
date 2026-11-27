@@ -12,7 +12,11 @@ const FAR = { x: 1e9, y: 0, z: 1e9 };
 // player on the lane line (it stops at red lights and never rides into what is on the road ahead of it), or none.
 // `cars` keeps the world's car. `onFrame({t, traffic, riders, proxy, mine, playerS})` (`mine` the player as traffic reads it) sees each frame; the ride ends at
 // `seconds` or when `until` says so. Returns {traffic, riders, proxy, overlaps, draws}.
-export function groupRide(game, env, { rider, seed = 11, at = null, player = null, cars = false, seconds = 600, onFrame = null, until = null }) {
+// `frameS(k)` rides it as the game draws it: the k-th drawn frame lasts that many seconds, the ride steps at 60 a second
+// as many times as the frames' time holds (0, 1 or more a frame), and each drawn frame puts traffic between its last two
+// steps (Traffic.drawn) and calls `onDraw({t, alpha, traffic, riders, proxy, playerS, drawnPlayer})`, where drawnPlayer
+// (and drawnYaw) is the player's position (and heading) drawn the same way (Vehicle.applyRenderInterpolation).
+export function groupRide(game, env, { rider, seed = 11, at = null, player = null, cars = false, seconds = 600, onFrame = null, until = null, frameS = null, onDraw = null }) {
     const { THREE, Traffic, Roadworks } = game;
     const route = env.route, works = env.roadworks;
     const sOf = v => route.fromUnits(v.currentSegment + v.segmentProgress);
@@ -47,8 +51,12 @@ export function groupRide(game, env, { rider, seed = 11, at = null, player = nul
         }
         const start = drawn();
         const overlaps = [];
-        for (let f = 0; f < 60 * seconds; f++) {
+        const prevPlayer = new THREE.Vector3(), drawnPlayer = new THREE.Vector3();
+        let prevYaw = 0, drawnYaw = 0;
+        let f = 0, acc = 0, k = 0, done = false;
+        const step = () => {
             const t = f * DT;
+            if (proxy) { prevPlayer.copy(proxy.bikeGroup.position); prevYaw = proxy.bikeGroup.rotation.y; }
             works.step(DT);
             let playerS = null;
             if (proxy) {
@@ -83,7 +91,33 @@ export function groupRide(game, env, { rider, seed = 11, at = null, player = nul
                 }
             }
             if (onFrame) onFrame({ t, traffic, riders, proxy, mine, playerS, overlaps });
-            if (until && until({ t, traffic, riders, proxy, playerS, overlaps })) break;
+            if (until && until({ t, traffic, riders, proxy, playerS, overlaps })) done = true;
+            f++;
+            return playerS;
+        };
+        if (!frameS) {
+            while (!done && f < 60 * seconds) step();
+        } else {
+            let playerS = null;
+            while (!done && f < 60 * seconds) {
+                acc += frameS(k++);
+                traffic.stepped();
+                while (!done && acc >= DT) {
+                    playerS = step();
+                    acc -= DT;
+                }
+                const alpha = acc / DT;
+                traffic.drawn(alpha);
+                if (proxy) {
+                    drawnPlayer.lerpVectors(prevPlayer, proxy.bikeGroup.position, alpha);
+                    let turn = proxy.bikeGroup.rotation.y - prevYaw;
+                    if (turn > Math.PI) turn -= 2 * Math.PI;
+                    else if (turn < -Math.PI) turn += 2 * Math.PI;
+                    drawnYaw = prevYaw + turn * alpha;
+                }
+                if (onDraw) onDraw({ t: f * DT + acc, alpha, traffic, riders, proxy, playerS, drawnPlayer, drawnYaw });
+            }
+            traffic.stepped();
         }
         return { traffic, riders, proxy, overlaps, draws: drawn() - start };
     });

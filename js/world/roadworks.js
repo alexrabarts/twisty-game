@@ -746,13 +746,52 @@ class Roadworks {
         for (let i = 0; i < 3; i++) out.shades.push(color[0], color[1], color[2]);
     }
 
-    static box(out, x0, x1, y0, y1, z0, z1, color, top = true) {
+    // `skip` leaves out the named sides ('x0', 'x1', 'z0', 'z1'), for a side drawn with its openings (`wall`)
+    static box(out, x0, x1, y0, y1, z0, z1, color, top = true, skip = '') {
         const f = Roadworks.face;
-        f(out, [x0, y0, z0], [x0, y1, z0], [x1, y1, z0], [x1, y0, z0], color);
-        f(out, [x1, y0, z1], [x1, y1, z1], [x0, y1, z1], [x0, y0, z1], color);
-        f(out, [x0, y0, z1], [x0, y1, z1], [x0, y1, z0], [x0, y0, z0], color);
-        f(out, [x1, y0, z0], [x1, y1, z0], [x1, y1, z1], [x1, y0, z1], color);
+        if (!skip.includes('z0')) f(out, [x0, y0, z0], [x0, y1, z0], [x1, y1, z0], [x1, y0, z0], color);
+        if (!skip.includes('z1')) f(out, [x1, y0, z1], [x1, y1, z1], [x0, y1, z1], [x0, y0, z1], color);
+        if (!skip.includes('x0')) f(out, [x0, y0, z1], [x0, y1, z1], [x0, y1, z0], [x0, y0, z0], color);
+        if (!skip.includes('x1')) f(out, [x1, y0, z0], [x1, y1, z0], [x1, y1, z1], [x1, y0, z1], color);
         if (top) f(out, [x0, y1, z0], [x0, y1, z1], [x1, y1, z1], [x1, y1, z0], color);
+    }
+
+    // A box's side with openings cut into it: the side square to `axis` ('x' or 'z') at `at`, over a0..a1 along the
+    // other level axis and y0..y1, less each hole [a0, a1, y0, y1]. A door or a pane laid in the opening is in no
+    // face's plane, so the depth buffer never has to choose between the two (a pane laid 5 mm proud fought its wall
+    // from 100 m off)
+    static wall(out, axis, at, a0, a1, y0, y1, holes, color) {
+        const as = [...new Set([a0, a1, ...holes.flatMap(h => [h[0], h[1]])])].sort((p, q) => p - q);
+        const ys = [...new Set([y0, y1, ...holes.flatMap(h => [h[2], h[3]])])].sort((p, q) => p - q);
+        const point = (a, y) => (axis === 'x' ? [at, y, a] : [a, y, at]);
+        // Each column between the holes' edges as few pieces as it has runs of wall from bottom to top
+        for (let i = 0; i + 1 < as.length; i++) {
+            const ma = (as[i] + as[i + 1]) / 2;
+            let start = null;
+            for (let j = 0; j + 1 < ys.length; j++) {
+                const my = (ys[j] + ys[j + 1]) / 2;
+                const open = holes.some(h => ma > h[0] && ma < h[1] && my > h[2] && my < h[3]);
+                if (!open && start === null) start = ys[j];
+                if ((open || j + 2 === ys.length) && start !== null) {
+                    const top = open ? ys[j] : ys[j + 1];
+                    Roadworks.face(out, point(as[i], start), point(as[i], top), point(as[i + 1], top), point(as[i + 1], start), color);
+                    start = null;
+                }
+            }
+        }
+    }
+
+    // An opening's pane set `depth` into its wall (`outside` the sign of the wall's outward axis), with its four
+    // reveals in the wall's colour: the same hole as `wall` cuts
+    static pane(out, axis, at, outside, hole, depth, color, reveal) {
+        const [a0, a1, y0, y1] = hole, inner = at - outside * depth;
+        const point = (x, a, y) => (axis === 'x' ? [x, y, a] : [a, y, x]);
+        const F = Roadworks.face;
+        F(out, point(inner, a0, y0), point(inner, a0, y1), point(inner, a1, y1), point(inner, a1, y0), color);
+        F(out, point(at, a0, y0), point(inner, a0, y0), point(inner, a1, y0), point(at, a1, y0), reveal);
+        F(out, point(at, a0, y1), point(at, a1, y1), point(inner, a1, y1), point(inner, a0, y1), reveal);
+        F(out, point(at, a0, y0), point(at, a0, y1), point(inner, a0, y1), point(inner, a0, y0), reveal);
+        F(out, point(at, a1, y0), point(inner, a1, y0), point(inner, a1, y1), point(at, a1, y1), reveal);
     }
 
     // A colour made lighter or darker by k
@@ -879,7 +918,7 @@ class Roadworks {
                     F(out, [x0, y0, -depth], [x0, y1, -depth], [x1, y1, -depth], [x1, y0, -depth], color);
                     F(out, [x1, y0, depth], [x1, y1, depth], [x0, y1, depth], [x0, y0, depth], color);
                     if (k % 2) {
-                        const d = depth + 0.003, s0 = x - 0.03, s1 = x + 0.03, v0 = y0 + 0.04, v1 = y1 - 0.04;
+                        const d = depth + 0.008, s0 = x - 0.03, s1 = x + 0.03, v0 = y0 + 0.04, v1 = y1 - 0.04;
                         F(out, [s0, v0, -d], [s0, v1, -d], [s1, v1, -d], [s1, v0, -d], C.silver);
                         F(out, [s1, v0, d], [s1, v1, d], [s0, v1, d], [s0, v0, d], C.silver);
                     }
@@ -961,7 +1000,7 @@ class Roadworks {
                     B(out, x0, x0 + 0.35, 0.31, top, z0, z0 + 0.35, Roadworks.shade(C.sack, 0.92 + 0.08 * ((r * 3 + k) % 3)));
                 }
             }
-            B(out, -0.36, 0.36, 0.69, 0.7, -0.2, 0.2, Roadworks.shade(C.sack, 0.96));
+            B(out, -0.355, 0.355, 0.69, 0.71, -0.2, 0.2, Roadworks.shade(C.sack, 0.96));
         });
         // A small roller: two drums of twelve faces with their end discs, a yellow frame and the engine under a hood with
         // its grille, the seat and its back, the steering column and wheel, and the side rails
@@ -971,7 +1010,7 @@ class Roadworks {
                 for (const x of [-0.6, 0.6]) Roadworks.disc(out, x, 0.38, z, 0.37, 12, Roadworks.shade(C.steel, 0.8), x > 0);
             }
             B(out, -0.5, 0.5, 0.45, 1.05, -0.45, 0.45, C.yellow);
-            B(out, -0.42, 0.42, 0.62, 0.95, 0.45, 0.47, C.black, false);
+            B(out, -0.42, 0.42, 0.62, 0.95, 0.44, 0.47, C.black);
             B(out, -0.25, 0.25, 1.05, 1.15, -0.2, 0.2, C.black);
             B(out, -0.25, 0.25, 1.15, 1.55, -0.2, -0.12, C.black);
             B(out, -0.02, 0.02, 1.05, 1.42, 0.25, 0.29, C.metal);
@@ -984,22 +1023,22 @@ class Roadworks {
         // the front with the bucket down, a ram on the boom; the dozer blade at the front of the tracks
         geo.digger = make(out => {
             for (const [x0, x1] of [[-0.75, -0.4], [0.4, 0.75]]) {
-                B(out, x0 + 0.004, x1 - 0.004, 0.06, 0.4, -1.08, 1.08, C.black);
+                B(out, x0 + 0.01, x1 - 0.01, 0.06, 0.4, -1.08, 1.08, C.black);
                 B(out, x0, x1, 0.01, 0.06, -0.95, 0.95, C.black);
                 for (const z of [-1.0, 1.0]) Roadworks.drum(out, x0, x1, 0.2, z, 0.15, 8, C.black);
                 for (const z of [-0.55, -0.18, 0.18, 0.55]) Roadworks.disc(out, x0 < 0 ? x0 + 0.002 : x1 - 0.002, 0.16, z, 0.09, 6, C.metal, x0 > 0);
             }
             B(out, -0.75, 0.75, 0.42, 0.45, -1.15, 1.15, C.black);
             B(out, -0.65, 0.65, 0.45, 1.25, -0.8, 0.7, C.yellow);
-            B(out, -0.62, 0.62, 0.5, 1.1, -0.8, -0.78, C.black, false);
+            B(out, -0.62, 0.62, 0.5, 1.1, -0.83, -0.79, C.black);
             for (const [x, z] of [[-0.55, -0.75], [0.33, -0.75], [-0.55, 0.08], [0.33, 0.08]]) B(out, x, x + 0.04, 1.25, 2.3, z, z + 0.04, C.yellow);
             B(out, -0.53, 0.35, 1.3, 2.25, -0.73, 0.1, C.glass);
             B(out, -0.6, 0.4, 2.3, 2.38, -0.8, 0.15, C.yellow);
             B(out, 0.4, 0.6, 1.0, 2.0, 0.6, 0.85, C.yellow);
-            B(out, 0.44, 0.56, 1.5, 1.95, 0.85, 0.92, C.metal);
+            B(out, 0.44, 0.56, 1.5, 1.95, 0.86, 0.92, C.metal);
             B(out, 0.42, 0.58, 0.35, 1.1, 0.9, 1.1, C.yellow);
             B(out, 0.3, 0.7, 0.05, 0.4, 0.85, 1.2, C.metal);
-            B(out, 0.32, 0.68, 0.06, 0.1, 1.16, 1.2, C.black);
+            B(out, 0.32, 0.68, 0.06, 0.1, 1.16, 1.21, C.black);
         });
         // A stack of pipes on two timber bearers: three and two on top, six-sided, open at the ends, 3 m along the road
         geo.pipes = make(out => {
@@ -1039,40 +1078,47 @@ class Roadworks {
             }
             B(out, -0.36, 0.36, 0.22, 0.28, 0.15, 0.21, C.metal);
             B(out, -0.42, 0.42, 0.3, 1.15, -0.5, 0.9, C.green);
-            for (let k = 0; k < 3; k++) for (const x of [-0.425, 0.42]) B(out, x, x + 0.005, 0.6 + k * 0.12, 0.64 + k * 0.12, -0.3, 0.6, Roadworks.shade(C.green, 0.6), false);
-            B(out, -0.425, 0.425, 1.0, 1.02, -0.5, 0.9, Roadworks.shade(C.green, 0.75), false);
+            // (each louvre's back is inside the housing and left out, so no face of it lies in the housing's)
+            for (let k = 0; k < 3; k++) for (const [x0, x1, back] of [[-0.428, -0.415, 'x1'], [0.415, 0.428, 'x0']]) B(out, x0, x1, 0.6 + k * 0.12, 0.64 + k * 0.12, -0.3, 0.6, Roadworks.shade(C.green, 0.6), true, back);
+            B(out, -0.425, 0.425, 1.0, 1.02, -0.505, 0.905, Roadworks.shade(C.green, 0.75), false);
             B(out, -0.04, 0.04, 0.36, 0.44, -1.1, -0.5, C.metal);
             B(out, -0.03, 0.03, 0.01, 0.36, -1.02, -0.96, C.metal);
         });
         // The site cabin: a small hut on two skids, a door and a window on each long side
         geo.cabin = make(out => {
             for (const x of [-0.6, 0.45]) B(out, x, x + 0.15, 0.01, 0.12, -1.5, 1.5, C.metal);
-            B(out, -0.75, 0.75, 0.12, 2.2, -1.5, 1.5, C.panel);
+            B(out, -0.75, 0.75, 0.12, 2.2, -1.5, 1.5, C.panel, true, 'x0 x1');
             B(out, -0.8, 0.8, 2.2, 2.28, -1.55, 1.55, C.white);
+            // Each long side with its door and window cut in, each set into the wall
+            const door = [-1.2, -0.4, 0.14, 2.0], window = [0.1, 1.1, 1.1, 1.8];
             for (const sign of [-1, 1]) {
-                const x = sign * 0.755;
-                const quad = (z0, z1, y0, y1, color) => (sign < 0
-                    ? Roadworks.face(out, [x, y0, z1], [x, y1, z1], [x, y1, z0], [x, y0, z0], color)
-                    : Roadworks.face(out, [x, y0, z0], [x, y1, z0], [x, y1, z1], [x, y0, z1], color));
-                quad(-1.2, -0.4, 0.14, 2.0, C.grey);
-                quad(0.1, 1.1, 1.1, 1.8, C.glass);
+                Roadworks.wall(out, 'x', sign * 0.75, -1.5, 1.5, 0.12, 2.2, [door, window], C.panel);
+                Roadworks.pane(out, 'x', sign * 0.75, sign, door, 0.03, C.grey, C.panel);
+                Roadworks.pane(out, 'x', sign * 0.75, sign, window, 0.05, C.glass, C.panel);
             }
         });
         // A portable toilet: a dark base, a blue cabin with its door toward -z, a white roof
         geo.toilet = make(out => {
             B(out, -0.57, 0.57, 0.01, 0.14, -0.57, 0.57, C.black);
-            B(out, -0.55, 0.55, 0.14, 2.2, -0.55, 0.55, C.blue);
+            B(out, -0.55, 0.55, 0.14, 2.2, -0.55, 0.55, C.blue, true, 'z0');
             B(out, -0.58, 0.58, 2.2, 2.3, -0.58, 0.58, C.white);
-            Roadworks.face(out, [-0.35, 0.2, -0.555], [-0.35, 1.95, -0.555], [0.35, 1.95, -0.555], [0.35, 0.2, -0.555], C.white);
+            const door = [-0.35, 0.35, 0.2, 1.95];
+            Roadworks.wall(out, 'z', -0.55, -0.55, 0.55, 0.14, 2.2, [door], C.blue);
+            Roadworks.pane(out, 'z', -0.55, -1, door, 0.02, C.white, C.blue);
         });
         // A parked works van: its nose toward -z, a glazed cab, a box body and an amber bar on the roof
         geo.van = make(out => {
             for (const z of [-1.2, 1.2]) B(out, -0.75, 0.75, 0.01, 0.6, z - 0.3, z + 0.3, C.black);
             B(out, -0.72, 0.72, 0.3, 1.05, -1.9, 1.9, C.white);
-            B(out, -0.7, 0.7, 1.05, 1.85, -1.2, 1.9, C.white);
-            Roadworks.face(out, [-0.64, 1.1, -1.205], [-0.64, 1.75, -1.205], [0.64, 1.75, -1.205], [0.64, 1.1, -1.205], C.glass);
-            Roadworks.face(out, [-0.705, 1.15, -0.4], [-0.705, 1.7, -0.4], [-0.705, 1.7, -1.15], [-0.705, 1.15, -1.15], C.glass);
-            Roadworks.face(out, [0.705, 1.15, -1.15], [0.705, 1.7, -1.15], [0.705, 1.7, -0.4], [0.705, 1.15, -0.4], C.glass);
+            B(out, -0.7, 0.7, 1.05, 1.85, -1.2, 1.9, C.white, true, 'z0 x0 x1');
+            // The windscreen and the cab's side windows, each set into its opening
+            const screen = [-0.64, 0.64, 1.1, 1.75], side = [-1.15, -0.4, 1.15, 1.7];
+            Roadworks.wall(out, 'z', -1.2, -0.7, 0.7, 1.05, 1.85, [screen], C.white);
+            Roadworks.pane(out, 'z', -1.2, -1, screen, 0.03, C.glass, C.white);
+            for (const sign of [-1, 1]) {
+                Roadworks.wall(out, 'x', sign * 0.7, -1.2, 1.9, 1.05, 1.85, [side], C.white);
+                Roadworks.pane(out, 'x', sign * 0.7, sign, side, 0.02, C.glass, C.white);
+            }
             B(out, -0.4, 0.4, 1.85, 1.93, -1.0, -0.85, C.orange);
         });
         // The portable sign's A frame; its triangle face is the atlas's (signFace)
@@ -1081,7 +1127,7 @@ class Roadworks {
                 B(out, x - 0.025, x + 0.025, 0.01, 1.3, -0.2, -0.15, C.metal);
                 B(out, x - 0.025, x + 0.025, 0.01, 0.06, -0.2, 0.25, C.metal);
             }
-            B(out, -0.33, 0.33, 0.55, 0.6, -0.17, -0.12, C.metal);
+            B(out, -0.33, 0.33, 0.55, 0.6, -0.165, -0.12, C.metal);
         });
         // The ridden surfaces from their profiles (the physics reads the same functions)
         const P = Roadworks.PROFILES;
