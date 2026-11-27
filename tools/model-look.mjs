@@ -182,7 +182,7 @@ async function stage(spec) {
 
     const white = new THREE.MeshBasicMaterial({ color: 0xffffff });
     window.__look = { g, spot, subject, crew, menu, places, white, size: { w: innerWidth, h: innerHeight } };
-    return { character: character.id, outfit: spec.outfit || (character.outfits && character.outfits[0] ? character.outfits[0].id : null), places: Object.keys(places), renderer: (() => {
+    return { character: character.id, outfit: spec.outfit || (character.outfits && character.outfits[0] ? character.outfits[0].id : null), places, renderer: (() => {
         const gl = g.renderer.getContext();
         const info = gl.getExtension('WEBGL_debug_renderer_info');
         return info ? gl.getParameter(info.UNMASKED_RENDERER_WEBGL) : gl.getParameter(gl.RENDERER);

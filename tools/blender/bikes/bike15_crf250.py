@@ -53,6 +53,8 @@ PEG = (0.2, 0.41, -0.13)
 SEAT = (0, 0.875, -0.08)
 # Swingarm pivot (y, z)
 PIVOT = (0.43, -0.17)
+# The dual-purpose tyres' block tread: the depth cut between the knobs (m). TWISTY_KNOBS sets it for a variant build
+KNOBS = float(os.environ.get("TWISTY_KNOBS") or 0.012)
 
 COLOURS = {"paint": 0xD0101C, "paint_dark": 0x5A0508, "accent": 0xECECEC, "rim": 0x17181A, "caliper": 0x2B2C30, "fork_gold": 0xB8923E, "spring": 0xC4161C,
            "trim": 0x151618, "seat": 0x131315, "plastic": 0xECECEC}
@@ -73,9 +75,9 @@ EXTRA = {
 
 def wheels(k):
     k.begin("wheel_front", FRONT)
-    E.wheel(k, FRONT, FRONT_R, 0.08, RIM_F, spokes="wire", count=36, hub=0.05)
+    E.wheel(k, FRONT, FRONT_R, 0.08, RIM_F, spokes="wire", count=36, hub=0.05, knobs=KNOBS)
     k.begin("wheel_rear", REAR)
-    E.wheel(k, REAR, REAR_R, 0.12, RIM_R, spokes="wire", count=36, hub=0.055)
+    E.wheel(k, REAR, REAR_R, 0.12, RIM_R, spokes="wire", count=36, hub=0.055, knobs=KNOBS)
     # Sprocket on the left, inboard of the swingarm
     parts.sprocket(k, REAR, -0.082, 0.105)
     k.begin("disc_front", (DISC_SIDE * DISC_X, FRONT[1], FRONT[2]))

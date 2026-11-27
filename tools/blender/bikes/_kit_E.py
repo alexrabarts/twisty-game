@@ -428,8 +428,10 @@ def previews(k, name, height=0.7, reach=1.0, extra=None):
 
 
 def wheel(k, centre, radius, width, rim, spokes="wire", count=32, hub=0.055, seg=None, pair=False, sweep=0.0, rim_mat="rim", spoke_mat=None, tread=True,
-          hub_width=None, blade=1.0):
+          hub_width=None, blade=1.0, knobs=0.0):
     """A road wheel spinning on x: tyre, rim, and either `count` wire spokes laced to the rim's shoulders or `count` cast blades.
+    `knobs` (metres) cuts a block tread that deep between staggered knobs, on finer segments, for a dual-purpose or
+    off-road tyre: the knobs' tops stay at `radius`, so the wheel stands where it stood.
 
     Built at full shape in the distant model too (fewer segments only), since
     the wheel is how a bike is known: a spoked wheel stays spoked."""
@@ -437,7 +439,7 @@ def wheel(k, centre, radius, width, rim, spokes="wire", count=32, hub=0.055, seg
     k.low = False
     try:
         cx, cy, cz = centre
-        seg = seg or (24 if low else 48)
+        seg = seg or (24 if low else (96 if knobs else 48))
         tube = rim + 0.4 * (radius - rim)
         steps = 6 if low else 10
         profile = [(rim - 0.004, -0.34 * width), (rim + 0.012, -0.41 * width)]
@@ -448,12 +450,19 @@ def wheel(k, centre, radius, width, rim, spokes="wire", count=32, hub=0.055, seg
 
         def groove(i, j):
             row = j - 2
+            if knobs and tread and not low:
+                # Blocks two segments long with gaps two long, each pair of rows shifted half a block from the next;
+                # the bead rows and the outermost shoulder rows stay whole
+                if row < 1 or row > steps - 1:
+                    return 0.0
+                shift = 0 if (row // 2) % 2 == 0 else 2
+                return 0.0 if (i + shift) % 4 in (0, 1) else -knobs
             if not tread or low or row < 2 or row > steps - 2 or row == steps // 2:
                 return 0.0
             lean = row if row < steps // 2 else steps - row
             return -0.006 if (i + lean) % 6 in (0, 1) else 0.0
 
-        k.lathe(profile, centre, "rubber", axis="x", seg=seg, ripple=groove, sharp=50)
+        k.lathe(profile, centre, "rubber", axis="x", seg=seg, ripple=groove, sharp=25 if knobs and not low else 50)
         w = width
         barrel = [(rim + 0.006, -0.4 * w), (rim + 0.007, -0.45 * w), (rim - 0.02, -0.42 * w), (rim - 0.03, -0.18 * w),
                   (rim - 0.03, 0.18 * w), (rim - 0.02, 0.42 * w), (rim + 0.007, 0.45 * w), (rim + 0.006, 0.4 * w)]
