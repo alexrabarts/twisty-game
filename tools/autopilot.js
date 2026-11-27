@@ -44,6 +44,11 @@ window.twistyDev = {
         return ap;
     },
 
+    // How the world pilot stops for a roadworks light: its origin this far short of the line (the bike's front 1.1 m
+    // ahead of it), planned at this share of its braking
+    LIGHT_STOP_M: 4,
+    LIGHT_BRAKE: 0.7,
+
     // The world's pilot: pure pursuit on a look-ahead that grows with speed, and a speed that takes each
     // bend at `apFactor` of the speed its curvature allows (the lean cap, the grip under the wheels), braking
     // for it in advance. The curvature wanted, capped at the most the lean can give at this speed, gives a lean,
@@ -77,10 +82,14 @@ window.twistyDev = {
                 const corner = Math.min(ap.speed, ap.apFactor * Math.sqrt(g * capTan(s + d) / k));
                 allowed = Math.min(allowed, Math.sqrt(corner * corner + 2 * brake * d));
             }
-            // A roadworks light that is not green ahead (ap.obeyLights, on unless set false): stop at its line
+            // A roadworks light that is not green ahead (ap.obeyLights, on unless set false): stop short of its line,
+            // the bike's front LIGHT_STOP_M from it, planned at LIGHT_BRAKE of the brake. Planned at the whole brake to
+            // 2.5 m from the line, with the brake let off within 1 m/s of the plan, the pilot came to the line at 7 m/s
+            // and, its front past it, read the light no more: it rode into the single lane against the car on its
+            // green (leg 6, roadworks site 5)
             const works = game.environment.roadworks;
             const stop = works && ap.obeyLights !== false ? works.pilotStop(s) : Infinity;
-            if (stop < Infinity) return Math.min(Math.max(allowed, 5), Math.sqrt(2 * brake * Math.max(0, stop - 2.5)));
+            if (stop < Infinity) return Math.min(Math.max(allowed, 5), Math.sqrt(2 * brake * this.LIGHT_BRAKE * Math.max(0, stop - this.LIGHT_STOP_M)));
             return Math.max(allowed, 5);
         };
         input.getSteeringInput = () => {
@@ -103,7 +112,9 @@ window.twistyDev = {
         };
         input.getThrottleInput = () => (ap.on && game.vehicle && game.vehicle.speed < target(game.vehicle.routeS || 0) ? 1 : 0);
         // Hard on the brake for a light, as for a bend over its speed
-        input.getBrakeInput = () => (ap.on && game.vehicle && game.vehicle.speed > target(game.vehicle.routeS || 0) + (game.vehicle.speed < 3 ? 0.2 : 1) ? 1 : 0);
+        // (for a light's line the brake holds to the plan: a stop has no slack to give)
+        const lightAhead = () => { const works = game.environment.roadworks; return !!works && ap.obeyLights !== false && works.pilotStop(game.vehicle.routeS || 0) < Infinity; };
+        input.getBrakeInput = () => (ap.on && game.vehicle && game.vehicle.speed > target(game.vehicle.routeS || 0) + (game.vehicle.speed < 3 || lightAhead() ? 0.2 : 1) ? 1 : 0);
         input.getWheelieInput = () => 0;
     },
 

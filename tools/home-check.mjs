@@ -119,6 +119,12 @@ function riderCheck() {
     if (g.showcaseFocusId !== rider.id) problems.push(`the stage shows ${g.showcaseFocusId}, the panel ${rider.id}`);
     const bike = g.showcaseBikes && g.showcaseBikes[rider.id];
     if (!bike) return [...problems, 'no bike on the stage'];
+    // The detailed models alone, one rider on one stand: never a procedural or a light bike drawn, never two
+    const drawn = Object.entries(g.showcaseBikes).filter(([, v]) => v.group.visible && v.group.parent);
+    if (drawn.length !== 1 || drawn[0][0] !== rider.id) problems.push(`the stage draws ${drawn.map(([id]) => id).join(', ') || 'nothing'}, not ${rider.id} alone`);
+    drawn.forEach(([id, v]) => { if (!v.modelled || v.far) problems.push(`${id} is drawn as a ${v.far ? 'light' : 'procedural'} model`); });
+    const stands = g.showcaseExtras.filter(o => o.geometry && o.geometry.type === 'CylinderGeometry');
+    if (stands.length !== 1) problems.push(`the stage has ${stands.length} stands`);
     if (tour.riderTierFor(rider.id) === 'lit') {
         if (bike.model !== tour.getSelectedBike(rider.id)) problems.push(`the stage's bike is ${bike.model}, the chosen ${tour.getSelectedBike(rider.id)}`);
         const outfit = tour.getSelectedOutfit(rider.id);
@@ -144,7 +150,7 @@ function riderCheck() {
 }
 
 // The map's rules that hold at any size: every tour row has a line and a hit area, every tour row with a line its
-// pin, an earlier leg a button; the closed legs are marked so
+// pin, and nothing for a leg shipped before the tour; the closed legs are marked so
 function mapRows() {
     const problems = [];
     const rows = WorldLegs.LIST.filter(l => l.n);
@@ -156,7 +162,7 @@ function mapRows() {
         if (!document.querySelector(`#world-legs .map-pin[data-leg="${leg.id}"]`)) problems.push(`leg ${leg.n} has no pin`);
     }
     for (const leg of WorldLegs.LIST.filter(l => !l.n)) {
-        if (!document.querySelector(`#world-legs .map-earlier-btn[data-leg="${leg.id}"]`)) problems.push(`the earlier leg ${leg.id} is not listed`);
+        if (document.querySelector(`#world-legs [data-leg="${leg.id}"]`)) problems.push(`the earlier leg ${leg.id} is on the map`);
     }
     return problems;
 }
@@ -189,7 +195,7 @@ async function run(browser, port, name) {
     const check = (label, problems) => problems.forEach(p => failures.push(`${label}: ${p}`));
     const wide = !viewport.hasTouch;
     // The modelled bike is fetched on focus: give it time, then let the camera settle
-    const settle = async () => { await page.waitForFunction(() => { const g = window.game; const v = g.showcaseBikes && g.showcaseBikes[g.showcaseFocusId]; return !v || !v.dressing || v.modelled; }, { timeout: 30000, polling: 200 }).catch(() => null); await pause(1500); };
+    const settle = async () => { await page.waitForFunction(() => { const g = window.game; const v = g.showcaseBikes && g.showcaseBikes[g.showcaseFocusId]; return !!v && !!v.modelled; }, { timeout: 60000, polling: 200 }).catch(() => null); await pause(1500); };
     await settle();
     const homeItems = ['.home-stage', '.home-panel'];
     const panelItems = ['.home .tour-title', '.home .character-select-screen .showcase-label', '.home .showcase-info', '#gameModeRow', '#riderModeRow', '.home .character-select-screen .showcase-actions'];
@@ -200,6 +206,19 @@ async function run(browser, port, name) {
     if (!wide) await page.evaluate(() => { document.querySelector('.home-panel').scrollTop = 0; });
     check('home rider', await page.evaluate(riderCheck));
     await shot('home');
+    await shot('rider-1');
+
+    // Every rider in turn, locked ones included (dimmed or a silhouette, still the detailed model)
+    const riders = await page.evaluate(() => window.game.tourSystem.riderDisplayOrder().length);
+    for (let k = 1; k < riders; k++) {
+        await page.click('#riderNextBtn');
+        await settle();
+        check(`rider ${k + 1}`, await page.evaluate(riderCheck));
+        await shot(`rider-${k + 1}`);
+    }
+    for (let k = 1; k < riders; k++) await page.click('#riderPrevBtn');
+    await settle();
+    check('rider 1 again', await page.evaluate(riderCheck));
 
     // The rider follows each choice: the next rider, a bike up and down, an outfit
     await page.click('#riderNextBtn');

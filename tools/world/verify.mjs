@@ -20,7 +20,7 @@ import { syntheticSource } from './synthetic.mjs';
 import { ROAD_CLEAR_M, roadBands } from './buildings.mjs';
 import { resolveCacheDir } from './cache.mjs';
 import { sampleGrid, bandHalf, minRideWidth, RIDE_WIDTH_M, END_JOIN_M, JUNCTION_M } from './widths.mjs';
-import { drawnTileLow, horizonDrawnAt } from './farland.mjs';
+import { drawnTileLow, horizonDrawnAt, laidLows } from './farland.mjs';
 import { COVER, COVER_CELL_M, COVER_N } from './landcover.mjs';
 import { PLACE, AREA_KINDS, SURFACE, padOf, mouthsOf, levelOff, wallRisk, fallsAway } from './places.mjs';
 
@@ -647,7 +647,7 @@ export function checkDem(decoded, demAt) {
 // minus far/sink0.bin, on its own triangles: farland.mjs horizonDrawnAt) lies at least HORIZON.clearM under the land
 // the tile draws at any level of detail (drawnTileLow), so a resident tile is never behind the far mesh.
 export const HORIZON = Object.freeze({ clearM: 0.1 });
-export function checkHorizon(decoded) {
+export function checkHorizon(decoded, laid = null) {
   const { far, farSink, tiles } = decoded;
   let nodes = 0, over = 0, worst = 0;
   const list = [];
@@ -658,7 +658,9 @@ export function checkHorizon(decoded) {
       const drawn = horizonDrawnAt(far, farSink, x, z);
       if (drawn === null) continue;
       nodes++;
-      const above = drawn - (drawnTileLow(t, i, j, TILE_N) - HORIZON.clearM);
+      const lowered = laid && laid.get(key) ? laid.get(key).get(j * TILE_N + i) : undefined;
+      const low = lowered === undefined ? drawnTileLow(t, i, j, TILE_N) : Math.min(drawnTileLow(t, i, j, TILE_N), lowered);
+      const above = drawn - (low - HORIZON.clearM);
       if (above <= 0) continue;
       over++;
       worst = Math.max(worst, above);
@@ -815,8 +817,10 @@ export async function main(argv) {
   }
   const slice = opt.stages === 'tremola' ? 'tremola' : null;
   const corridorEdges = wanted.includes('graph') && !opt.synthetic ? inspectedCorridorEdges(opt) : null;
+  // (the land as the page lays it back, under which the far grid lies: farland.mjs laidLows)
+  const laid = wanted.includes('horizon') ? await laidLows(decoded.tiles) : null;
   const runs = {
-    size: () => checkSize(dir), stations: () => checkStations(decoded), crests: () => checkCrests(decoded), hairpins: () => checkHairpins(decoded), stacked: () => checkStacked(decoded), buildings: () => checkBuildings(decoded), water: () => checkWater(decoded), floating: () => checkFloating(decoded), overlap: () => checkOverlap(decoded), horizon: () => checkHorizon(decoded), landmarks: () => checkLandmarks(decoded), places: () => checkPlaces(decoded), dem: () => checkDem(decoded, demAt),
+    size: () => checkSize(dir), stations: () => checkStations(decoded), crests: () => checkCrests(decoded), hairpins: () => checkHairpins(decoded), stacked: () => checkStacked(decoded), buildings: () => checkBuildings(decoded), water: () => checkWater(decoded), floating: () => checkFloating(decoded), overlap: () => checkOverlap(decoded), horizon: () => checkHorizon(decoded, laid), landmarks: () => checkLandmarks(decoded), places: () => checkPlaces(decoded), dem: () => checkDem(decoded, demAt),
     fidelity: () => checkFidelity(decoded, built), elevation: () => checkElevation(decoded, built, { slice }), graph: () => checkGraph(decoded, built, { corridorEdges })
   };
   const results = wanted.map(c => {

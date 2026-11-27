@@ -263,6 +263,9 @@ def shell(name, seed, width, plinth, floors, pitch, ridge, roof, eaves=1.0, verg
             sh.beam((x, eave - 0.2, 0.0), (x, eave - eaves * tan - 0.2, -eaves + 0.08), (0.1, 0.16), TIMBER_DARK)
     sh.anchor("left", (-w / 2, 0, 0))
     sh.anchor("right", (w / 2, 0, 0))
+    # The plinth's corners: the walls the game seats on the land and lays the footing under (Scenery.wallsOf)
+    sh.anchor("walls_min", (-w / 2, -0.6, 0))
+    sh.anchor("walls_max", (w / 2, plinth, D))
     return sh, frames, levels, top
 
 

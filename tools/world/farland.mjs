@@ -247,7 +247,38 @@ export function horizonDrawnAt(far, sinks, x, z, base = 8, stride = horizonStrid
 // 100 m cells while the grid was drawn at 200 m, the far grid of worlds/susten stood over the road in 28 places and over
 // the land at 1 682 nodes, up to 110 m.) `tiles` maps "tx,tz" to {heights, zones} (TILE_N x TILE_N at CELL_M); cells
 // under no tile keep `base`; a grid drawn at stride 1 gives the same bytes as before
-export function horizonSinks(far, tiles, { tileM, tileN, cellM, base = 8, margin = 1.5, stride = horizonStride(far) }) {
+// The nodes the runtime lays back at full detail (TerrainMesh.laidBack: a node lowered to LAY_SLOPE over its
+// neighbours, 124 m on the Schöllenen's walls at leg 3 s 4 250), for every tile: "tx,tz" -> Map(node -> height). The
+// runtime's own rule, run on the tiles as the importer wrote them, each read with its neighbours as a page reads them
+// The tiles at the 0.1 m the files store them, as the page decodes them (encode.mjs): what the sinks are made from,
+// so a re-import and a folder's own data give the same sinks
+export function storedTiles(tiles) {
+  const out = new Map();
+  for (const [key, t] of tiles) {
+    const base = Math.fround(Math.min(...t.heights));
+    out.set(key, { ...t, heights: Float32Array.from(t.heights, h => base + Math.max(0, Math.min(32767, Math.round((h - base) * 10))) / 10) });
+  }
+  return out;
+}
+
+export async function laidLows(tiles) {
+  const { loadGame } = await import('../../tests/helpers/load-game.js');
+  const { TerrainMesh } = loadGame(undefined, []);
+  const all = new Map();
+  for (const [key, t] of tiles) {
+    const [tx, tz] = key.split(',').map(Number);
+    all.set(key, { tx, tz, heights: t.heights, zones: t.zones });
+  }
+  const near = key => all.get(key) || null;
+  const out = new Map();
+  for (const [key, tile] of all) {
+    const laid = TerrainMesh.laidBack(tile, near);
+    if (laid.lowered.size) out.set(key, laid.lowered);
+  }
+  return out;
+}
+
+export function horizonSinks(far, tiles, { tileM, tileN, cellM, base = 8, margin = 1.5, stride = horizonStride(far), laid = null }) {
   const nxs = Math.floor((far.nx - 1) / stride) + 1, nzs = Math.floor((far.nz - 1) / stride) + 1, cell = far.cell * stride;
   const excess = new Float32Array((nxs - 1) * (nzs - 1)).fill(-Infinity);
   for (const [key, t] of tiles) {
@@ -259,7 +290,9 @@ export function horizonSinks(far, tiles, { tileM, tileN, cellM, base = 8, margin
         if (surface === null) continue;
         const ci = Math.floor((x - far.x0) / cell), cj = Math.floor((z - far.z0) / cell);
         const k = cj * (nxs - 1) + ci;
-        excess[k] = Math.max(excess[k], surface - drawnTileLow(t, i, j, tileN));
+        const lowered = laid && laid.get(key) ? laid.get(key).get(j * tileN + i) : undefined;
+        const low = lowered === undefined ? drawnTileLow(t, i, j, tileN) : Math.min(drawnTileLow(t, i, j, tileN), lowered);
+        excess[k] = Math.max(excess[k], surface - low);
       }
     }
   }

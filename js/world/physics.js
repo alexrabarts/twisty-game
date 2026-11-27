@@ -57,6 +57,7 @@ const WorldPhysics = Object.freeze({
     fallSpeed: 1.75,       // m/s
     tipLeanDeg: 18,
     tipS: 0.15,
+    stopLean: 0.8,         // under fallSpeed the steering leans the bike to this share of tipLeanDeg at most
     footDownDecel: 2.5,    // m/s^2
     footDownRight: 6,      // 1/s
     footDownSpeed: 1,      // m/s, under this with a foot down the bike stops
@@ -227,6 +228,10 @@ const WorldPhysics = Object.freeze({
             Object.freeze({ name: 'shoulder', half: 0.24, height: 1.35 })
         ]),
         closeMax: 3,       // m/s along the wall's normal
+        // Under slowMs a touch is a brush whatever the angle, the lean or the time against the wall: a wall met at walking
+        // pace stops or turns the bike and nobody falls (the owner, 2026-11-27: leg 3's hairpin at s 2 980 crashed a
+        // rider into its wall at 1.8 m/s)
+        slowMs: 3,
         glanceDeg: 35,
         mostS: 0.8,
         holdS: 0.2,
@@ -251,6 +256,13 @@ const WorldPhysics = Object.freeze({
     //    lineStrength, the rest staying the rider's own torque steering. Outside the window it does nothing
     lineCapture: 0.25,
     lineStrength: 0.8,
+    //    And at up to holdSpeedMs, where the bend ahead is holdTightR or tighter, a turn tighter than the line is
+    //    captured as well (as it is under turnBlendSpeed): the rider holding full lean or full lock through a tight
+    //    hairpin is held on the line and off the inside grass, with the line's whole weight in place of lineStrength.
+    //    It comes in over the last 1 m/s under holdSpeedMs and over a bend a quarter tighter than holdTightR. It holds
+    //    the line; the rider still steers
+    holdSpeedMs: 10,
+    holdTightR: 12,
     // No assist acts off the carriageway (past the drawn edge the rider rides the land alone, and steers back as on
     //    the road), and none acts against the rider's steering unless it turns the bike toward the road's centre line
     //    (Vehicle.worldAssistRate): an assist never pulls the bike outward against the rider and never resists a turn

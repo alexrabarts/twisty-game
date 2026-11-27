@@ -129,8 +129,16 @@ const SceneAssets = (() => {
       const { offset, length } = slice(def.bufferView);
       return decodeImage(new Blob([new Uint8Array(buffer, offset, length)], { type: def.mimeType }));
     }));
+    // One three texture per glTF texture and colour space: a detailed bike's maps serve all its materials, and a
+    // texture of its own for each would upload the same map to the GPU once per material
+    const made = new Map();
     const texture = (ref, srgb) => {
       if (!ref) return null;
+      const key = `${ref.index}:${srgb}`;
+      if (!made.has(key)) made.set(key, fresh(ref, srgb));
+      return made.get(key);
+    };
+    const fresh = (ref, srgb) => {
       const def = json.textures[ref.index];
       const source = def.extensions?.EXT_texture_webp?.source ?? def.source;
       const map = new THREE.Texture(images[source]);

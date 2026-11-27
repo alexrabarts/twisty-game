@@ -21,7 +21,7 @@ import { stageFloors } from './floors.mjs';
 import { Dem, wgs84Bbox } from './dem.mjs';
 import { NODE_FLAG, writeWorld, writeCourses } from './encode.mjs';
 import { syntheticSource } from './synthetic.mjs';
-import { buildFarLand, horizonSinks, COPERNICUS_NOTICE } from './farland.mjs';
+import { buildFarLand, horizonSinks, laidLows, storedTiles, COPERNICUS_NOTICE } from './farland.mjs';
 import { TILE_N } from './bench.mjs';
 import { RIDE_WIDTH_M, classWidth, narrowRide } from './widths.mjs';
 import { mapPlaces, foundPlaces, applyPads, mouthsOf, numberPlaces } from './places.mjs';
@@ -325,7 +325,8 @@ export async function buildWorld(source, { stationSpacingM = 2000, log = () => {
     return { x0, z0, nx, nz, cell: FAR_CELL_M, data };
   })();
   const farLand = source.farLand ? await source.farLand(far, log) : null;
-  if (farLand) farLand.sink0 = horizonSinks(far, tiles, { tileM: TILE_M, tileN: TILE_N, cellM: TILE_M / (TILE_N - 1) });
+  // (under the land as the page lays it back too: farland.mjs laidLows)
+  if (farLand) { const stored = storedTiles(tiles); farLand.sink0 = horizonSinks(far, stored, { tileM: TILE_M, tileN: TILE_N, cellM: TILE_M / (TILE_N - 1), laid: await laidLows(stored) }); }
   // Copernicus GLO-30 may be redistributed adapted, with its notice (licence Art. 6; .agent/system/world-data.md)
   const credit = farLand && farLand.copernicus ? `${source.credit} · Copernicus WorldDEM-30 © DLR e.V., © Airbus` : source.credit;
   const notice = farLand && farLand.copernicus ? COPERNICUS_NOTICE : null;

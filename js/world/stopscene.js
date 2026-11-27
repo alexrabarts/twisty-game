@@ -17,7 +17,8 @@
 class StopScene {
     static get KINDS() {
         // In front of the bikes, looking back at the group
-        const along = Object.freeze({ eye: [6, 2.6, 9], look: [0, 1, 0], hfov: 65 });
+        // (`group`: it frames the bikes parked: StopScene.fitGroup)
+        const along = Object.freeze({ eye: [6, 2.6, 9], look: [0, 1, 0], hfov: 65, group: true });
         return Object.freeze({
             // At the rail, over it and down the valley
             lookout: { hold: Object.freeze({ eye: [0, 1.8, -0.6], look: [0, -60, 160], edge: true, hfov: 70 }), actions: ['photo'] },
@@ -183,7 +184,7 @@ class StopScene {
     // Where the fly ends: {eye: {x, y, z}, yaw, pitch, roll, fov} (radians, fov in degrees, vertical, for `aspect`).
     // The stop's own row of HOLDS when it has one, else the hold its data carries (`hold`: route.json, the importer),
     // else its kind's hold. `groundY(x, z)` the drawn ground
-    static holdOf(stop, groundY = () => 0, aspect = 16 / 9) {
+    static holdOf(stop, groundY = () => 0, aspect = 16 / 9, parked = null) {
         const r = Math.PI / 180;
         const own = StopScene.HOLDS[stop.id] || stop.hold;
         if (own) {
@@ -195,12 +196,59 @@ class StopScene {
         const f = StopScene.frame(stop);
         const base = groundY(f.ox, f.oz);
         const y0 = Number.isFinite(base) ? base : 0;
-        const eye = StopScene.framePoint(f, hold.eye, hold.edge, y0);
-        const look = StopScene.framePoint(f, hold.look, hold.edge, y0);
+        let eye = StopScene.framePoint(f, hold.eye, hold.edge, y0);
+        let look = StopScene.framePoint(f, hold.look, hold.edge, y0);
+        if (hold.group) ({ eye, look } = StopScene.fitGroup(stop, eye, look, StopScene.vfovOf(hold.hfov, aspect), aspect, groundY, y0, parked));
         // The eye never under EYE_CLEAR_M over the ground where it stands (a hold's height is over the stop's middle)
         const under = groundY(eye.x, eye.z);
         if (Number.isFinite(under)) eye.y = Math.max(eye.y, under + StopScene.EYE_CLEAR_M);
         return { eye, ...StopScene.aimOf(eye, look), roll: 0, fov: StopScene.vfovOf(hold.hfov, aspect) };
+    }
+
+    // A hold that frames the group: it looks at the middle of the slots the riders park in (the first `parked`, or
+    // all), and stands back along its line from there until every bike and rider beside it is inside the picture by
+    // FIT_MARGIN of each half (no further than FIT_MOST times as far). The kind's hold alone cut the nearest bike at
+    // the picture's edge where a car park's slots ran toward the camera (Andermatt, Gadmen)
+    static get FIT_MARGIN() { return 0.08; }
+    static get FIT_MOST() { return 3; }
+
+    static fitGroup(stop, eye, look, vfov, aspect, groundY, y0, parked = null) {
+        const slots = stop.slots.slice(0, Math.max(1, Math.min(stop.slots.length, parked || stop.slots.length)));
+        const yOf = (x, z) => { const g = groundY(x, z); return Number.isFinite(g) ? g : y0; };
+        const points = [];
+        for (const slot of slots) {
+            const fx = Math.sin(slot.heading), fz = Math.cos(slot.heading);
+            for (const along of [-1.2, 1.2]) for (const side of [-0.9, 0.9]) {
+                const x = slot.x + fx * along + fz * side, z = slot.z + fz * along - fx * side, y = yOf(x, z);
+                points.push({ x, y, z }, { x, y: y + 1.8, z });
+            }
+        }
+        const cx = slots.reduce((n, q) => n + q.x, 0) / slots.length, cz = slots.reduce((n, q) => n + q.z, 0) / slots.length;
+        const middle = { x: cx, y: yOf(cx, cz) + 1, z: cz };
+        const r = Math.PI / 180, tv = Math.tan((vfov * r) / 2), th = tv * aspect, keep = 1 - StopScene.FIT_MARGIN;
+        const fits = (e) => {
+            let fx = middle.x - e.x, fy = middle.y - e.y, fz = middle.z - e.z;
+            const fl = Math.hypot(fx, fy, fz);
+            fx /= fl; fy /= fl; fz /= fl;
+            // (right = forward x up, up = right x forward)
+            let rx = -fz, rz = fx;
+            const rl = Math.hypot(rx, rz) || 1;
+            rx /= rl; rz /= rl;
+            const ux = -rz * fy, uy = rz * fx - rx * fz, uz = rx * fy;
+            return points.every((p) => {
+                const vx = p.x - e.x, vy = p.y - e.y, vz = p.z - e.z;
+                const d = vx * fx + vy * fy + vz * fz;
+                if (d < 1) return false;
+                return Math.abs(vx * rx + vz * rz) <= th * keep * d && Math.abs(vx * ux + vy * uy + vz * uz) <= tv * keep * d;
+            });
+        };
+        const back = { x: eye.x - middle.x, y: eye.y - middle.y, z: eye.z - middle.z };
+        let out = eye;
+        for (let k = 1; k <= StopScene.FIT_MOST; k += 0.05) {
+            out = { x: middle.x + back.x * k, y: middle.y + back.y * k, z: middle.z + back.z * k };
+            if (fits(out)) break;
+        }
+        return { eye: out, look: middle };
     }
 
     // The point `m` metres along a way in ({points: [{x, z, m}], length}), clamped to it: {x, z, heading}
@@ -259,15 +307,35 @@ class StopScene {
             this.pathYawRate += (w * w * StopScene.turn(this.pathYaw, aim) - 2 * w * this.pathYawRate) * dt;
             this.pathYaw += this.pathYawRate * dt;
         }
-        const path = { x: px, y: (Number.isFinite(g) ? g : ly) + O.upM, z: pz, yaw: this.pathYaw, pitch: O.pitchDeg * r, roll: 0, fov: from.fov };
+        // (its height follows the ground on the way on a critically damped spring at FLOOR_RATE: where the way steps
+        // from the road onto a stop's standing or under a deck, the ground under it moved the camera 0.9 m in a frame)
+        const gy = (Number.isFinite(g) ? g : ly) + O.upM;
+        if (this.pathY === undefined) { this.pathY = gy; this.pathYRate = 0; }
+        else if (dt > 0) {
+            const w = StopScene.FLOOR_RATE;
+            this.pathYRate += (w * w * (gy - this.pathY) - 2 * w * this.pathYRate) * dt;
+            this.pathY += this.pathYRate * dt;
+        }
+        const path = { x: px, y: this.pathY, z: pz, yaw: this.pathYaw, pitch: O.pitchDeg * r, roll: 0, fov: from.fov };
         const w1 = StopScene.ease(t / O.joinS), w2 = StopScene.ease((t - this.holdFrom) / this.settleS);
-        const mix = (a, b, w) => ({
+        // (each blend turns the way it started turning: the gap between the two aims is followed from frame to frame,
+        // never taken afresh the shorter way round. A hold that looks back along the way in, a car park's at the group,
+        // stands near 180 degrees from the overtake's aim, and the shorter way flipped sides there: 179 degrees in a frame)
+        const gaps = this.gaps || (this.gaps = {});
+        const gap = (key, a, b) => {
+            const raw = StopScene.turn(a, b);
+            gaps[key] = gaps[key] === undefined ? raw : gaps[key] + StopScene.turn(gaps[key], raw);
+            return gaps[key];
+        };
+        const mix = (key, a, b, w) => ({
             x: a.x + (b.x - a.x) * w, y: a.y + (b.y - a.y) * w, z: a.z + (b.z - a.z) * w,
-            yaw: a.yaw + StopScene.turn(a.yaw, b.yaw) * w, pitch: a.pitch + (b.pitch - a.pitch) * w,
-            roll: a.roll + StopScene.turn(a.roll, b.roll) * w, fov: a.fov + (b.fov - a.fov) * w
+            yaw: a.yaw + gap(`${key}yaw`, a.yaw, b.yaw) * w, pitch: a.pitch + (b.pitch - a.pitch) * w,
+            roll: a.roll + gap(`${key}roll`, a.roll, b.roll) * w, fov: a.fov + (b.fov - a.fov) * w
         });
         const held = { x: hold.eye.x, y: hold.eye.y, z: hold.eye.z, yaw: hold.yaw, pitch: hold.pitch, roll: hold.roll, fov: hold.fov };
-        const c = mix(mix(chase, path, w1), held, w2);
+        // (the way to the hold is chosen as the settle starts, the shorter then, and kept)
+        if (!(w2 > 0)) { gaps.holdyaw = undefined; gaps.holdroll = undefined; }
+        const c = mix('hold', mix('path', chase, path, w1), held, w2);
         // Over the bikes and the rail on the way to the hold, and never under EYE_CLEAR_M over the ground (eased in from
         // none, so the first frame is the chase camera's own)
         c.y += (this.arcM || StopScene.ARC_M) * 4 * w2 * (1 - w2);
@@ -305,6 +373,13 @@ class StopScene {
     static ease(u) {
         const x = Math.max(0, Math.min(1, u));
         return x * x * x * (x * (6 * x - 15) + 10);
+    }
+
+    // A puff of vapour, its own material so it fades on its own (Game.prewarmWorldScenery draws one at load: its
+    // program compiled at the first puff, 80 ms into the held shot)
+    static puffMesh() {
+        return new THREE.Mesh(StopScene.puffGeometry || (StopScene.puffGeometry = new THREE.SphereGeometry(0.1, 10, 8)),
+            new THREE.MeshBasicMaterial({ color: 0xeef1f4, transparent: true, opacity: 0.55, depthWrite: false }));
     }
 
     // The shortest turn from angle a to b (radians)
@@ -466,7 +541,7 @@ class StopScene {
         // (the last to park: the last to start, or the player turned round for a stop behind it, whose way is longest)
         this.allParkedS = Math.max(0, ...this.riders.map(r => r.start + StopScene.along(r.way, 1e9, r.slot).arriveS));
         this.playerParkedS = this.riders.length ? StopScene.along(this.riders[0].way, 1e9, this.riders[0].slot).arriveS : 0;
-        this.hold = StopScene.holdOf(stop, ground, aspect);
+        this.hold = StopScene.holdOf(stop, ground, aspect, this.riders.length);
         this.from = camera;
         // (from where the chase camera is at the start: the player's first place and the camera's offset from it)
         const first = this.riders.length ? this.riders[0].way.points[0] : null;
@@ -495,7 +570,7 @@ class StopScene {
 
     // The screen's shape changed: the hold's lens is made again for it
     resize(aspect) {
-        this.hold = StopScene.holdOf(this.stop, this.ground, aspect);
+        this.hold = StopScene.holdOf(this.stop, this.ground, aspect, this.riders.length);
     }
 
     // When the card comes up
@@ -627,8 +702,7 @@ class StopScene {
         if (!head) return;
         const at = head.getWorldPosition(new THREE.Vector3());
         const facing = r.bike.rider.getWorldDirection(new THREE.Vector3());
-        const mesh = new THREE.Mesh(StopScene.puffGeometry || (StopScene.puffGeometry = new THREE.SphereGeometry(0.1, 10, 8)),
-            new THREE.MeshBasicMaterial({ color: 0xeef1f4, transparent: true, opacity: 0.55, depthWrite: false }));
+        const mesh = StopScene.puffMesh();
         mesh.name = 'stop-puff';
         mesh.position.copy(at).addScaledVector(facing, 0.22);
         scene3d.add(mesh);

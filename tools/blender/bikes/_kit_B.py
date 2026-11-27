@@ -56,8 +56,11 @@ EXTRA = {
     "patch": (0x5DB4E0, 0.6, 0.05),
 }
 MATERIALS.update({name: value for name, value in EXTRA.items() if name not in MATERIALS})
-# Reads alike from a distance
-LOW.update({"fin": "engine_black", "header": "steel", "lens_red": "brake"})
+# Reads alike from a distance. A distant finish keeps its lightness: the fins went to engine black, the plate and the
+# dark steel to dark metal, and lod1 of the z750 came out 21 % darker than lod0 (tests/unit/scenery-levels.test.js)
+LOW.update({"fin": "steel_dark", "header": "steel", "lens_red": "brake"})
+for kept in ("plate", "steel_dark"):
+    LOW.pop(kept, None)
 
 FACES = [(0, 1, 3, 2), (4, 6, 7, 5), (0, 4, 5, 1), (2, 3, 7, 6), (0, 2, 6, 4), (1, 5, 7, 3)]
 X = Vector((1, 0, 0))

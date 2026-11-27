@@ -147,8 +147,6 @@ class WorldCamera {
 
     // The values the tests and Game read by name
     static get FLOOR_M() { return WorldCamera.TUNING.floorM; }
-    // Share of the way the onboard view's look target moves to the wanted one each frame at 60 Hz
-    static get LOOK_FOLLOW() { return 0.6; }
 
     // `overhead(x, z, y)`: the underside of the lowest road over (x, z) well above y, Infinity with open sky
     // (WorldEnvironment.overheadY); with none given the camera knows no bridge.
@@ -571,7 +569,7 @@ class WorldCamera {
         // The way is the bike's travel, eased by followRate, so a wobble does not swing the boom. On the ride (bike.onRide)
         // free roam reads the ride as the time trial does, so the two have one chase camera: the rider's straight line
         // ran into the roads above a bend, the roof rule took them for decks overhead, and the boom sat at its head's
-        // height (1.3 m over the bike in place of 3 m in the standard view, 8 m in the high)
+        // height (1.3 m over the bike in place of 3 m in the near chase, 8 m in the far)
         if (this.followRider && !bike.onRide) {
             const f = this.followAt || (this.followAt = { heading: bike.yaw || 0 });
             const want = Number.isFinite(bike.yaw) ? bike.yaw : f.heading;

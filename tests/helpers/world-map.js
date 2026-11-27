@@ -267,6 +267,9 @@ export async function cutThenWander(game, env, hairpin, { rider, speed = 10, L =
     await env.streamer.settle({ x: p.x, z: p.z }, s0);
     const v = new game.Vehicle(new game.THREE.Scene(), null, game.CHARACTERS.find(c => c.id === rider.character), rider.bike, { model: false });
     v.environment = env;
+    // A rider out to cut the hairpin rides with no assist: at normal its line holds a rider steering into a tight
+    // hairpin at a low pace (WorldPhysics.holdSpeedMs), and the cut is what this measures
+    v.assistLevel = 'off';
     v.position.set(p.x, p.y, p.z);
     v.yawAngle = p.heading;
     v.findNearestRoadSegment();

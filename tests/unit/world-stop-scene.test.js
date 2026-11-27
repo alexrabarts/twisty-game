@@ -199,6 +199,46 @@ describe('the scene', () => {
         expect(end.eye.z).toBeCloseTo(hold.eye.z, 6);
     });
 
+    // A hold may face any way from the way in: a car park's looks back at the group, and a leg ridden the other way
+    // comes in from the other side. The aim turns the way it started turning, and never a long way round in a frame
+    test('a hold facing any way from the way in is flown to with no jump of aim', () => {
+        const at = { x: -2.5, z: 380 };
+        const from = { offset: { x: 0, y: 2.8, z: -7 }, yaw: Math.PI, pitch: -0.1, roll: 0, fov: 80 };
+        for (let bearing = 0; bearing < 360; bearing += 7.5) {
+            const own = { ...stop, id: 'b-end', hold: { x: 25, z: 512, upM: 1.6, bearing, pitch: -5, hfov: 70 } };
+            const scene = new StopScene({ stop: own, route, riders: [{ bike: {}, s: 380, player: true, at, speed: 14 }], ground: flat, camera: from, aspect: 16 / 9 });
+            let last = scene.step(0).camera, most = 0;
+            while (scene.t < scene.flyS + 1) {
+                const cam = scene.step(1 / 60).camera;
+                most = Math.max(most, Math.abs(StopScene.turn(last.yaw, cam.yaw)));
+                last = cam;
+            }
+            expect({ bearing, most: most < Math.PI / 180 }).toEqual({ bearing, most: true });
+            expect(StopScene.turn(last.yaw, -bearing * Math.PI / 180)).toBeCloseTo(0, 6);
+        }
+    });
+
+    // A car park's hold frames the group: every bike parked and its rider beside it inside the picture, whichever way
+    // the slots run from the camera (at Andermatt and Gadmen the nearest bike stood cut by the picture's edge)
+    test('a car park\'s hold has every parked bike inside the picture, whichever way its slots run', () => {
+        for (let turn = 0; turn < 360; turn += 30) {
+            const a = turn * Math.PI / 180;
+            const slots = [0, 1, 2, 3, 4, 5, 6, 7].map(k => ({ x: 20 + Math.sin(a) * k * 2.2, z: 510 + Math.cos(a) * k * 2.2, heading: a + Math.PI / 2 }));
+            const park = { ...stop, id: 'c-end', kind: 'carpark', slots };
+            for (const aspect of [16 / 9, 4 / 3, 9 / 16]) {
+                const hold = StopScene.holdOf(park, flat, aspect, 6);
+                const cam = new THREE.PerspectiveCamera(hold.fov, aspect, 0.1, 1000);
+                cam.position.set(hold.eye.x, hold.eye.y, hold.eye.z);
+                cam.rotation.set(hold.pitch, hold.yaw, hold.roll, 'YXZ');
+                cam.updateMatrixWorld(true);
+                for (const slot of slots.slice(0, 6)) for (const along of [-1.2, 1.2]) for (const up of [0, 1.8]) {
+                    const p = new THREE.Vector3(slot.x + Math.sin(slot.heading) * along, 100 + up, slot.z + Math.cos(slot.heading) * along).project(cam);
+                    expect({ turn, aspect, inside: Math.abs(p.x) <= 1 && Math.abs(p.y) <= 1 && p.z < 1 }).toEqual({ turn, aspect, inside: true });
+                }
+            }
+        }
+    });
+
     test('a hold far away is flown to at FLY_MOST_MS on average at the most, with the card after it', () => {
         const hold = { eye: { x: 0, y: 0, z: 0 } };
         expect(StopScene.flyTime({ x: 30, y: 0, z: 0 }, hold)).toBe(StopScene.FLY_S);

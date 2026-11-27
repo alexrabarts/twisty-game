@@ -18,9 +18,10 @@
 // The touring crew (AIMotorcycle, js/traffic.js) are the other characters:
 // each rides its own bike from that bike's far file (assets/bikes/far, one
 // light level made from the detail file by tools/blender/far.py) and wears
-// its own first outfit on the light rider (rider_far.glb). A rider select
-// bike that is not looked at ({ model: 'far' }) is drawn from its file's
-// farthest level once that file is in memory (standIn).
+// its own first outfit on the light rider (rider_far.glb). A vehicle made
+// with { model: 'far' } is drawn from its file's farthest level once that file
+// is in memory (standIn); the menu draws none: it shows its one rider in the
+// detailed files alone (Game.buildShowcaseBike).
 const BikeModels = (() => {
   // The file of each procedural kind of bike (Vehicle.BIKES). These were
   // written with +x on the rider's right, so they are mirrored like the
@@ -444,7 +445,8 @@ const BikeModels = (() => {
     const keep = !!known.keepFileColours;
     const bike = far ? { levels: [file.levels[file.levels.length - 1]] } : file;
     const level = bike.levels[0];
-    const before = [...group.children];
+    // (the patches under the tyres are the bike's whatever it is drawn from: ContactShadow)
+    const before = group.children.filter((child) => !child.userData.contactShadow);
     const kept = new Set(Object.values(palette).filter((value) => value && value.isMaterial));
     const finish = finishes(vehicle, keep);
 

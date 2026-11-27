@@ -993,29 +993,70 @@ class Game {
     // programs on that frame (world-shot: 230 ms)
     // What the window draws besides the scenery's houses, boulders and trees, measured once a second, and the room it
     // leaves them under Scenery.WINDOW_TRIANGLES (Scenery.setWindowRoom). As LEG_BUDGET counts: every mesh drawn in
-    // the scene, the ground cover apart (tools/terrain-check.mjs countScene)
+    // the scene, the ground cover apart (tools/terrain-check.mjs countScene).
+    // The riders are not measured: the player's bike and rider, the crew's and the cars' take a fixed share
+    // (riderRoom), every one of them counted as drawn, the most seen in the ride. They move in and out of the window
+    // every few seconds, and measured they moved the scenery with them; they are not scenery, and a fixed share always
+    // holds them. The rest is the median of the last WINDOW_SAMPLES measures, so what stands for a moment (a section's
+    // old mesh beside its new one, a tile's two levels) moves nothing; Scenery.setWindowRoom adds its own hysteresis.
+    // `force` measures now, as it stands (a check that puts the bike down: tools/terrain-check.mjs placeAt)
     budgetWindow(force = false) {
         const scenery = this.environment && this.environment.scenery;
         if (!scenery || !scenery.setWindowRoom) return;
         const now = performance.now();
         if (!force && this.windowBudgetAt && now - this.windowBudgetAt < Game.WINDOW_BUDGET_MS) return;
         this.windowBudgetAt = now;
+        const riders = new Set([this.vehicle && this.vehicle.group]);
+        if (this.traffic) {
+            for (const bike of this.traffic.motorcycles || []) riders.add(bike.bikeGroup);
+            for (const car of this.traffic.cars || []) riders.add(car.carGroup);
+        }
+        riders.delete(undefined);
+        riders.delete(null);
         const skip = new Set([scenery.boulderGroup, scenery.forest]);
-        let rest = 0;
+        let rest = 0, ridden = 0;
+        const count = (g, o) => (g.index ? g.index.count : g.attributes.position.count) / 3 * (o.isInstancedMesh ? o.count : 1);
         // (a mesh hidden itself is counted, as LEG_BUDGET counts it: only a hidden group hides what is in it)
         const walk = (o) => {
-            if (skip.has(o) || o.name === 'ground-cover' || (!o.visible && !o.isMesh)) return;
-            if (o.isMesh && o.geometry && o.geometry.attributes.position && !(o.parent === scenery.houseGroup && o.name !== 'houses:footing')) {
-                const g = o.geometry;
-                rest += (g.index ? g.index.count : g.attributes.position.count) / 3 * (o.isInstancedMesh ? o.count : 1);
-            }
+            if (skip.has(o) || riders.has(o) || o.name === 'ground-cover' || (!o.visible && !o.isMesh)) return;
+            if (o.isMesh && o.geometry && o.geometry.attributes.position && !(o.parent === scenery.houseGroup && o.name !== 'houses:footing')) rest += count(o.geometry, o);
             for (const child of o.children) walk(child);
         };
         walk(this.scene);
-        scenery.setWindowRoom(Math.max(0, Math.round(Scenery.WINDOW_TRIANGLES - rest)));
+        // (a rider is counted as drawn whether its group is shown now or not; what in it is hidden, a level of detail
+        // not drawn, is not)
+        const ride = (o, top) => {
+            if (!top && !o.visible && !o.isMesh) return;
+            if (o.isMesh && o.geometry && o.geometry.attributes.position) ridden += count(o.geometry, o);
+            for (const child of o.children) ride(child, false);
+        };
+        for (const root of riders) ride(root, true);
+        if (this.riderRoomOf !== this.environment) {
+            this.riderRoomOf = this.environment;
+            this.riderRoom = 0;
+            this.windowRests = [];
+        }
+        this.riderRoom = Math.max(this.riderRoom, Math.round(ridden));
+        const rests = this.windowRests;
+        if (force) rests.length = 0;
+        rests.push(rest);
+        if (rests.length > Game.WINDOW_SAMPLES) rests.shift();
+        const sorted = [...rests].sort((a, b) => a - b);
+        const steady = sorted[Math.floor(sorted.length / 2)];
+        scenery.setWindowRoom(Math.max(0, Math.round(Scenery.WINDOW_TRIANGLES - steady - this.riderRoom)));
     }
 
     static get WINDOW_BUDGET_MS() { return 1000; }
+    static get WINDOW_SAMPLES() { return 3; }
+
+    // The window's scenery reads the view each frame, and its fades step (Scenery.setView, stepFades): a thing in view
+    // is held and fades, out of view it changes at once
+    watchWindow(dt) {
+        const scenery = this.environment && this.environment.scenery;
+        if (!scenery || !scenery.setView) return;
+        scenery.setView(this.camera);
+        scenery.stepFades(dt);
+    }
 
     prewarmWorldScenery() {
         const scenery = this.environment && this.environment.scenery;
@@ -1025,6 +1066,13 @@ class Game {
         const parent = this.environment.sceneryGroup || this.scene;
         parent.add(group);
         if (typeof LandShade !== 'undefined' && this.environment.isWorld) LandShade.hazeTree(group);
+        // (and a stop's puff of vapour, which hangs in the scene itself, out of sight)
+        const puff = typeof StopScene !== 'undefined' && StopScene.puffMesh ? StopScene.puffMesh() : null;
+        if (puff) {
+            puff.position.set(0, -10000, 0);
+            puff.frustumCulled = false;
+            this.scene.add(puff);
+        }
         // (with the headlight on and off: a program counts the lights in view, and the ride switches it with the look)
         const light = this.headlight, was = light ? light.visible : null;
         try {
@@ -1036,6 +1084,8 @@ class Game {
         } finally {
             if (light) light.visible = was;
             parent.remove(group);
+            // (its material is kept, not disposed: disposed, its program went with it)
+            if (puff) this.scene.remove(puff);
             group.traverse((o) => {
                 if (o.isInstancedMesh) o.dispose();
                 else if (o.isMesh) o.geometry.dispose();
@@ -2029,19 +2079,15 @@ class Game {
         this.cameraIntroStartPos = new THREE.Vector3(0, 4, -10);
         this.cameraIntroEndPos = new THREE.Vector3(0, 4, -10);
         
-        // Camera mode system - modes carry a `type` so behavior isn't tied to
-        // array order: 'follow' (chase cams), 'onboard' (close rider cam),
-        // 'helmet' (true first-person)
+        // The two chase views, the far one first. `type` names a view in code and in the saved choice
+        // (Game.CAMERA_KEY, Game.cameraViewOf); a fresh player starts in the far one
         this.cameraModes = [
-            { name: 'Onboard', type: 'onboard', offset: new THREE.Vector3(0, 1.2, 0.5), lerpFactor: 0.18 },
-            { name: 'Helmet Cam', type: 'helmet', offset: new THREE.Vector3(0, 1.15, 0.35), lerpFactor: 1.0 },
-            { name: 'Standard', type: 'follow', offset: new THREE.Vector3(0, 3, -6), lerpFactor: 0.10 },
-            { name: 'High View', type: 'high', offset: new THREE.Vector3(0, 8, -12), lerpFactor: 0.08 }
+            { name: 'Far chase', type: 'far', offset: new THREE.Vector3(0, 8, -12), lerpFactor: 0.08 },
+            { name: 'Near chase', type: 'near', offset: new THREE.Vector3(0, 3, -6), lerpFactor: 0.10 }
         ];
-
-        // Restore the persisted view (defaults to Onboard)
-        const savedMode = parseInt(localStorage.getItem('twistyCameraMode'), 10);
-        this.cameraMode = (savedMode >= 0 && savedMode < this.cameraModes.length) ? savedMode : 0;
+        let saved = null;
+        try { saved = localStorage.getItem(Game.CAMERA_KEY); } catch (e) { console.warn('Camera view not read:', e); }
+        this.setCameraView(Game.cameraViewOf(saved));
 
         // Dynamic camera offset for mountain roads
         this.baseCameraOffset = this.cameraModes[this.cameraMode].offset.clone();
@@ -2064,58 +2110,30 @@ class Game {
         console.log('Camera setup complete - starting intro animation');
     }
 
-    // True first-person view: camera pinned to the rider's head. The head is
-    // rigidly attached to the bike's orientation (yaw, wheelie/jump pitch, and
-    // lean roll), with a touch of extra rider lean-in toward the corner - so
-    // the world's horizon tilts as the bike lays into a turn.
-    updateHelmetCamera(vehiclePos, adjLerp) {
-        const speedRatio = this.vehicle.speed / this.vehicle.maxSpeed;
+    // The chase view of `type` ('near' or 'far'; any other is the far one) is the one drawn from the next frame
+    setCameraView(type) {
+        const index = this.cameraModes.findIndex(m => m.type === type);
+        this.cameraMode = index >= 0 ? index : 0;
+    }
 
-        // Bike pitch: nose-up during wheelies, flip rotation during jumps
-        let bikePitch = 0;
-        if (this.vehicle.isJumping) {
-            bikePitch = this.vehicle.jumpRotation;
-        } else if (this.vehicle.isWheelie) {
-            bikePitch = -this.vehicle.wheelieAngle;
-        }
+    // The other chase view, kept as the rider's choice and named on screen
+    toggleCameraView() {
+        this.cameraMode = (this.cameraMode + 1) % this.cameraModes.length;
+        const mode = this.cameraModes[this.cameraMode];
+        try { localStorage.setItem(Game.CAMERA_KEY, mode.type); } catch (e) { console.warn('Camera view not saved:', e); }
+        showCallout(`Camera: ${mode.name}`, 'info', 1000);
+        return mode;
+    }
 
-        // Head roll: the bike's lean plus the rider hanging slightly INTO the
-        // corner (same sign convention as the bike mesh, group.rotation.z)
-        const leanIn = THREE.MathUtils.clamp(this.vehicle.leanAngle * 0.2, -0.15, 0.15);
-        const targetRoll = this.vehicle.leanAngle + leanIn;
-        // Light smoothing so engine vibration/lean jitter doesn't shake the horizon
-        this.currentCameraBanking = THREE.MathUtils.lerp(this.currentCameraBanking, targetRoll, adjLerp(0.45));
-        const roll = this.currentCameraBanking;
+    // Where the chosen view is kept, as its type
+    static get CAMERA_KEY() { return 'twistyCameraMode'; }
 
-        // Full bike-local frame: yaw, then pitch, then roll (interpolated yaw)
-        const helmetYaw = this.vehicle.renderYawAngle !== undefined ? this.vehicle.renderYawAngle : this.vehicle.yawAngle;
-        const mountEuler = new THREE.Euler(bikePitch, helmetYaw, roll, 'YXZ');
-
-        // Mount at the rider's visor - swings with the lean like a real head
-        const cameraPos = this.tempVector.set(0, 1.18, 0.3).applyEuler(mountEuler).add(vehiclePos);
-
-        // Engine/road vibration - subtle, speed dependent, comfort damped
-        const vibration = (0.008 + speedRatio * 0.012) * (this.vehicle.comfortShake !== undefined ? this.vehicle.comfortShake : 1);
-        cameraPos.x += (Math.random() - 0.5) * vibration;
-        cameraPos.y += (Math.random() - 0.5) * vibration * 0.7;
-
-        this.camera.position.copy(cameraPos);
-        this.currentCameraPos.copy(cameraPos);
-
-        // Look ahead through the same head orientation
-        const lookTarget = new THREE.Vector3(0, 1.05, 25).applyEuler(mountEuler).add(vehiclePos);
-        this.currentLookTarget.copy(lookTarget);
-
-        // The horizon banks with the head: roll the up vector around the view axis
-        const forwardDir = new THREE.Vector3().subVectors(lookTarget, cameraPos).normalize();
-        this.tempMatrix.makeRotationAxis(forwardDir, roll);
-        this.tempUpVector.set(0, 1, 0).applyMatrix4(this.tempMatrix);
-        this.camera.up.copy(this.tempUpVector);
-        this.camera.lookAt(lookTarget);
-
-        // Wide FOV with speed rush
-        this.camera.fov = 95 + speedRatio * 12;
-        this.camera.updateProjectionMatrix();
+    // The view a saved value names. Before there were two views the key held an index into four (0 Onboard,
+    // 1 Helmet Cam, 2 Standard, 3 High View): Standard is the near chase, and every other was a view nearer the
+    // rider than the far chase or the far chase itself, so they read as far. Nothing saved is far as well
+    static cameraViewOf(saved) {
+        if (saved === 'near' || saved === '2') return 'near';
+        return 'far';
     }
 
     // The eye adapts to a tunnel or a gallery (TubeShade.LIGHT): the exposure (Graphics.adaptation) goes toward `adapt`
@@ -2131,6 +2149,7 @@ class Game {
         const now = Number.isFinite(graphics.adaptation) ? graphics.adaptation : 1;
         const tau = goal > now ? L.inS : L.outS;
         graphics.adaptation = !(dt > 0) ? now : now + (goal - now) * (1 - Math.exp(-dt / tau));
+        TubeShade.tick(dt);
         this.updateTubeMovers();
     }
 
@@ -2200,48 +2219,48 @@ class Game {
         if (this.cameraIntroActive) {
             const elapsed = performance.now() - this.cameraIntroStartTime;
             const progress = Math.min(elapsed / this.cameraIntroDuration, 1);
-            
+
             // Use easing function for smooth animation (ease-in-out)
             const easeProgress = progress < 0.5 
                 ? 2 * progress * progress 
                 : 1 - Math.pow(-2 * progress + 2, 2) / 2;
-            
+
             // Interpolate camera position from above to behind vehicle
             this.camera.position.lerpVectors(
                 this.cameraIntroStartPos,
                 this.cameraIntroEndPos,
                 easeProgress
             );
-            
+
             // Look at the vehicle
             this.camera.lookAt(this.vehicle.position.x, this.vehicle.position.y + 1, this.vehicle.position.z);
-            
+
             // End intro when complete
             if (progress >= 1) {
                 this.cameraIntroActive = false;
-                
+
                 // Initialize the follow camera positions to match intro end position
                 // to avoid jump when switching to normal camera
                 this.currentCameraPos.copy(this.camera.position);
                 this.currentLookTarget.copy(this.vehicle.position);
                 this.currentLookTarget.y += 1;
-                
+
                 // Reset banking state
                 this.currentCameraBanking = 0;
-                
+
                 console.log('Camera intro complete - smooth transition to follow camera');
             }
-            
+
             return; // Skip normal camera update during intro
         }
-        
+
         // Safety check - if vehicle doesn't exist or lean angle is extreme, reset banking
         if (!this.vehicle || Math.abs(this.vehicle.leanAngle) > Math.PI) {
             this.currentCameraBanking = THREE.MathUtils.lerp(this.currentCameraBanking, 0, adjLerp(0.2));
             this.camera.rotation.z = this.currentCameraBanking;
             return;
         }
-        
+
         // Normal camera follow behavior (interpolated render position + yaw)
         const vehiclePos = (this.vehicle.renderPosition || this.vehicle.position).clone();
         const vehicleYaw = this.vehicle.renderYawAngle !== undefined ? this.vehicle.renderYawAngle : this.vehicle.yawAngle;
@@ -2290,59 +2309,39 @@ class Game {
         const currentMode = this.cameraModes[this.cameraMode];
         this.baseCameraOffset = currentMode.offset.clone();
         this.cameraLerpFactor = currentMode.lerpFactor;
-        
-        // True first-person view: rigidly mounted at the rider's helmet
-        if (currentMode.type === 'helmet') {
-            this.updateHelmetCamera(vehiclePos, adjLerp);
-            this.updateShadowCamera();
-            return;
+
+        const far = currentMode.type === 'far';
+        // Dynamic camera offset based on lean angle for better mountain road feel
+        const leanInfluence = Game.tune('camera', 'swing', this.vehicle.leanAngle * (far ? 3 : 2)); // More influence in the far view
+
+        // Combine lateral lag with lean influence; a world's boom turns by the route, and WorldCamera takes the
+        // same swing in its own frame (worldCameraInput)
+        this.cameraOffset.x = this.environment.isWorld ? this.baseCameraOffset.x : this.baseCameraOffset.x - leanInfluence + this.cameraLateralOffset;
+
+        // Adjust height based on speed for dramatic effect
+        const speedRatio = this.vehicle.speed / this.vehicle.maxSpeed;
+        // (a leg's camera rises a little with speed; a world's comes down toward the road, WorldCamera.speedHeight)
+        this.cameraOffset.y = this.environment.isWorld ? WorldCamera.speedHeight(this.baseCameraOffset.y, this.vehicle.speed) : this.baseCameraOffset.y + speedRatio * 0.5;
+        this.cameraOffset.z = this.baseCameraOffset.z - speedRatio * (far ? 2 : 1); // Move back with speed
+        // The tuning's camera distance: the boom's length and height together
+        const distance = Game.tune('camera', 'distance', 1);
+        if (distance !== 1) {
+            this.cameraOffset.y *= distance;
+            this.cameraOffset.z *= distance;
         }
 
-        // Mode-specific adjustments
-        if (currentMode.type === 'onboard') {
-            // Onboard camera - minimal lateral movement, rotates with bike
-            this.cameraOffset.x = this.baseCameraOffset.x;
-            this.cameraOffset.y = this.baseCameraOffset.y;
-            this.cameraOffset.z = this.baseCameraOffset.z;
-            
-            // Add small vibration for realism (scaled by the bike's comfort)
-            const onboardShake = this.vehicle.comfortShake !== undefined ? this.vehicle.comfortShake : 1;
-            this.cameraOffset.x += Math.sin(performance.now() * 0.01) * 0.02 * onboardShake;
-            this.cameraOffset.y += Math.sin(performance.now() * 0.013) * 0.01 * onboardShake;
-        } else {
-            // Standard and High View cameras
-            // Dynamic camera offset based on lean angle for better mountain road feel
-            const leanInfluence = Game.tune('camera', 'swing', this.vehicle.leanAngle * (currentMode.type === 'high' ? 3 : 2)); // More influence in high view
-            
-            // Combine lateral lag with lean influence; a world's boom turns by the route, and WorldCamera takes the
-            // same swing in its own frame (worldCameraInput)
-            this.cameraOffset.x = this.environment.isWorld ? this.baseCameraOffset.x : this.baseCameraOffset.x - leanInfluence + this.cameraLateralOffset;
-            
-            // Adjust height based on speed for dramatic effect
-            const speedRatio = this.vehicle.speed / this.vehicle.maxSpeed;
-            // (a leg's camera rises a little with speed; a world's comes down toward the road, WorldCamera.speedHeight)
-            this.cameraOffset.y = this.environment.isWorld ? WorldCamera.speedHeight(this.baseCameraOffset.y, this.vehicle.speed) : this.baseCameraOffset.y + speedRatio * 0.5;
-            this.cameraOffset.z = this.baseCameraOffset.z - speedRatio * (currentMode.type === 'high' ? 2 : 1); // Move back with speed
-            // The tuning's camera distance: the boom's length and height together
-            const far = Game.tune('camera', 'distance', 1);
-            if (far !== 1) {
-                this.cameraOffset.y *= far;
-                this.cameraOffset.z *= far;
-            }
-            
-            // (No lateral camera swing during wheelies - the 8-unit sideways
-            // jump made the bike read as tipping left while it was straight)
-        }
+        // (No lateral camera swing during wheelies - the 8-unit sideways
+        // jump made the bike read as tipping left while it was straight)
 
         // Calculate camera position relative to vehicle
         const offset = this.cameraOffset.clone();
-        const world = this.environment.isWorld && currentMode.type !== 'onboard';
+        const world = this.environment.isWorld;
         if (!world) offset.applyEuler(vehicleRotation);
         const cameraPos = vehiclePos.clone().add(offset);
 
         // Smooth camera movement with lag - adaptive based on speed and conditions
         let lerpFactor = this.cameraLerpFactor;
-        
+
         if (this.vehicle.fallingOffCliff) {
             lerpFactor = 0.45; // Even faster following during fall
             // Add slight camera shake during fall
@@ -2373,21 +2372,18 @@ class Game {
 
         this.camera.position.copy(this.currentCameraPos);
 
-        // Additional camera shake at high speeds (outside onboard mode)
-        if (currentMode.type !== 'onboard') {
-            const speedFactor = this.vehicle.speed / this.vehicle.maxSpeed;
-            // The world's land shakes the camera as well as the bike (Vehicle.landRock), and an off-road bike less
-            // (as its bump, Vehicle.landValues)
-            const onLand = this.vehicle.worldPhysics && this.vehicle.runoff && !this.vehicle.crashed;
-            const land = onLand ? this.vehicle.landValues() : null;
-            const rough = onLand ? 0.15 * Math.min(1, this.vehicle.speed / land.landCapSpeed) * land.landBumpM / this.vehicle.worldPhysics.landBumpM : 0;
-            const shakeIntensity = (speedFactor * 0.05 + rough) * (this.vehicle.comfortShake !== undefined ? this.vehicle.comfortShake : 1);
-            this.camera.position.x += (Math.random() - 0.5) * shakeIntensity;
-            this.camera.position.y += (Math.random() - 0.5) * shakeIntensity * 0.3;
-        }
+        // Additional camera shake at high speeds
+        // The world's land shakes the camera as well as the bike (Vehicle.landRock), and an off-road bike less
+        // (as its bump, Vehicle.landValues)
+        const onLand = this.vehicle.worldPhysics && this.vehicle.runoff && !this.vehicle.crashed;
+        const land = onLand ? this.vehicle.landValues() : null;
+        const rough = onLand ? 0.15 * Math.min(1, this.vehicle.speed / land.landCapSpeed) * land.landBumpM / this.vehicle.worldPhysics.landBumpM : 0;
+        const shakeIntensity = (speedRatio * 0.05 + rough) * (this.vehicle.comfortShake !== undefined ? this.vehicle.comfortShake : 1);
+        this.camera.position.x += (Math.random() - 0.5) * shakeIntensity;
+        this.camera.position.y += (Math.random() - 0.5) * shakeIntensity * 0.3;
 
-        // Under a tunnel roof the camera stays beneath it, shake included: High
-        // View sits 8 above the bike, higher than the 7.5 m roof. The smoothed
+        // Under a tunnel roof the camera stays beneath it, shake included: the far
+        // chase sits 8 above the bike, higher than the 7.5 m roof. The smoothed
         // position keeps the clamp too, so the camera eases out of the tunnel
         // rather than jumping to where it would have been
         // (a world's camera keeps under a tube's roof itself, eased in before the portal: WorldEnvironment.tubeRoofY;
@@ -2399,166 +2395,125 @@ class Game {
             this.currentCameraPos.y = Math.min(this.currentCameraPos.y, this.camera.position.y);
         }
 
-        // Mode-specific FOV and look target
-        const speedRatio = this.vehicle.speed / this.vehicle.maxSpeed;
-        
-        if (currentMode.type === 'onboard') {
-            // Onboard camera - wider FOV, look directly ahead
-            this.camera.fov = 90 + speedRatio * 10; // 90 to 100 degrees for immersive onboard view
-            this.camera.updateProjectionMatrix();
-            
-            // Look straight ahead from bike position
-            const lookAheadDistance = 10 + speedRatio * 5;
-            this.tempVector.set(0, 0.5, lookAheadDistance);
-            this.tempVector.applyEuler(vehicleRotation);
+        // The view's FOV and look target
+        // Dynamic FOV - increases with speed for visceral feel
+        const baseFOV = far ? 70 : 75;
+        const maxFOVIncrease = 10; // 75° → 85° at max speed
+        const targetFOV = baseFOV + (speedRatio * maxFOVIncrease);
 
-            const lookTarget = vehiclePos.clone().add(this.tempVector);
-            if (this.environment.isWorld) {
-                // A world looks along the road ahead, which turns before the bike does
-                const ahead = this.worldCamera.lookTarget(this.vehicle.projection.s ?? this.vehicle.routeS, this.vehicle.speed, 0.5, this.worldAhead || (this.worldAhead = {}));
-                lookTarget.set(ahead.x, ahead.y, ahead.z);
-            }
+        // Smooth FOV transition; a world's FOV is a spring of WorldCamera.update, toward the same target
+        if (!this.currentFOV) this.currentFOV = baseFOV;
+        this.currentFOV = this.environment.isWorld ? this.worldCamera.fov : THREE.MathUtils.lerp(this.currentFOV, targetFOV, adjLerp(0.05));
+        this.camera.fov = this.currentFOV;
+        this.camera.updateProjectionMatrix();
 
-            this.currentLookTarget.lerp(lookTarget, adjLerp(this.environment.isWorld ? WorldCamera.LOOK_FOLLOW : 0.3)); // Fast response for onboard
-            
-            // Onboard camera banking - calculate BEFORE lookAt with custom up vector
-            // Onboard view banks WITH the bike - aggressive tilt for immersive feel
-            const onboardBankAmount = this.vehicle.leanAngle * 0.9; // 90% banking, same direction
-            const targetOnboardBank = THREE.MathUtils.clamp(onboardBankAmount, -0.7, 0.7); // Max ~40° bank
-            this.currentCameraBanking = THREE.MathUtils.lerp(this.currentCameraBanking, targetOnboardBank, adjLerp(0.2));
+        // Enhanced camera shake with multiple sources
+        if (!this.cameraShakeOffset) this.cameraShakeOffset = new THREE.Vector3();
 
-            // Create custom up vector rotated around camera's forward direction (view axis)
-            const forwardDir = new THREE.Vector3();
-            forwardDir.subVectors(this.currentLookTarget, this.currentCameraPos).normalize();
-            this.tempMatrix.makeRotationAxis(forwardDir, this.currentCameraBanking);
-            this.tempUpVector.set(0, 1, 0).applyMatrix4(this.tempMatrix);
+        // Comfort rating damps every shake source - Tim's scooter
+        // glides where Steve's race bike rattles
+        const comfort = this.vehicle.comfortShake !== undefined ? this.vehicle.comfortShake : 1;
 
-            // Apply banking through custom up vector, then lookAt
-            this.camera.up.copy(this.tempUpVector);
-            this.camera.lookAt(this.currentLookTarget);
-        } else {
-            // Standard and High View cameras
-            const speedFactor = this.vehicle.speed / this.vehicle.maxSpeed;
+        // Base speed shake - increases dramatically at high speeds
+        const speedShake = Math.pow(speedRatio, 2) * 0.12 * comfort;
 
-            // Dynamic FOV - increases with speed for visceral feel
-            const baseFOV = currentMode.type === 'high' ? 70 : 75;
-            const maxFOVIncrease = 10; // 75° → 85° at max speed
-            const targetFOV = baseFOV + (speedFactor * maxFOVIncrease);
+        // Terrain/roughness shake - simulates bumpy road
+        const terrainShake = Math.sin(performance.now() * 0.02) * 0.015 * speedRatio * comfort;
 
-            // Smooth FOV transition; a world's FOV is a spring of WorldCamera.update, toward the same target
-            if (!this.currentFOV) this.currentFOV = baseFOV;
-            this.currentFOV = this.environment.isWorld ? this.worldCamera.fov : THREE.MathUtils.lerp(this.currentFOV, targetFOV, adjLerp(0.05));
-            this.camera.fov = this.currentFOV;
-            this.camera.updateProjectionMatrix();
-
-            // Enhanced camera shake with multiple sources
-            if (!this.cameraShakeOffset) this.cameraShakeOffset = new THREE.Vector3();
-
-            // Comfort rating damps every shake source - Tim's scooter
-            // glides where Steve's race bike rattles
-            const comfort = this.vehicle.comfortShake !== undefined ? this.vehicle.comfortShake : 1;
-
-            // Base speed shake - increases dramatically at high speeds
-            const speedShake = Math.pow(speedFactor, 2) * 0.12 * comfort;
-
-            // Terrain/roughness shake - simulates bumpy road
-            const terrainShake = Math.sin(performance.now() * 0.02) * 0.015 * speedFactor * comfort;
-
-            // Landing impact shake - big jolt when landing from jumps
-            let landingShake = 0;
-            if (this.vehicle.isJumping) {
-                this.lastJumpState = true;
-            } else if (this.lastJumpState) {
-                // Just landed - create impact shake (softened by suspension comfort)
-                this.landingShakeIntensity = 0.3 * (this.vehicle.comfortShake !== undefined ? this.vehicle.comfortShake : 1);
-                this.landingShakeTime = performance.now();
-                this.lastJumpState = false;
-            }
-
-            // Decay landing shake over time
-            if (this.landingShakeIntensity > 0) {
-                const timeSinceLanding = (performance.now() - this.landingShakeTime) / 1000;
-                landingShake = this.landingShakeIntensity * Math.exp(-timeSinceLanding * 8);
-                if (landingShake < 0.01) this.landingShakeIntensity = 0;
-            }
-
-            // Wheelie wobble - adds instability feel during wheelies
-            let wheelieShake = 0;
-            if (this.vehicle.isWheelie) {
-                const wheelieAngle = this.vehicle.wheelieAngle * 180 / Math.PI;
-                wheelieShake = (wheelieAngle / 60) * 0.04 * Math.sin(performance.now() * 0.01);
-            }
-
-            // Combine all shake sources
-            const totalShake = speedShake + terrainShake + landingShake + wheelieShake;
-            this.cameraShakeOffset.x = (Math.random() - 0.5) * totalShake;
-            this.cameraShakeOffset.y = (Math.random() - 0.5) * totalShake * 0.6;
-            this.cameraShakeOffset.z = (Math.random() - 0.5) * totalShake * 0.4;
-            
-            // Look ahead of vehicle for better anticipation on mountain roads
-            const lookAheadDistance = (currentMode.type === 'high' ? 5 : 3) + speedRatio * 7; // Look further in high view
-            this.tempVector.set(0, 0, lookAheadDistance);
-            this.tempVector.applyEuler(vehicleRotation);
-
-            const lookTarget = vehiclePos.clone().add(this.tempVector);
-            lookTarget.y += currentMode.type === 'high' ? 2 : 1; // Look higher in high view
-            
-            if (this.environment.isWorld) {
-                // A world looks along the road ahead, which turns before the bike does, and the target gives way
-                // to the bike until the bike is well inside the view (WorldCamera.aim), from where the camera is now
-                const bike = this.worldBike || (this.worldBike = new THREE.Vector3());
-                bike.set(vehiclePos.x, vehiclePos.y + 0.9, vehiclePos.z);
-                const look = this.worldCamera.aim(this.camera, bike, this.worldProbe || (this.worldProbe = new THREE.PerspectiveCamera()));
-                this.currentLookTarget.set(look.x, look.y, look.z);
-            } else {
-                // Add lean-based lateral offset for corner viewing (less in high view)
-                const leanLateralOffset = -this.vehicle.leanAngle * (currentMode.type === 'high' ? 2 : 4);
-                this.tempUpVector.set(leanLateralOffset, 0, 0);
-                this.tempUpVector.applyEuler(vehicleRotation);
-                lookTarget.add(this.tempUpVector);
-                this.currentLookTarget.lerp(lookTarget, adjLerp(Math.min(this.cameraLerpFactor * 1.5, 1)));
-            }
-            
-            // Camera banking BEFORE lookAt - subtle lean feedback
-            const bankFactor = currentMode.type === 'high' ? 0.15 : 0.25; // High view more subtle
-            // Positive lean = right lean, bank camera right (positive rotation around forward axis)
-            const bankAmount = this.vehicle.leanAngle * bankFactor;
-            const targetBank = THREE.MathUtils.clamp(bankAmount, -0.3, 0.3); // Max ~17° bank
-            this.currentCameraBanking = THREE.MathUtils.lerp(this.currentCameraBanking, targetBank, adjLerp(0.15));
-
-            // Wheelie camera tilt - pitch camera up to follow bike angle
-            let wheelieTilt = 0;
-            if (this.vehicle.isWheelie && this.vehicle.wheelieAngle) {
-                // Tilt camera up proportional to wheelie angle (max ~15°)
-                wheelieTilt = Math.min(this.vehicle.wheelieAngle * 0.4, 0.26); // ~15° max
-            }
-
-            // Smooth wheelie tilt transition
-            if (!this.currentWheelieTilt) this.currentWheelieTilt = 0;
-            this.currentWheelieTilt = THREE.MathUtils.lerp(this.currentWheelieTilt, wheelieTilt, adjLerp(0.1));
-
-            // Adjust look target height during wheelies for subtle upward view
-            if (this.currentWheelieTilt > 0.05) {
-                const tiltInfluence = this.currentWheelieTilt * 1.5; // Reduced from 5 to 1.5
-                this.currentLookTarget.y += tiltInfluence;
-            }
-
-            // Create custom up vector rotated around camera's forward direction (view axis)
-            // This ensures banking works correctly regardless of vehicle's world orientation
-            const forwardDir = new THREE.Vector3();
-            forwardDir.subVectors(this.currentLookTarget, this.currentCameraPos).normalize();
-            this.tempMatrix.makeRotationAxis(forwardDir, this.currentCameraBanking);
-            this.tempUpVector.set(0, 1, 0).applyMatrix4(this.tempMatrix);
-
-            // Apply banking through custom up vector, then lookAt
-            this.camera.up.copy(this.tempUpVector);
-            this.camera.lookAt(this.currentLookTarget);
+        // Landing impact shake - big jolt when landing from jumps
+        let landingShake = 0;
+        if (this.vehicle.isJumping) {
+            this.lastJumpState = true;
+        } else if (this.lastJumpState) {
+            // Just landed - create impact shake (softened by suspension comfort)
+            this.landingShakeIntensity = 0.3 * (this.vehicle.comfortShake !== undefined ? this.vehicle.comfortShake : 1);
+            this.landingShakeTime = performance.now();
+            this.lastJumpState = false;
         }
-        
+
+        // Decay landing shake over time
+        if (this.landingShakeIntensity > 0) {
+            const timeSinceLanding = (performance.now() - this.landingShakeTime) / 1000;
+            landingShake = this.landingShakeIntensity * Math.exp(-timeSinceLanding * 8);
+            if (landingShake < 0.01) this.landingShakeIntensity = 0;
+        }
+
+        // Wheelie wobble - adds instability feel during wheelies
+        let wheelieShake = 0;
+        if (this.vehicle.isWheelie) {
+            const wheelieAngle = this.vehicle.wheelieAngle * 180 / Math.PI;
+            wheelieShake = (wheelieAngle / 60) * 0.04 * Math.sin(performance.now() * 0.01);
+        }
+
+        // Combine all shake sources
+        const totalShake = speedShake + terrainShake + landingShake + wheelieShake;
+        this.cameraShakeOffset.x = (Math.random() - 0.5) * totalShake;
+        this.cameraShakeOffset.y = (Math.random() - 0.5) * totalShake * 0.6;
+        this.cameraShakeOffset.z = (Math.random() - 0.5) * totalShake * 0.4;
+
+        // Look ahead of vehicle for better anticipation on mountain roads
+        const lookAheadDistance = (far ? 5 : 3) + speedRatio * 7; // Look further in the far view
+        this.tempVector.set(0, 0, lookAheadDistance);
+        this.tempVector.applyEuler(vehicleRotation);
+
+        const lookTarget = vehiclePos.clone().add(this.tempVector);
+        lookTarget.y += far ? 2 : 1; // Look higher in the far view
+
+        if (this.environment.isWorld) {
+            // A world looks along the road ahead, which turns before the bike does, and the target gives way
+            // to the bike until the bike is well inside the view (WorldCamera.aim), from where the camera is now
+            const bike = this.worldBike || (this.worldBike = new THREE.Vector3());
+            bike.set(vehiclePos.x, vehiclePos.y + 0.9, vehiclePos.z);
+            const look = this.worldCamera.aim(this.camera, bike, this.worldProbe || (this.worldProbe = new THREE.PerspectiveCamera()));
+            this.currentLookTarget.set(look.x, look.y, look.z);
+        } else {
+            // Add lean-based lateral offset for corner viewing (less in the far view)
+            const leanLateralOffset = -this.vehicle.leanAngle * (far ? 2 : 4);
+            this.tempUpVector.set(leanLateralOffset, 0, 0);
+            this.tempUpVector.applyEuler(vehicleRotation);
+            lookTarget.add(this.tempUpVector);
+            this.currentLookTarget.lerp(lookTarget, adjLerp(Math.min(this.cameraLerpFactor * 1.5, 1)));
+        }
+
+        // Camera banking BEFORE lookAt - subtle lean feedback
+        const bankFactor = far ? 0.15 : 0.25; // The far view more subtle
+        // Positive lean = right lean, bank camera right (positive rotation around forward axis)
+        const bankAmount = this.vehicle.leanAngle * bankFactor;
+        const targetBank = THREE.MathUtils.clamp(bankAmount, -0.3, 0.3); // Max ~17° bank
+        this.currentCameraBanking = THREE.MathUtils.lerp(this.currentCameraBanking, targetBank, adjLerp(0.15));
+
+        // Wheelie camera tilt - pitch camera up to follow bike angle
+        let wheelieTilt = 0;
+        if (this.vehicle.isWheelie && this.vehicle.wheelieAngle) {
+            // Tilt camera up proportional to wheelie angle (max ~15°)
+            wheelieTilt = Math.min(this.vehicle.wheelieAngle * 0.4, 0.26); // ~15° max
+        }
+
+        // Smooth wheelie tilt transition
+        if (!this.currentWheelieTilt) this.currentWheelieTilt = 0;
+        this.currentWheelieTilt = THREE.MathUtils.lerp(this.currentWheelieTilt, wheelieTilt, adjLerp(0.1));
+
+        // Adjust look target height during wheelies for subtle upward view
+        if (this.currentWheelieTilt > 0.05) {
+            const tiltInfluence = this.currentWheelieTilt * 1.5; // Reduced from 5 to 1.5
+            this.currentLookTarget.y += tiltInfluence;
+        }
+
+        // Create custom up vector rotated around camera's forward direction (view axis)
+        // This ensures banking works correctly regardless of vehicle's world orientation
+        const forwardDir = new THREE.Vector3();
+        forwardDir.subVectors(this.currentLookTarget, this.currentCameraPos).normalize();
+        this.tempMatrix.makeRotationAxis(forwardDir, this.currentCameraBanking);
+        this.tempUpVector.set(0, 1, 0).applyMatrix4(this.tempMatrix);
+
+        // Apply banking through custom up vector, then lookAt
+        this.camera.up.copy(this.tempUpVector);
+        this.camera.lookAt(this.currentLookTarget);
+
         // Update shadow camera to follow player
         this.updateShadowCamera();
     }
-    
+
     // What the world camera reads of the bike and the view mode (WorldCamera.update): the bike's smooth road
     // position, so nothing the camera reads from the route steps where the polyline turns. The carving swing is the
     // legs' chase camera's (the lean shift with its lagged lateral term, and the look point pushed into the corner),
@@ -2576,17 +2531,17 @@ class Game {
         // (the way the bike goes, and whether it is on the ride, for the free-roam camera: WorldCamera.followRider)
         input.yaw = v.yawAngle;
         input.onRide = v.projection.index >= 0 && Math.abs(v.projection.lateral || 0) <= (v.projection.width || 0) / 2 + Game.CAMERA_RIDE_M;
-        input.lift = mode.type === 'high' ? 2 : 1;
+        input.lift = mode.type === 'far' ? 2 : 1;
         input.offset.x = this.cameraOffset.x;
         input.offset.y = this.cameraOffset.y;
         input.offset.z = this.cameraOffset.z;
         const swing = input.swing || (input.swing = {});
-        swing.x = Game.tune('camera', 'swing', -v.leanAngle * (mode.type === 'high' ? 3 : 2) + this.cameraLateralOffset);
-        swing.look = Game.tune('camera', 'swing', -v.leanAngle * (mode.type === 'high' ? 2 : 4));
+        swing.x = Game.tune('camera', 'swing', -v.leanAngle * (mode.type === 'far' ? 3 : 2) + this.cameraLateralOffset);
+        swing.look = Game.tune('camera', 'swing', -v.leanAngle * (mode.type === 'far' ? 2 : 4));
         swing.follow = follow;
         swing.lookFollow = Math.min(this.cameraLerpFactor * 1.5, 1);
         input.aspect = this.camera.aspect;
-        input.fov = (mode.type === 'high' ? 70 : 75) + (v.speed / v.maxSpeed) * 10;
+        input.fov = (mode.type === 'far' ? 70 : 75) + (v.speed / v.maxSpeed) * 10;
         return input;
     }
 
@@ -2748,8 +2703,36 @@ class Game {
         return Math.max(0, Math.min(env.endS, at) - from);
     }
 
-    // The end of a world stage: the time and the restarts, and R to ride it again. Boards, unlocks and the
-    // next stage belong to the run flow of the world, not to this page.
+    // A finish counts toward the riders, the bikes and the legs only when it is a real one (Game.progressCounts):
+    // not in debug mode (TourSystem `unlockAll` saves nothing), not in free roam, not tuned, and on a world not
+    // after the debug skip, the free-fly camera or a read of `?worldData` (WorldEnvironment submitAllowed)
+    progressCounts() {
+        if (this.rideTuned || this.freeRoam) return false;
+        const env = this.environment;
+        return !(env && env.isWorld) || !!env.submitAllowed;
+    }
+
+    // A world leg finished: the leg in the store that opens the next (TourSystem.markWorldLegFinished) and the
+    // rider's next bike (TourSystem.markRideFinished). Returns what it unlocked for the finish card, or null
+    recordWorldFinish() {
+        const env = this.environment, tour = this.tourSystem;
+        if (!env || !env.stage || !tour || !tour.markWorldLegFinished || !this.progressCounts()) return null;
+        const unlocks = tour.markWorldLegFinished(env.stage.id);
+        const bike = this.selectedCharacter && tour.markRideFinished ? tour.markRideFinished(this.selectedCharacter.id, this.selectedBike()) : null;
+        return bike ? { ...unlocks, bikes: [bike] } : unlocks;
+    }
+
+    // The unlock block of a world finish card: the classic finish's panel (buildUnlockPanel), and until the next rider
+    // is in hand, how far away it is
+    worldUnlockBlock() {
+        const unlocks = this.worldUnlocks;
+        const riders = unlocks && Array.isArray(unlocks.characters) ? unlocks.characters.length : 0;
+        const text = riders === 0 && this.tourSystem && this.tourSystem.unlockProgressText ? this.tourSystem.unlockProgressText() : '';
+        const icon = typeof UiIcons !== 'undefined' ? `${UiIcons.svg('unlock')} ` : '';
+        return `${this.buildUnlockPanel(unlocks)}${text ? `<div class="finish-progress">${icon}${text}</div>` : ''}`;
+    }
+
+    // The end of a world stage: the time and the restarts, what the finish unlocked, and R to ride it again
     showWorldFinish() {
         const banner = document.createElement('div');
         banner.id = 'finishBanner';
@@ -2762,6 +2745,7 @@ class Game {
                 <div class="finish-time">${RaceTiming.formatTime(this.finishTime)}</div>
                 <div class="finish-deltas">${restarts}</div>
                 <div class="finish-meta">${HudRules.number(this.worldRouteDistance())} m</div>
+                ${this.worldUnlockBlock()}
                 <div class="finish-buttons">
                     <button id="restartLegBtn" class="finish-btn primary" data-key="KeyR"><u>R</u>ESTART</button>
                     <button id="returnToMenuBtn" class="finish-btn secondary" data-key="KeyM" data-menu><u>M</u>ENU</button>
@@ -2812,14 +2796,15 @@ class Game {
         const titleText = isLastLeg ? 'TOUR COMPLETE!' : 'LEG COMPLETE!';
 
         // Record progression: completing a leg unlocks the next leg and,
-        // at milestones, new riders
+        // at milestones, new riders. A tuned ride records nothing (progressCounts)
         const finishedLeg = this.tourSystem.getCurrentLeg();
+        const counts = this.progressCounts();
         let unlocks = { legs: [], characters: [] };
-        if (finishedLeg && this.tourSystem.markLegCompleted) {
+        if (counts && finishedLeg && this.tourSystem.markLegCompleted) {
             unlocks = this.tourSystem.markLegCompleted(finishedLeg.id);
         }
         // A ride finished on the rider's best open bike opens their next one (TourSystem.markRideFinished)
-        const newBike = this.selectedCharacter && this.tourSystem.markRideFinished
+        const newBike = counts && this.selectedCharacter && this.tourSystem.markRideFinished
             ? this.tourSystem.markRideFinished(this.selectedCharacter.id, this.selectedBike()) : null;
         if (newBike) unlocks = { ...unlocks, bikes: [newBike] };
         const flow = TourSystem.finishFlow(unlocks, isLastLeg);
@@ -3092,7 +3077,7 @@ class Game {
         const rule = Game.WORLD_CRASH;
         this.worldCrashStreak = this.worldSinceRestartS < rule.quickS ? (this.worldCrashStreak || 0) + 1 : 0;
         this.worldCrash = { s: 0, stillS: 0 };
-        showCallout(`${cause || 'Crashed'}  +${Game.RESTART_PENALTY_MS / 1000} s`, 'bad', Game.CALLOUT_MS.crash);
+        this.crashCallout = showCallout(`${cause || 'Crashed'}  +${Game.RESTART_PENALTY_MS / 1000} s`, 'bad', Game.CALLOUT_MS.crash);
     }
 
     // One step of a world ride's crash: the restart once the fall has been seen (mostS, or leastS when the bike has
@@ -3464,6 +3449,11 @@ class Game {
         return firstLocked && firstLocked.id === characterId ? 'dimmed' : 'silhouette';
     }
 
+    // The rider page's stage: one stand, and on it the focused rider on their chosen bike in their chosen outfit, drawn
+    // from the detailed files alone (the owner, 2026-11-26: the menu never shows a procedural or a light model). A
+    // rider's bike is built when the rider is first shown and kept, hidden, while another is shown, so a step back
+    // shows it at once and fetches nothing. A bike whose files are not in yet is not drawn: the stand stays empty
+    // until they arrive (BikeModels.dress fetches each file once and keeps it for the page)
     startRiderShowcase(focusId) {
         this.endTrackPreview();
 
@@ -3478,22 +3468,20 @@ class Game {
             // Start on the bike instead of flying in from the last camera position
             this.showcaseSnap = true;
 
-            const platformGeometry = new THREE.CylinderGeometry(2.2, 2.4, 0.12, 28);
-            const platformMaterial = new THREE.MeshStandardMaterial({ color: 0x141a26, roughness: 0.4, metalness: 0.6 });
-            const silhouetteMaterial = new THREE.MeshBasicMaterial({ color: 0x05070c });
-
             this.showcaseBikes = {};
             this.showcaseExtras = [];
-            this.showcaseSilhouette = silhouetteMaterial;
-            this.riderDisplayOrder().forEach((c, i) => {
-                const v = this.buildShowcaseBike(c, i * 14);
-                const platform = new THREE.Mesh(platformGeometry, platformMaterial);
-                platform.position.set(v.position.x, v.position.y - 0.06, v.position.z);
-                platform.receiveShadow = true;
-                this.scene.add(platform);
-                this.showcaseExtras.push(platform);
+            this.showcaseSilhouette = new THREE.MeshBasicMaterial({ color: 0x05070c });
+            // Stage far below the world so previews never collide with track geometry
+            this.showcaseSpot = new THREE.Vector3(0, -400, 0);
 
-            });
+            const platform = new THREE.Mesh(
+                new THREE.CylinderGeometry(2.2, 2.4, 0.12, 28),
+                new THREE.MeshStandardMaterial({ color: 0x141a26, roughness: 0.4, metalness: 0.6 })
+            );
+            platform.position.set(this.showcaseSpot.x, this.showcaseSpot.y - 0.06, this.showcaseSpot.z);
+            platform.receiveShadow = true;
+            this.scene.add(platform);
+            this.showcaseExtras.push(platform);
 
             // Showroom floor: glossy, fading out to the horizon haze so the
             // stage does not end in a hard edge
@@ -3507,9 +3495,8 @@ class Game {
             fade.addColorStop(1, '#000000');
             fadeCtx.fillStyle = fade;
             fadeCtx.fillRect(0, 0, 128, 128);
-            const riderCount = Object.keys(this.showcaseBikes).length;
             const floor = new THREE.Mesh(
-                new THREE.PlaneGeometry(riderCount * 14 + 160, 160),
+                new THREE.PlaneGeometry(160, 160),
                 new THREE.MeshStandardMaterial({
                     color: 0x1b2230,
                     roughness: 0.4,
@@ -3520,7 +3507,7 @@ class Game {
                 })
             );
             floor.rotation.x = -Math.PI / 2;
-            floor.position.set((riderCount - 1) * 7, -400.13, 0);
+            floor.position.set(this.showcaseSpot.x, this.showcaseSpot.y - 0.13, this.showcaseSpot.z);
             floor.receiveShadow = true;
             this.scene.add(floor);
             this.showcaseExtras.push(floor);
@@ -3534,17 +3521,22 @@ class Game {
         this.startMenuShowcaseLoop();
     }
 
+    // Shows one rider on the stand: builds their bike the first time, and hides every other rider's
     focusRiderShowcase(focusId) {
         this.showcaseFocusId = focusId;
-        // Only the bike in view is fetched: the others keep their stand-in
-        // (their own far level when the file is in memory, else procedural)
-        // until they are focused (BikeModels.dress fetches once), and a
-        // locked rider's silhouette never needs the file
-        const v = this.showcaseBikes && this.showcaseBikes[focusId];
-        if (v && (!v.modelled || v.far) && !v.dressing && this.riderTier(focusId) !== 'silhouette' && typeof BikeModels !== 'undefined') {
-            v.dressing = true;
-            BikeModels.dress(v);
+        if (!this.showcaseBikes) return;
+        if (!this.showcaseBikes[focusId]) {
+            const c = CHARACTERS.find(character => character.id === focusId);
+            if (c) this.buildShowcaseBike(c);
         }
+        this.showShowcaseBikes();
+    }
+
+    // Only the focused rider is drawn, and only once their bike wears its detailed files
+    showShowcaseBikes() {
+        Object.entries(this.showcaseBikes || {}).forEach(([id, v]) => {
+            v.group.visible = id === this.showcaseFocusId && !!v.modelled && !v.far;
+        });
     }
 
     // The bike the selected rider rides: their pick on the rider select
@@ -3559,41 +3551,31 @@ class Game {
         return this.tourSystem.getSelectedOutfit(this.selectedCharacter.id);
     }
 
-    // One character's bike on the rider-select stage at `x`: their chosen
-    // bike as a stand-in (focusRiderShowcase dresses it), shaded by the
-    // rider's unlock tier
-    buildShowcaseBike(c, x) {
+    // One character's bike on the rider page's stand: their chosen bike in their chosen outfit, dressed in its detailed
+    // files (fetched now if they are not in), hidden until it wears them, and shaded by the rider's unlock tier
+    buildShowcaseBike(c) {
         const bikeId = this.tourSystem.getSelectedBike ? this.tourSystem.getSelectedBike(c.id) : null;
         const outfit = this.tourSystem.getSelectedOutfit ? this.tourSystem.getSelectedOutfit(c.id) : null;
-        const v = new Vehicle(this.scene, null, c, bikeId, { model: 'far', outfit });
-        // Stage far below the world so previews never collide with track geometry
-        v.position.set(x, -400, 0);
+        const v = new Vehicle(this.scene, null, c, bikeId, { model: false, outfit });
+        v.position.copy(this.showcaseSpot);
         v.yawAngle = 0;
         v.updateMesh();
+        v.group.visible = false;
 
-        // Run again when the modelled bike takes over from the
-        // procedural one, so it works from each material's lit colour
+        // Run when the detailed model takes over from the procedural one, so it works from each material's lit colour
         // and gives the same result however often it runs.
         const tier = this.riderTier(c.id);
         const silhouetteMaterial = this.showcaseSilhouette;
         const shade = () => {
             if (tier === 'dimmed') {
-                const uses = new Map();
-                v.group.traverse(o => {
-                    if (o.isMesh && o.material) uses.set(o.material, (uses.get(o.material) || 0) + 1);
-                });
                 const palette = new Set(Object.values(v.palette || {}));
-                uses.forEach((count, material) => {
+                const uses = new Set();
+                v.group.traverse(o => { if (o.isMesh && o.material) uses.add(o.material); });
+                uses.forEach((material) => {
                     if (material.color) {
                         if (!material.userData.lit) material.userData.lit = material.color.clone();
-                        // The procedural bike darkens a material once
-                        // for each part that wears it, so its shared
-                        // finishes go black and the one-off ones (the
-                        // helmet, the rims) stay readable. A modelled
-                        // bike has few parts: its palette finishes
-                        // take the dark end, the rest the light end.
-                        const factor = v.modelled ? (palette.has(material) ? 0.03 : 0.12) : Math.pow(0.22, count);
-                        material.color.copy(material.userData.lit).multiplyScalar(factor);
+                        // Its palette finishes take the dark end, the rest the light end, so the shape still reads
+                        material.color.copy(material.userData.lit).multiplyScalar(palette.has(material) ? 0.03 : 0.12);
                     }
                     if (material.emissiveIntensity !== undefined) material.emissiveIntensity = 0;
                 });
@@ -3606,21 +3588,26 @@ class Game {
                 });
             }
         };
-        shade();
-        v.onModel = shade;
+        v.onModel = () => {
+            shade();
+            this.showShowcaseBikes();
+        };
         this.showcaseBikes[c.id] = v;
+        // (the swap calls onModel, at once when the files are in, else when they arrive)
+        if (typeof BikeModels !== 'undefined') BikeModels.dress(v);
         return v;
     }
 
-    // The rider select's bike picker moved: that character's stage bike
-    // becomes the bike now chosen
+    // The rider select's bike or outfit picker moved: that character's bike is built again as now chosen, and what the
+    // old one held is freed
     changeShowcaseBike(characterId) {
         const old = this.showcaseBikes && this.showcaseBikes[characterId];
         if (!old) return;
         const c = CHARACTERS.find(character => character.id === characterId);
         this.scene.remove(old.group);
         old.onModel = null;
-        this.buildShowcaseBike(c, old.position.x);
+        delete this.showcaseBikes[characterId];
+        this.buildShowcaseBike(c);
         // What the old bike held is freed, but for what a bike still on the stage wears (the silhouette, a part
         // shared between bikes): a bike stepped through on the menu leaves nothing on the GPU
         const kept = new Set([this.showcaseSilhouette]);
@@ -3634,7 +3621,7 @@ class Game {
                 if (m && !kept.has(m) && m.dispose) m.dispose();
             });
         });
-        if (this.showcaseFocusId === characterId) this.focusRiderShowcase(characterId);
+        this.showShowcaseBikes();
     }
 
     startTrackPreview(legIndex) {
@@ -3682,6 +3669,12 @@ class Game {
     }
 
     endRiderShowcase() {
+        // The fill shines from where the ride puts it (setupLighting), not from the stage
+        if (this.fillLight && this.showcaseBikes) {
+            this.fillLight.position.set(-50, 30, 0);
+            this.fillLight.target.position.set(0, 0, 0);
+            this.fillLight.target.updateMatrixWorld();
+        }
         if (this.showcaseBikes) {
             Object.values(this.showcaseBikes).forEach(v => {
                 this.scene.remove(v.group);
@@ -3746,18 +3739,14 @@ class Game {
             if (this.showcaseMode === 'rider' && this.showcaseBikes) {
                 // A slow turn round the focused bike, as far off as the box needs for the whole bike
                 this.showcaseOrbitAngle += dt * Game.SHOWCASE_TURN;
-                const focus = this.showcaseBikes[this.showcaseFocusId] || Object.values(this.showcaseBikes)[0];
-                const target = focus.position;
+                const target = this.showcaseSpot;
                 const r = view.distance;
                 const camX = target.x + Math.cos(this.showcaseOrbitAngle) * r;
                 const camZ = target.z + Math.sin(this.showcaseOrbitAngle) * r;
                 // Ease toward the orbit point so focus changes glide across
                 this.camera.position.lerp(new THREE.Vector3(camX, target.y + 0.9 + r * 0.3, camZ), this.showcaseSnap ? 1 : Math.min(1, dt * 4));
                 this.showcaseSnap = false;
-                // The sun and its shadow frustum follow the stage
-                this.directionalLight.position.set(target.x + 30, target.y + 45, target.z + 22);
-                this.directionalLight.target.position.copy(target);
-                this.directionalLight.target.updateMatrixWorld();
+                this.lightShowcase(target, this.camera.position);
                 this.camera.up.set(0, 1, 0);
                 this.camera.lookAt(target.x, target.y + 0.7, target.z);
             } else if (this.showcaseMode === 'track' && this.previewEnv) {
@@ -3781,6 +3770,33 @@ class Game {
             this.graphics.render(this.scene, this.camera);
         };
         this.menuShowcaseRAF = requestAnimationFrame(loop);
+    }
+
+    // The rider stage's light, set from where the camera is: the sun is the key, high on one side, and its shadow
+    // frustum follows the stage; the fill comes low from the camera's side, away from the sun, so the shade side keeps
+    // its shape; the rim comes from behind the bike, against the camera, and draws its outline off the dark floor.
+    // One flat key showed no shape (the critic panel, bike15). The ride sets the fill and the rim again (setTimeOfDay)
+    lightShowcase(target, eye) {
+        const lights = Game.SHOWCASE_LIGHT;
+        this.directionalLight.position.set(target.x + 30, target.y + 45, target.z + 22);
+        this.directionalLight.target.position.copy(target);
+        this.directionalLight.target.updateMatrixWorld();
+        const back = new THREE.Vector3(target.x - eye.x, 0, target.z - eye.z);
+        if (back.lengthSq() < 1e-6) back.set(0, 0, 1);
+        back.normalize();
+        // (the camera's side, turned a quarter away from the sun's)
+        const sun = new THREE.Vector3(30, 0, 22).normalize();
+        const turn = back.x * sun.z - back.z * sun.x > 0 ? 1 : -1;
+        const fill = new THREE.Vector3(-back.x, 0, -back.z).applyAxisAngle(new THREE.Vector3(0, 1, 0), turn * Math.PI / 4);
+        const aim = (light, at, intensity) => {
+            if (!light) return;
+            light.position.copy(at);
+            light.target.position.copy(target);
+            light.target.updateMatrixWorld();
+            light.intensity = intensity;
+        };
+        aim(this.fillLight, new THREE.Vector3(target.x + fill.x * 30, target.y + 20, target.z + fill.z * 30), lights.fill);
+        aim(this.rimLight, new THREE.Vector3(target.x + back.x * 22, target.y + 40, target.z + back.z * 22), lights.rim);
     }
 
     // Frames the showcase in the menu's stage box (HomeStage.frame): the camera's view is shifted so the box's centre
@@ -3995,18 +4011,14 @@ class Game {
         }
         
         // Check for camera mode switch
-        if (this.input.checkCameraSwitch()) {
-            this.cameraMode = (this.cameraMode + 1) % this.cameraModes.length;
-            localStorage.setItem('twistyCameraMode', String(this.cameraMode));
-            console.log(`Camera mode: ${this.cameraModes[this.cameraMode].name}`);
-            
-            showCallout(`Camera: ${this.cameraModes[this.cameraMode].name}`, 'info', 1000);
-        }
+        if (this.input.checkCameraSwitch()) this.toggleCameraView();
 
         // Run physics in fixed timesteps - ensures consistent movement
         // regardless of variable frame timing
         // The simulated time this frame steps, which the world's streamer measures its disposal grace on
         let simulatedThisFrame = 0;
+        // (traffic is drawn between its steps, as the bike is: each step reads the steps' poses, Traffic.drawn)
+        if (this.traffic && this.traffic.stepped) this.traffic.stepped();
         while (this.accumulatedTime >= this.fixedTimeStep) {
             const deltaTime = this.fixedTimeStep; // Always 16.67ms
             simulatedThisFrame += deltaTime;
@@ -4197,6 +4209,7 @@ class Game {
         // Place the bike mesh between physics states for smooth motion at any
         // frame rate (frames otherwise alternate 1/2 physics steps and judder)
         this.vehicle.applyRenderInterpolation(this.accumulatedTime / this.fixedTimeStep);
+        if (this.traffic && this.traffic.drawn) this.traffic.drawn(this.accumulatedTime / this.fixedTimeStep);
 
         // The gearbox of the sound and the HUD, then the sound of this frame
         this.updateGearbox(rawDeltaTime, throttleInput, brakeInput);
@@ -4368,16 +4381,16 @@ class Game {
         // Everything a world draws takes the haze of this frame's air, also what a build step added since the last
         // frame, before it is first drawn (js/world/landshade.js)
         if (this.environment.isWorld) LandShade.update(this.scene, this.graphics, this.weatherSystem, this.environment.group);
-        if (this.environment.isWorld) this.budgetWindow();
+        if (this.environment.isWorld) {
+            this.budgetWindow();
+            this.watchWindow(rawDeltaTime);
+        }
         if (this.effectLevels) Effects.frame(this);
         this.graphics.update(
             rawDeltaTime,
             this.vehicle.crashed ? 0 : this.vehicle.speed / this.vehicle.maxSpeed,
             this.weatherSystem ? (this.weatherSystem.flash || 0) * 0.35 : 0
         );
-        // In a first-person view nothing of the rider the camera is inside is drawn (Vehicle.hideAround)
-        const firstPerson = ['helmet', 'onboard'].includes(this.cameraModes[this.cameraMode].type);
-        Vehicle.hideAround(this.vehicle.rider || this.vehicle.group, firstPerson ? this.camera.position : null, this.camera.near);
         this.graphics.render(this.scene, this.camera);
     }
 
@@ -4487,8 +4500,9 @@ class Game {
             this.leaderboardService.recordFinish(Math.round(finishTime))
                 .catch(error => console.error('Failed to record finish:', error));
         }
-        // A finished leg opens the next on the menu (WorldLegs), and a time that may be trusted is the map's best when it beats it
-        if (world && typeof WorldLegs !== 'undefined' && this.environment.stage && !this.freeRoam) WorldLegs.markFinished(this.environment.stage.id);
+        // A finished leg that may be trusted opens the next on the menu (WorldLegs), counts toward the riders and opens
+        // the rider's next bike, as a classic leg does (recordWorldFinish); its time is the map's best when it beats it
+        this.worldUnlocks = world && !this.freeRoam ? this.recordWorldFinish() : null;
         if (world && typeof WorldMap !== 'undefined' && this.environment.stage && !this.freeRoam && this.environment.submitAllowed && !this.rideTuned) WorldMap.recordBest(this.environment.stage.id, finishTime);
         // A leg that ends at a stop rides on into it: the stop scene (js/world/stopscene.js) shows the card in its bar
         if (world && !this.freeRoam && this.startStopScene()) return;
@@ -4614,7 +4628,9 @@ class Game {
 
     // The result card in the lower bar: the time, then what can be done here (a picture, the next leg), restart, menu
     showStopCard(scene) {
-        const next = typeof WorldLegs !== 'undefined' ? WorldLegs.LIST.find(leg => leg.opensAfter === this.environment.stage.id) : null;
+        // (the next leg only once it is open: a finish that did not count opened none, Game.progressCounts)
+        const after = typeof WorldLegs !== 'undefined' ? WorldLegs.LIST.find(leg => leg.opensAfter === this.environment.stage.id) : null;
+        const next = after && WorldLegs.isOpen(after.id, { unlockAll: !!(this.tourSystem && this.tourSystem.unlockAll) }) ? after : null;
         const actions = (StopScene.KINDS[scene.stop.kind] || {}).actions || [];
         const restarts = this.restarts > 0 ? `<div class="finish-board">${this.restarts} ${this.restarts === 1 ? 'restart' : 'restarts'}, +${this.restarts * Game.RESTART_PENALTY_MS / 1000} s in your time</div>` : '';
         const banner = document.createElement('div');
@@ -4625,6 +4641,7 @@ class Game {
                 <div class="finish-title">STAGE COMPLETE</div>
                 <div class="finish-time">${RaceTiming.formatTime(this.finishTime)}</div>
                 <div class="finish-deltas">${restarts}</div>
+                ${this.worldUnlockBlock()}
                 <div class="finish-buttons">
                     ${next ? `<button id="stopNextBtn" class="finish-btn primary" data-key="KeyN"><u>N</u>EXT LEG</button>` : ''}
                     ${actions.includes('photo') && typeof PhotoMode !== 'undefined' ? '<button id="stopPhotoBtn" class="finish-btn secondary" data-key="KeyV">PHOTO (<u>V</u>)</button>' : ''}
@@ -5040,8 +5057,14 @@ class Game {
             environment,
             weatherSystem: this.weatherSystem
         });
-        // (a crash has said its cause and its cost during the fall)
-        if (reason !== 'crash') showCallout(`${Game.WORLD_RESTART_TEXT[reason] || Game.WORLD_RESTART_TEXT.key} +${Game.RESTART_PENALTY_MS / 1000} s`, 'warn', Game.CALLOUT_MS.restart);
+        // A crash has said its cause and its cost during the fall. That call-out goes when the bike is put down, so a
+        // bike standing on the road does not read as one that crashed there (the owner read "Hit the wall" over a bike
+        // at 0 mph in the middle of its lane as a crash at a standstill): the restart says it is back on the road
+        if (reason === 'crash') {
+            if (this.crashCallout && this.hud && typeof this.hud.dismiss === 'function') this.hud.dismiss(this.crashCallout);
+            this.crashCallout = null;
+            showCallout(Game.WORLD_RESTART_TEXT.crash, 'info', Game.CALLOUT_MS.restart);
+        } else showCallout(`${Game.WORLD_RESTART_TEXT[reason] || Game.WORLD_RESTART_TEXT.key} +${Game.RESTART_PENALTY_MS / 1000} s`, 'warn', Game.CALLOUT_MS.restart);
     }
 
     // Fast travel (js/world/travel.js): from the pause panel, or with its key while riding (the ride pauses under it).
@@ -5157,8 +5180,6 @@ class Game {
         });
         bar.tabIndex = -1;
         this.freeFly = { fly, held, look, saved, euler, fromRide, bar, off, at: new THREE.Vector3(), sun: new THREE.Vector3(), near: null, readAt: -Infinity, origin: (env.data && env.data.manifest && env.data.manifest.origin) || FreeFly.ORIGIN };
-        // (from the helmet view the rider was hidden round the camera: Vehicle.hideAround)
-        if (typeof Vehicle !== 'undefined' && Vehicle.hideAround) Vehicle.hideAround(this.vehicle.rider || this.vehicle.group, null, cam.near);
         document.body.classList.add('free-fly');
         Modals.open(bar, {
             cancel: () => this.closeFreeFly(),
@@ -5235,6 +5256,7 @@ class Game {
         this.updateShadowCamera(Number.isFinite(floor) ? state.sun.set(fly.x, Math.min(fly.y, floor), fly.z) : at);
         if (typeof LandShade !== 'undefined') LandShade.update(this.scene, this.graphics, this.weatherSystem, env.group);
         this.budgetWindow();
+        this.watchWindow(dt);
 
         const now = performance.now();
         if (now - state.readAt >= 250) {
@@ -5572,6 +5594,9 @@ Game.SIDE_CAR_COLORS = [0xf2f2f0, 0x2b2f36, 0x8a9199, 0x7a1d1d, 0x1f3f6b, 0x3d5a
 Game.ROAM_TEXT = { edge: 'Edge of the map: turn back', key: 'Back on the road', 'edge-back': 'Turned back at the edge of the map' };
 
 // The menu's rider: the camera's field of view (degrees) and how fast it turns round the bike (rad/s)
+// The rider stage's fill and rim (Game.lightShowcase), against the sun's own intensity. The rim is off: from behind it
+// flared on the glossy paint of a mudguard's tip under the bloom, a fault all six critics named (bike15, final3)
+Game.SHOWCASE_LIGHT = { fill: 0.35, rim: 0 };
 Game.SHOWCASE_FOV = 38;
 Game.SHOWCASE_TURN = 0.22;
 
@@ -5626,9 +5651,9 @@ function showCallout(text, tone = 'info', durationMs = 1000) {
     const hud = window.game && window.game.hud;
     if (!hud) {
         console.warn('Call-out before the HUD exists:', text);
-        return;
+        return null;
     }
-    hud.callout(text, tone, durationMs);
+    return hud.callout(text, tone, durationMs);
 }
 
 // Debug key events

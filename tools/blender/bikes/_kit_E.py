@@ -24,8 +24,10 @@
 import json
 import math
 import os
+import shutil
 import struct
 import sys
+import tempfile
 
 HERE = os.path.dirname(os.path.abspath(__file__))
 sys.path.insert(0, os.path.dirname(HERE))
@@ -36,8 +38,11 @@ from mathutils import Matrix, Vector  # noqa: E402
 import common  # noqa: E402
 from bike_kit import Kit, B, render, pack_colours  # noqa: E402
 import far  # noqa: E402
+import surface  # noqa: E402
+import maps  # noqa: E402
 
-OUT_DIR = os.path.join(common.ASSETS, "bikes", "detail")
+# TWISTY_BIKE_DIR builds a variant elsewhere (a model-build round), its far file in a `far` folder beside it
+OUT_DIR = os.environ.get("TWISTY_BIKE_DIR") or os.path.join(common.ASSETS, "bikes", "detail")
 LODS = ("lod0", "lod1")
 BUDGET = {"lod0": 40000, "lod1": 10000}
 FILE_BUDGET = int(1.2 * 1024 * 1024)
@@ -60,8 +65,19 @@ def along(a, b, t):
 class EKit(Kit):
     """The shared kit, building one bike at two levels of detail into one scene."""
 
-    def __init__(self, seed, colours, cull=0.09, extra=None):
+    def __init__(self, seed, colours, cull=0.09, extra=None, layers=None, headroom=1.0, maps=None):
         super().__init__(seed=seed, colours=colours)
+        # The surface layers baked into texture maps (maps.py; a surface.config with the steps to bake), or None for
+        # a file with no maps. TWISTY_MAPS=0 builds without them, for a comparison
+        self.maps = maps if os.environ.get("TWISTY_MAPS", "1") != "0" else None
+        # The surface layers worked over the occlusion (surface.config), or None for the occlusion alone; `headroom`
+        # is how far a finish may be raised so wear can lighten it (surface.py)
+        # (TWISTY_SURFACE and TWISTY_HEADROOM set them for a variant build of any bike of this kit)
+        if layers is None and os.environ.get("TWISTY_SURFACE"):
+            layers = surface.config()
+        self.layers = layers
+        self.headroom = float(os.environ.get("TWISTY_HEADROOM") or headroom)
+        self.seed = seed
         # Finishes the shared kit has no name for, as (colour, roughness,
         # metalness); the game's palette holds none of these names, so each
         # keeps the colour written here
@@ -155,6 +171,12 @@ class EKit(Kit):
         for lod in LODS:
             mine = {key: obj for key, obj in joined.items() if key.startswith(lod + "_")}
             self.occlude_level(mine, joined)
+            if self.layers:
+                surface.apply(list(mine.values()), self.layers, self.colours, seed=self.seed, headroom=self.headroom)
+        baked = None
+        if self.maps:
+            blocks = maps.unwrap(list(joined.values()), [obj for key, obj in joined.items() if key.startswith("lod1_")])
+            baked = maps.bake(list(joined.values()), self.maps, self.colours, seed=self.seed, headroom=self.headroom, blocks=blocks)
         groups = {}
         marks = []
         for lod in LODS:
@@ -170,9 +192,18 @@ class EKit(Kit):
                 self.scene.collection.objects.link(mark)
                 mark.parent = group
                 marks.append(mark)
-        common.export_glb(path, list(joined.values()) + marks + list(groups.values()), colours=True, texcoords=False)
+        common.export_glb(path, list(joined.values()) + marks + list(groups.values()), colours=True, texcoords=bool(baked))
         pack_colours(path, unit=UNIT)
         size = rename_nodes(path)
+        if baked:
+            arrays, extras = baked
+            # (each map is written out once to be encoded, outside the repository: TWISTY_MAPS_DIR keeps them to look at)
+            folder = os.environ.get("TWISTY_MAPS_DIR") or tempfile.mkdtemp(prefix="twisty-maps-")
+            files = {key: maps.webp(arrays[key], os.path.join(folder, f"{os.path.splitext(os.path.basename(path))[0]}-{key}.webp"), maps.QUALITY[key]) for key in arrays}
+            if not os.environ.get("TWISTY_MAPS_DIR"):
+                shutil.rmtree(folder)
+            size = maps.attach(path, files, extras)
+            print(f"{os.path.basename(path)}: maps " + ", ".join(f"{key} {len(blob)} bytes" for key, blob in files.items()))
         counts = {lod: {} for lod in LODS}
         for key, obj in joined.items():
             lod, name = key.split("_", 1)
@@ -346,7 +377,7 @@ def lever_set(k, grip, side, root_x, bent=None):
         k.box((0.04, 0.03, 0.03), g - out * 0.15 + Vector((0, 0.045, 0.0)), "steel_dark", bevel=0.006)
 
 
-def mirror(k, root, head, size=(0.06, 0.042), mat="dark_metal", shape="rect"):
+def mirror(k, root, head, size=(0.06, 0.042), mat="dark_metal", shape="rect", glass="chrome"):
     """A mirror on a stalk each side: `root` and `head` for the right side."""
     for side in (-1, 1):
         a = Vector((side * root[0], root[1], root[2]))
@@ -359,7 +390,7 @@ def mirror(k, root, head, size=(0.06, 0.042), mat="dark_metal", shape="rect"):
                 (c.z - 0.008, c.y - h, c.y + h, w, 3.2, 3.2, 0.5, 1, 1, c.x),
                 (c.z + 0.006, c.y - h * 0.95, c.y + h * 0.95, w * 0.95, 3.2, 3.2, 0.5, 1, 1, c.x),
                 (c.z + 0.008, c.y - h * 0.9, c.y + h * 0.9, w * 0.9, 3.2, 3.2, 0.5, 1, 1, c.x)], mat, ring=12, steps=1)
-        k.box((w * 1.75, h * 1.75, 0.004), (c.x, c.y, c.z - 0.0165), "chrome", bevel=0)
+        k.box((w * 1.75, h * 1.75, 0.004), (c.x, c.y, c.z - 0.0165), glass, bevel=0)
 
 
 def indicator(k, root, tip, mat="signal", stalk="dark_metal", radius=0.012):
@@ -416,8 +447,10 @@ def previews(k, name, height=0.7, reach=1.0, extra=None):
 
 
 def wheel(k, centre, radius, width, rim, spokes="wire", count=32, hub=0.055, seg=None, pair=False, sweep=0.0, rim_mat="rim", spoke_mat=None, tread=True,
-          hub_width=None, blade=1.0):
+          hub_width=None, blade=1.0, knobs=0.0):
     """A road wheel spinning on x: tyre, rim, and either `count` wire spokes laced to the rim's shoulders or `count` cast blades.
+    `knobs` (metres) cuts a block tread that deep between staggered knobs, on finer segments, for a dual-purpose or
+    off-road tyre: the knobs' tops stay at `radius`, so the wheel stands where it stood.
 
     Built at full shape in the distant model too (fewer segments only), since
     the wheel is how a bike is known: a spoked wheel stays spoked."""
@@ -425,7 +458,7 @@ def wheel(k, centre, radius, width, rim, spokes="wire", count=32, hub=0.055, seg
     k.low = False
     try:
         cx, cy, cz = centre
-        seg = seg or (24 if low else 48)
+        seg = seg or (24 if low else (96 if knobs else 48))
         tube = rim + 0.4 * (radius - rim)
         steps = 6 if low else 10
         profile = [(rim - 0.004, -0.34 * width), (rim + 0.012, -0.41 * width)]
@@ -436,12 +469,19 @@ def wheel(k, centre, radius, width, rim, spokes="wire", count=32, hub=0.055, seg
 
         def groove(i, j):
             row = j - 2
+            if knobs and tread and not low:
+                # Blocks two segments long with gaps two long, each pair of rows shifted half a block from the next;
+                # the bead rows and the outermost shoulder rows stay whole
+                if row < 1 or row > steps - 1:
+                    return 0.0
+                shift = 0 if (row // 2) % 2 == 0 else 2
+                return 0.0 if (i + shift) % 4 in (0, 1) else -knobs
             if not tread or low or row < 2 or row > steps - 2 or row == steps // 2:
                 return 0.0
             lean = row if row < steps // 2 else steps - row
             return -0.006 if (i + lean) % 6 in (0, 1) else 0.0
 
-        k.lathe(profile, centre, "rubber", axis="x", seg=seg, ripple=groove, sharp=50)
+        k.lathe(profile, centre, "rubber", axis="x", seg=seg, ripple=groove, sharp=25 if knobs and not low else 50)
         w = width
         barrel = [(rim + 0.006, -0.4 * w), (rim + 0.007, -0.45 * w), (rim - 0.02, -0.42 * w), (rim - 0.03, -0.18 * w),
                   (rim - 0.03, 0.18 * w), (rim - 0.02, 0.42 * w), (rim + 0.007, 0.45 * w), (rim + 0.006, 0.4 * w)]
@@ -483,9 +523,11 @@ def wheel(k, centre, radius, width, rim, spokes="wire", count=32, hub=0.055, seg
         k.low = low
 
 
-def panel(k, outline, x, thick, mat, toe=0.0, **kw):
-    """Kit.panel turned by `toe` about its own middle, not about z = 0, so it stays at `x` where it is drawn."""
-    mid = sum(z for z, _ in outline) / len(outline)
+def panel(k, outline, x, thick, mat, toe=0.0, about=None, **kw):
+    """Kit.panel turned by `toe` about its own middle, not about z = 0, so it stays at `x` where it is drawn.
+    A graphic or a mark laid on a turned panel passes the panel's middle as `about`, so it lies on the panel's plane:
+    turned about its own middle, it stood off a toed panel by the toe times the distance between the two middles."""
+    mid = sum(z for z, _ in outline) / len(outline) if about is None else about
     return k.panel(outline, x - mid * math.sin(toe), thick, mat, toe=toe, **kw)
 
 

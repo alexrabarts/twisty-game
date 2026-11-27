@@ -24,6 +24,9 @@
 #   4. What is left is cut down by collapsing edges, by one share for the
 #      whole bike, to BIKE_TARGET triangles. The occlusion of each new corner
 #      is that of the nearest old one.
+#   5. Each kept material's occlusion is scaled so that the far bike is as
+#      light as its lod1, material by material: steps 1 to 4 move area from
+#      light finishes to dark ones (matched).
 import json
 import math
 import os
@@ -35,6 +38,7 @@ from mathutils import Vector, kdtree
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 import common  # noqa: E402
+import maps  # noqa: E402
 
 DETAIL = os.path.join(common.ASSETS, "bikes", "detail")
 FAR = os.path.join(common.ASSETS, "bikes", "far")
@@ -104,7 +108,8 @@ def triangles(doc, binary, node, at=(0.0, 0.0, 0.0)):
         if "COLOR_0" in prim["attributes"]:
             accessor = doc["accessors"][prim["attributes"]["COLOR_0"]]
             scale = {5126: 1.0, 5123: 65535.0, 5121: 255.0}[accessor["componentType"]]
-            shades = [v[0] / scale for v in values(doc, binary, prim["attributes"]["COLOR_0"])]
+            # (the mean of the three: a layered surface, tools/blender/surface.py, tints them apart)
+            shades = [(v[0] + v[1] + v[2]) / (3 * scale) for v in values(doc, binary, prim["attributes"]["COLOR_0"])]
         else:
             shades = [1.0] * len(points)
         index = [v[0] for v in values(doc, binary, prim["indices"])] if "indices" in prim else list(range(len(points)))
@@ -308,6 +313,43 @@ def cut(shape, share, names=None, source=None, sharp=60, outward=None):
     return out
 
 
+# Rule 5: each kept material as light as the source faces merged into it. Cutting gives each new corner the occlusion
+# of the nearest old point, and the cut and the dropped small parts move area from one material to another (a thin
+# light stripe loses half its area, a re-turned tyre gains); three crew bikes came out 17 to 21 % darker than their
+# lod1 (tests/unit/scenery-levels.test.js). So the corners of each material are scaled until its light over the whole
+# bike, its area times its mean occlusion as a share of the bike's area, is what the source faces merged into it give,
+# each by its own colour (at most an occlusion of 1). `sources` is [(source triangles, {source material: kept material})], `nodes` is
+# {name: [triangles with normals]}, changed in place.
+def matched(nodes, sources, colours):
+    def lum(name):
+        c = colours.get(name, (1, 1, 1))
+        return 0.2126 * c[0] + 0.7152 * c[1] + 0.0722 * c[2]
+
+    def area(points):
+        # (a face lit from above counts for more, as the sky lights it: the weight scenery-levels measures with)
+        a, b, c = (Vector(p) for p in points)
+        n = (b - a).cross(c - a)
+        return n.length / 2 * (0.6 + 0.4 * abs(n.y) / n.length) if n.length else 0.0
+
+    def light(groups):
+        out, whole = {}, 0.0
+        for name, corners, shades, weight in groups:
+            w = area(corners)
+            out[name] = out.get(name, 0.0) + w * weight * sum(shades) / 3
+            whole += w
+        return {name: v / whole for name, v in out.items()} if whole else {}
+
+    # A source face counts by its own colour's light against its kept material's: a white part merged into a grey
+    # one asks the grey for more light
+    want = light((rename[name], [p for p, _ in corners], [s for _, s in corners], lum(name) / max(lum(rename[name]), 1e-6))
+                 for tris, rename in sources for name, corners in tris if name in rename)
+    have = light((name, [p for p, _, _ in corners], [s for _, _, s in corners], 1.0) for tris in nodes.values() for name, corners in tris)
+    scale = {name: want[name] / have[name] for name in have if name in want and have[name] > 0}
+    for key, tris in nodes.items():
+        nodes[key] = [(name, [(p, n, min(1.0, shade * scale.get(name, 1.0))) for p, n, shade in corners]) for name, corners in tris]
+    return scale
+
+
 # Writes nodes as one flat file: {name: (place, triangles with normals)} and bare marks {name: place}. Positions
 # are whole UNITs in signed shorts about the node's place, normals and occlusion bytes (bike_kit.pack_colours).
 def write(path, nodes, marks, materials):
@@ -385,11 +427,12 @@ def bike(path):
     group = next(node for node in doc["nodes"] if node["name"] == "lod1")
     at = group.get("translation", (0.0, 0.0, 0.0))
     children = {doc["nodes"][i]["name"]: doc["nodes"][i] for i in group["children"]}
-    materials = {m["name"]: m for m in doc["materials"]}
+    # (a detail file with baked maps: each material as its plain finish, maps.plain; a far file keeps no maps)
+    materials = {m["name"]: maps.plain(m) for m in doc["materials"]}
     colours = {n: tuple(m.get("pbrMetallicRoughness", {}).get("baseColorFactor", (1, 1, 1, 1))[:3]) + (m.get("pbrMetallicRoughness", {}).get("metallicFactor", 1.0),)
                for n, m in materials.items()}
     marks = {n: [a + b for a, b in zip(at, node.get("translation", (0, 0, 0)))] for n, node in children.items() if "mesh" not in node}
-    shapes, places, fixed = {}, {}, {}
+    shapes, places, fixed, raw = {}, {}, {}, {}
     for target, sources in FOLD.items():
         if target not in children:
             if target == "luggage":
@@ -402,6 +445,7 @@ def bike(path):
                 tris += got
                 if source == target:
                     places[target] = place
+        raw[target] = tris
         shape = Shape(tris)
         if target in WHEELS:
             # The axle is the middle of the wheel's own node, the tyre and rim without the disc
@@ -416,11 +460,20 @@ def bike(path):
     held = sum(len(tris) for tris in fixed.values()) + len(shapes["brake_light"].faces)
     loose = sum(len(shape.faces) for name, shape in shapes.items() if name != "brake_light")
     share = min(1.0, (BIKE_TARGET - held) / max(1, loose))
-    nodes = {}
+    nodes, sources = {}, []
     for target, shape in shapes.items():
-        tris = cut(shape, 1.0 if target == "brake_light" else share, names=merged(shape, colours))
-        nodes[target] = (places[target], tris + fixed.get(target, []))
-    out = os.path.join(FAR, f"{name}.glb")
+        names = merged(shape, colours)
+        rename = dict(zip(shape.names, names))
+        # (a wheel's tyre, turned again, keeps its own material)
+        rename.update({name: name for name, _ in fixed.get(target, [])})
+        sources.append((raw[target], rename))
+        nodes[target] = cut(shape, 1.0 if target == "brake_light" else share, names=names) + fixed.get(target, [])
+    matched(nodes, sources, colours)
+    nodes = {target: (places[target], tris) for target, tris in nodes.items()}
+    # (a detail file built elsewhere, a variant of a model-build round, has its far file in a `far` folder beside it)
+    folder = FAR if os.path.abspath(os.path.dirname(path)) == os.path.abspath(DETAIL) else os.path.join(os.path.dirname(path), "far")
+    os.makedirs(folder, exist_ok=True)
+    out = os.path.join(folder, f"{name}.glb")
     size = write(out, nodes, marks, materials)
     counts = {n: len(tris) for n, (_, tris) in nodes.items()}
     total = sum(counts.values())
@@ -462,7 +515,8 @@ def lifted(shape, lift=MARK_LIFT_M):
 def rider(path=RIDER, out=RIDER_FAR):
     scene()
     doc, binary = read(path)
-    materials = {m["name"]: m for m in doc["materials"]}
+    # (a detail file with baked maps: each material as its plain finish, maps.plain; a far file keeps no maps)
+    materials = {m["name"]: maps.plain(m) for m in doc["materials"]}
     nodes, marks, counts = {}, {}, {}
     for node in doc["nodes"]:
         if "mesh" not in node:

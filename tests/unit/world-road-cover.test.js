@@ -39,8 +39,8 @@ import { stagesFor } from '../helpers/world-stages.js';
 // the physics 2 to 3 cm off the ribbon down the Tremola is what is left
 const KNOWN = {
     'tremola': 11, // 0, 0, 0, 11
-    'summit-airolo': 12, // 0, 0, 0, 12
-    'airolo-lookout': 2 // 0, 0, 0, 2
+    'airolo-lookout': 2, // 0, 0, 0, 2
+    'guttannen-grimsel': 1 // 0, 0, 0, 1
 };
 
 const STEP_M = 2;

@@ -65,11 +65,42 @@ Measured before and after on the same machine (Apple M-series GPU, the frame tim
 
 `node tools/terrain-check.mjs world-tree-shots --world tremola --gpu --desk [--at s,s] [--out <dir>]` takes the chase view, a close view of the nearest tree and a middle view of the densest group 60 to 110 m out, at each station, with the window's counts. `tests/unit/treemodels.test.js` holds the levels' budgets and outlines, `tests/unit/world-meshes.test.js` the rank.
 
+## The window's scenery comes and goes without a pop
+
+The window's houses, boulders, tufts and trees are chosen again for every 8 m the bike moves, for every tile that comes or goes, and when the window's room changes (`Scenery.rankCaps`, `rankTrees`). Before this rule the furthest of them came in or went out at once, wherever they stood. `node tools/terrain-check.mjs world-pops --world <stage> --gpu [--from s] [--to s] [--out <dir>]` rides a stretch with every frame drawn and logs each change: what it was, its distance, whether it was in the view, and its cause. It fails on a pop in view from a change of the room.
+
+Measured on the first 4 km of the Tremola and of leg 3 (the far chase, 18 m/s, the player on the scooter):
+
+| Measure | Tremola before | Tremola after | Leg 3 before | Leg 3 after |
+|---|---|---|---|---|
+| Pops (a thing's drawn share moves by more than half in one frame) | 41 348 | 24 521, all out of view | 46 469 | 19 920 |
+| Pops in view | 14 631 | 0 | 16 889 | 1 (a far tree at 675 m, a tile let go of) |
+| In view and out again within 2 s | 4 242 | 0 | 7 637 | 0 |
+| Pops in view from the room | 598 | 0 | 335 | 0 |
+| Fades in view | 0 | 20 439 | 0 | 15 238 |
+
+The causes before: the rank's own churn as the bike moved (34 to 51% of the pops in view), tiles coming, going or built again (45 to 64%), the room (2 to 4%). Of the room's changes, 80% came from the land's tiles changing their level of detail, the rest from road sections and structures. The riders moved the room in neither ride.
+
+The rules (`js/world/scenery.js`, at `Scenery.FADE_S`):
+
+- **Held in view.** A thing drawn and in the camera's view (`Scenery.setView`, widened by `VIEW_WIDEN` of its distance for the camera's turn between two ranks) stays until it leaves the view or passes `HOLD_REACH` (1.3) times its kind's reach. A change of the room never cuts it. A step down the quality ladder (the trees' share) does, with a fade.
+- **Room from out of view.** The held things take their room first. The rest is chosen nearest first in the room that is left, so what the room is short of is taken from what is out of view, the furthest first. Held things may stand `HOLD_OVER` (6 000 triangles) over the room at the most; past that the furthest of them fade out.
+- **Fades.** A thing that comes or goes in view, and a tree that changes its level in view, fades over 0.5 s. Out of view it changes at once. A change of level that comes during a fade waits for the fade to end.
+- **Tiles.** A tile built again keeps its things and their fades. The things of a tile the window lets go of fade out.
+- **The room.** `Game.budgetWindow` counts the riders (the player's bike and rider, the crew, the cars) as a fixed share, `riderRoom`: every one of them as drawn, the most seen in the ride (51 022 triangles in both rides). They move in and out of the window every few seconds, they are not scenery, and a fixed share always holds them. The rest is the median of the last three measures (one a second), so a section's old mesh beside its new one for a moment moves nothing; `setWindowRoom` keeps its own hysteresis.
+- **The player's bike** draws 30 776 triangles with its rider on the scooter. It is constant in a ride and moved the room in neither ride. The trail single's detail (bike15, lod0 19 296 triangles, 4 964 more than before) takes those 4 964 from the scenery's room for the whole ride: about one house, or about 90 far trees.
+
+**The fade.** A screen-door dither in the materials the things are drawn with (`Scenery.fadeable`): a fragment whose interleaved gradient noise is under the cut is discarded. No blending, so no sorting and nothing drawn twice in a pixel. A level change draws the two levels in complementary pixels, so the tree is never thinner or doubled. A thing's share is carried in the fourth row of its instance matrix (an affine matrix has 0 there, and the shader sets it back to 0 before it uses the matrix); a tuft's and a house footing's in a vertex attribute, `fadeCut`. Each frame `Scenery.stepFades` writes the shares that move, with no allocation. The sun's shadow fades with the thing (`Scenery.fadeDepth`). The crew's bikes have no switch to fade: they draw their far file only. The player's bike changes from lod0 to lod1 30 m from the camera, which the chase views never reach.
+
+**The cost.** `world-frametime --world tremola --gpu --desk` on the Mac mini (2880 x 1800, the median of five places), before and after in turn, two runs each: 18.4 and 18.6 ms before, 18.6 and 18.4 ms after. `world-budget` holds the Tremola and leg 3 at 436 000 or under, and `world-steps` holds every step under 16 ms: the caps' choice reads and settles `STEP_THINGS` (400) things a step (read whole, it took 47 ms).
+
+**The levels agree.** `tests/unit/scenery-levels.test.js` holds each lower level to the level above: the trees and the shrub as the world draws them (height within 10%, spread within 20%, base and middle within 2% and 7%, mean colour within 20% and its tint within 0.03), the crew's far bikes against the detail file's lod1 they are made from, and lod1 against lod0 (within 6%, 1%, 15% and 0.06). Drawn in the world's light at the distance each changes (140 m and 420 m), the trees' levels stood within 6% of each other in height and their bases on the same row of pixels. Three far bikes (duke390, panigale_black, z650) are 17 to 21% darker than their lod1 and the z750's lod1 21% darker than its lod0, in `KNOWN`, which may only shrink: `tools/blender/far.py` gives each new corner the occlusion of the nearest old one.
+
 ## The effects on the ladder
 
 The effects (`js/effects.js`, rules in [rendering.md](rendering.md), "Effects") are not columns of the levels: each effect carries its own measured cost, and a level carries `effectMs`. `Game.applyEffects` puts in force, for each effect, the highest level up to the player's choice that costs no more than `effectMs` of the level in force (Auto only). So as the frame time steps the ladder down, the step to Rich gives up the effects over 0.7 ms (the high occlusion and the edge smoothing), the step to Full those over 0.4 ms (the shadow cascades and the low occlusion), and only the step from Full to High loses pixel ratio; there only the effects of 0.2 ms or less are left (land detail, reflections, grade, glare, speed blur).
 
-A row may keep a level longer than its cost (`keep` in `Effects.LIST`, read by `Effects.keepOf`): that level counts as `keep` ms on the ladder. Only the ground texture does: its Medium (1.7 ms) counts as 0.7, because it is the most look for its time of any effect. So the ground texture goes down in three steps: the step to Rich gives up its High (the relief, 0.6 ms, hard to see) with the high occlusion and the edge smoothing; the step to Full gives up Medium for Low (1.4 ms, the largest saving there) with the shadow cascades and the low occlusion; the step from Full to High turns Low (0.3 ms) off with the pixel ratio. A step is a uniform: the land's program is the same at every level, the textures are made once in a worker as the settings are read (`Effects.prepare`), so a step never compiles or makes a texture. The ladder's own rules (two slow windows down, eight good windows up, the grace and the retry block) are the hysteresis; the ground texture adds none. `world-ground-flip` rides 2.2 km in the high view while the dialog and the ladder flip it 480 times: no land tile is lost or left undrawn, the land always has a program, and the only frames over 50 ms are the ones that compile (the first change of the cascades).
+A row may keep a level longer than its cost (`keep` in `Effects.LIST`, read by `Effects.keepOf`): that level counts as `keep` ms on the ladder. Only the ground texture does: its Medium (1.7 ms) counts as 0.7, because it is the most look for its time of any effect. So the ground texture goes down in three steps: the step to Rich gives up its High (the relief, 0.6 ms, hard to see) with the high occlusion and the edge smoothing; the step to Full gives up Medium for Low (1.4 ms, the largest saving there) with the shadow cascades and the low occlusion; the step from Full to High turns Low (0.3 ms) off with the pixel ratio. A step is a uniform: the land's program is the same at every level, the textures are made once in a worker as the settings are read (`Effects.prepare`), so a step never compiles or makes a texture. The ladder's own rules (two slow windows down, eight good windows up, the grace and the retry block) are the hysteresis; the ground texture adds none. `world-ground-flip` rides 2.2 km in the far chase while the dialog and the ladder flip it 480 times: no land tile is lost or left undrawn, the land always has a program, and the only frames over 50 ms are the ones that compile (the first change of the cascades).
 
 ## What the effects cost
 
@@ -128,10 +159,10 @@ Each stop with a held shot has a `raise` cap in its data (tools/world/route.json
 
 | Stop | Cap: land, scenery share | Held shot |
 |---|---|---|
-| Hospice square (Tremola's end, leg 11's) | 800 / 2 000 m, 1 | 400 560, 420 702 |
-| Lookout over Airolo (legs 1 and 10) | 1 200 / 3 000 m, 0.55 | 421 628, 405 426 |
+| Hospice square (Tremola's end) | 800 / 2 000 m, 1 | 400 560, 420 702 |
+| Lookout over Airolo (leg 1's end, the Gotthard leg's) | 1 200 / 3 000 m, 0.55 | 421 628, 405 426 |
 | Andermatt hotel (leg 2's end) | 700 / 2 000 m, 0.85 | 377 168 |
-| Airolo car park (leg 12's end) | 1 000 / 2 500 m, 1 | 423 076 |
+| Airolo car park (leg 1's start, the Tremola's) | 1 000 / 2 500 m, 1 | 423 076 |
 | Göschenen car park (leg 3's end) | 700 / 2 000 m, 0.85 | 420 351 |
 | Susten pass (leg 4's end) | 1 000 / 2 500 m, 1 | 427 565 |
 | Gadmen car park (leg 5's end) | 1 000 / 2 500 m, 1 | 410 512 |
@@ -230,6 +261,18 @@ The ladder is one object, `game.quality`:
 - `quality.level` is the level in force. `quality.isFixed` tells if a caller fixed it.
 
 In debug mode (`?debug`), the HUD shows the level (`Q3 High (auto)`). The tuning panel (T) has a Graphics row: − and + step through Auto and each level. A fixed level is not a tuning. The ride keeps its time. The settings dialog's presets use `fix` and `release` in the same way.
+
+## No two materials fight in the depth buffer
+
+Two faces of different materials that lie in one plane, one over the other, fight in the depth buffer: the frame shows one, then the other, as the camera moves. The digger's grille lay in the face of its body (0 mm apart) and flickered into the yellow from the far chase (the owner, 2026-11-27). A part laid on another part (a grille, a pane, a strip, a door, a lamp) must do one of these:
+
+- **Stand off its face** by more than the depth buffer can part at the distance the game shows it. The camera has a near plane of 0.25 m and a 24 bit depth buffer, so one step of depth is d² / (0.25 × 2²⁴) at d metres: 0.9 mm at 60 m, 5.4 mm at 150 m. The rule needs 3 steps (`DEPTH_STEPS`) at the farthest distance where the overlap is still 4 pixels across (`SIDE_PX`), or at the distance the model is drawn to, whichever is nearer. The check prints the stand-off each place needs (`need`).
+- **Be cut into its face.** Leave the face out where the part goes (`Roadworks.wall` cuts a door or a window out of a box's side, and `Roadworks.pane` sets the pane into the hole with its reveals). Then no face lies under the part.
+- **Sink its back into the body.** A box whose back is inside the body and whose front stands proud has no face in the body's plane.
+
+`polygonOffset` is the last choice: a model file cannot carry it, and it moves the shadow too.
+
+`tools/model-stats.mjs` holds the check (`coplanar`): it finds faces of two looks (colour, texture, emission) with parallel normals (3°), less than `MAX_GAP` (5 cm) apart and over each other by more than 1 mm², and keeps a place only when a point of the overlap can see out of the model (faces back to back count only when both are double sided; a model that stands on the ground is not seen from under it). `node tools/model-stats.mjs --model <file.glb> [--draw <m>]` prints it for each level. `tests/unit/model-coplanar.test.js` runs it over every `assets/**/*.glb` at each level and over the roadworks' procedural props, each at the distance the game draws it (`DRAW`). Its `KNOWN` table holds the places that fight today, and the table may only shrink. On 2026-11-27 it found 115 places in 39 levels: the detailed bikes (1 to 7 a level, mostly a dark metal over a steel at 0 mm), the five procedural bikes, the hatchback's vent, the tunnel portal (19 places in `portal_arch`, one of them 32 m² of dressed stone over masonry at 0 mm) and the hill ride's bicycle and cart. The roadworks' props are at 0.
 
 ## What was not checked
 

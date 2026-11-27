@@ -239,13 +239,16 @@ describe('the places of the Tremola slice', () => {
             for (let i = 0; i < 60 * 6 && v.speed > 0.05; i++) { v.update(DT, 0, 0, 1, 0); if (v.runoff) land++; }
             if (v.crashed) say('a bike braking along it crashed');
             if (land) say(`a bike braking along it was on the land for ${land} steps`);
-            // Scenery in the strip: every tree, boulder, marker stone and tuft the tiles here drew
+            // Scenery in the strip: every tree, boulder, marker stone and tuft the tiles here drew. A drawn place's
+            // strip is as wide as it is drawn at that s, so it narrows over the taper at each end (WorldPlaces.padOf,
+            // the band RoadClearance keeps clear); a place that is not drawn is its whole depth from end to end
             for (const t of sceneryOf(THREE, env.sceneryGroup)) {
                 if (!['tree', 'boulder', 'stone', 'tuft'].includes(t.type)) continue;
                 const at = env.route.project(t.x, t.z, null, {});
                 if (at.s < place.s || at.s > place.s + place.length || Math.sign(at.lateral) !== place.side) continue;
                 const past = Math.abs(at.lateral) - at.width / 2;
-                if (past < V + place.depth) say(`a ${t.type} stands ${past.toFixed(2)} m past the edge, in the strip`);
+                const strip = WorldPlaces.drawn(place) ? WorldPlaces.padOf(place, at.s) : place.depth;
+                if (past < V + strip) say(`a ${t.type} stands ${past.toFixed(2)} m past the edge, in the strip (${strip.toFixed(2)} m there)`);
             }
         }
         if (problems.length) throw new Error(problems.join('\n'));

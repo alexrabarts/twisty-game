@@ -562,7 +562,7 @@ describe('WorldCamera', () => {
         return new WorldRoute(samplesOf(points), {});
     };
 
-    // The chase view of the Standard mode, and the bike `input` WorldCamera.update reads
+    // The chase view of the near chase, and the bike `input` WorldCamera.update reads
     const bikeAt = (route, s, speed) => {
         const at = route.curveAt(s, {});
         return { x: at.px, y: 100, z: at.pz, s, index: Math.floor(route.toUnits(s)), speed, lift: 1, offset: { x: 0, y: 3, z: -6 }, fov: 75 };
@@ -658,7 +658,18 @@ describe('WorldCamera', () => {
         for (let i = 0; i < 60; i++) camera.aim(eye, bike, probe);
         const settled = project(camera.look);
         expect(settled).toBeLessThanOrEqual(T.keepIn + 0.01);
-        expect(settled).toBeGreaterThan(T.keepIn - 0.02);
+        // The spring settles at the share that puts the bike at keepIn; the keepHard hold then eases in over keepBlend
+        // of the share (a smooth maximum, so the view's turn has no kink as the hold takes over), and where the two
+        // shares are within keepBlend of each other it lifts the share by up to keepBlend / 4, toward the bike. The
+        // settled share is that rule's, and no more
+        const raw = { x: 40, y: 0, z: 0 };
+        const want = camera.giveWay(eye, raw, bike, probe, T.keepIn), least = camera.giveWay(eye, raw, bike, probe, T.keepHard);
+        const band = Math.min(T.keepBlend, least);
+        const h = band > 0 ? Math.max(0, band - Math.abs(want - least)) / band : 0;
+        const rule = Math.max(want, Math.max(want, least) + h * h * band / 4);
+        expect(camera.keep).toBeCloseTo(rule, 3);
+        expect(camera.keep - want).toBeLessThanOrEqual(T.keepBlend / 4 + 1e-3);
+        expect(settled).toBeCloseTo(project({ x: raw.x * (1 - rule), y: raw.y + (bike.y - raw.y) * rule, z: raw.z + (bike.z - raw.z) * rule }), 3);
         // A look target that already shows the bike is left alone
         expect(camera.giveWay(eye, { x: 0, y: 1, z: 20 }, bike, probe, T.keepIn)).toBe(0);
     });

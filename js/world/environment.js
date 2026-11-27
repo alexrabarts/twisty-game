@@ -51,6 +51,7 @@ class WorldEnvironment {
     static get SIDE_MEET_MIN_M() { return 12; }
     static get SIDE_MEET_MAX_M() { return 45; }
     static get SIDE_FILL_M() { return 16; }
+    static get SIDE_RAMP_GRADE() { return 0.12; }
     static get SIDE_ROW_MIN_M() { return 1.5; }
     // A side road's wall that ends this near the end of one of the ride's is joined to it (wallJoins)
     static get WALL_JOIN_M() { return 8; }
@@ -68,6 +69,9 @@ class WorldEnvironment {
     // How far on under the side road from its edge the paving reaches (RoadMesh.edgeWorks)
     static get SIDE_GORE_TUCK_M() { return 1; }
     static get SIDE_GORE_STEP_M() { return 0.35; }
+    // The turns from square the paving beside a bridge's first row tries where the line square to the ride meets no
+    // side road (edgeFoot `gore` `turn`): 15 to 60 degrees either way
+    static get SIDE_GORE_TURNS() { return [15, -15, 30, -30, 45, -45, 60, -60].map(a => (a * Math.PI) / 180); }
     static get SIDE_GORE_RISE_M() { return 0.5; }
     // A side road beside the ride with its band (carriageway and verge) within CLEFT_GAP_M of the ride's verge, and the
     // land between the two more than CLEFT_DIP_M under the lower of them, has the gap closed by ground at the lower
@@ -118,6 +122,9 @@ class WorldEnvironment {
     // goes: the tile as built is held a little lower again under the ride (buildTile's holdY), and a foot at the land
     // read from the nodes stood over it by up to 0.3 m, open at the bottom
     static get COARSE_UNDER_M() { return 0.5; }
+    // How far the land drawn coarser may lie under a side road's edge before a face closes the gap (foot.coarse): a far
+    // ribbon is 400 m and more off, where a metre is two or three pixels
+    static get SIDE_COARSE_M() { return 1; }
 
     // Metres from the bike within which a landmark is drawn
     static get LANDMARK_REACH_M() { return 3000; }
@@ -474,6 +481,8 @@ class WorldEnvironment {
             const sign = runs => runs.map(run => run.key + run.points.map(p => `${Math.round(p[0] * 100)},${Math.round(p[2] * 100)}`).join(' ')).join('|');
             const plan = yield* env.rideWallsSteps(index);
             if (sign(plan.runs) !== sign(old.runs)) env.dropCuts(env.streamer.sections[index].bbox);
+            // (the same walls: the section is not built again, and its taper stays as drawn)
+            else if (old.plan && old.plan.drawn && plan.plan && !plan.plan.drawn) plan.plan.drawn = old.plan.drawn;
         });
     }
 
@@ -642,12 +651,20 @@ class WorldEnvironment {
         const points = this.route.points;
         const near = (i, flag) => { for (let j = Math.max(0, i - WorldEnvironment.MOUTH_CUT_ROWS); j <= Math.min(points.length - 1, i + WorldEnvironment.MOUTH_CUT_ROWS); j++) if (styles[j][flag]) return true; return false; };
         const p = points[i];
-        if (!p || p.bits & 7) return null;
+        // (a row in a tunnel or a gallery lays no paving, but its verge stops where a side road leaves it as it does
+        // in the open: drawn on, the walkway lay across the floor of a side road's own tube, leg 3's j39 and j61)
+        if (!p || p.bits & 2) return null;
+        if (p.bits & 5 && !near(i, 'mouthL') && !near(i, 'mouthR')) {
+            // (kept as none, so a pass over the rows reads it once: goreRowsKept)
+            this.goreRows.set(i, null);
+            return null;
+        }
         let held = this.goreRows.get(i);
         if (!held) {
             const cos = Math.cos(p.heading), sin = Math.sin(p.heading), half = p.width / 2;
             const edges = { l: [p.x - half * cos, p.y, p.z + half * sin, -cos, sin], r: [p.x + half * cos, p.y, p.z - half * sin, cos, -sin] };
-            held = { l: !!foot.gore(...edges.l), r: !!foot.gore(...edges.r), edges };
+            const tube = (p.bits & 5) !== 0;
+            held = { l: !tube && !!foot.gore(...edges.l), r: !tube && !!foot.gore(...edges.r), edges };
             const cutL = held.l || near(i, 'mouthL') ? yield* this.mouthCutSteps(i, -1) : null;
             const cutR = held.r || near(i, 'mouthR') ? yield* this.mouthCutSteps(i, 1) : null;
             held.cut = { l: cutL, r: cutR };
@@ -677,7 +694,7 @@ class WorldEnvironment {
         const points = this.route.points;
         let read = 0;
         for (let i = Math.max(0, from - 1); i <= Math.min(points.length - 1, to + 1); i++) {
-            if (points[i].bits & 7 || (this.goreRows && this.goreRows.has(i))) continue;
+            if (points[i].bits & 2 || (this.goreRows && this.goreRows.has(i))) continue;
             yield* this.goreRowSteps(i);
             read++;
             yield;
@@ -783,11 +800,13 @@ class WorldEnvironment {
         return false;
     }
 
-    cleftAt(index, sign) {
+    // `walled` false: the same ground where the ride's wall does not stand by the row (the row past a run's end in a
+    // side road's mouth, where the fill comes down to the side road beside it, not to the land: RoadMesh.edgeWorks)
+    cleftAt(index, sign, walled = true) {
         const p = this.route.points[index];
         if (!p || p.bits & 7) return null;
         if (!this.cleftRows) this.cleftRows = new Map();
-        const key = index * 2 + (sign > 0 ? 1 : 0);
+        const key = (index * 2 + (sign > 0 ? 1 : 0)) * (walled ? 1 : -1) - (walled ? 0 : 1);
         if (this.cleftRows.has(key)) return this.cleftRows.get(key);
         const [vn, vp] = RoadMesh.verges(p);
         const reach = p.width / 2 + (sign > 0 ? vp : vn);
@@ -805,7 +824,7 @@ class WorldEnvironment {
             // (only where the ride's own wall holds it up on that side, on the segment either side of the row: a side
             // road beside the ride's slope or level with it has a slope or land there, not a cleft. The side road has
             // no wall on that side, edgeFoot `facesRideWall`: the ride's wall is the one face between the two)
-            if (!this.rideWalledAt(index, sign)) return null;
+            if (walled && !this.rideWalledAt(index, sign)) return null;
             // (the side road the lower of the two, by no more than CLEFT_STEP_M: the fill lies at its height and the
             // ride's wall stands over it; a side road over the ride holds its own fill)
             if (hit.side > y + RoadMesh.APRON_UNDER_M || hit.side < y - WorldEnvironment.CLEFT_STEP_M) return null;
@@ -1235,6 +1254,18 @@ class WorldEnvironment {
     taperAt(index, sign, t = 0) {
         if (this.walledAt(index, sign) !== false) return 0;
         const walls = this.rideWalls(this.rowSection[Math.max(0, Math.min(this.rowSection.length - 1, index))]);
+        // As RoadMesh.edgeWorks laid it at full detail (`drawn`): the share at its samples along the segment, or none.
+        // Read from the plan's `past` alone, the physics stood on a coping past a wall's end where the drawing laid none
+        // (a side road's mouth at leg 5's s 37 555, the ground 0.5 m over the verge drawn there)
+        const drawn = walls.plan.drawn && walls.plan.drawn[sign > 0 ? 'r' : 'l'][index - walls.plan.base];
+        if (drawn !== undefined) {
+            if (drawn === null) return 0;
+            const at = RoadMesh.TAPER_SAMPLES, u = Math.max(0, Math.min(1, t || 0));
+            let j = 0;
+            while (j + 2 < at.length && u > at[j + 1]) j++;
+            const f = (u - at[j]) / (at[j + 1] - at[j]);
+            return drawn[j] + (drawn[j + 1] - drawn[j]) * f;
+        }
         const past = walls.plan.past && walls.plan.past[sign > 0 ? 'r' : 'l'];
         const a = past && past[index - walls.plan.base], b = past && past[index + 1 - walls.plan.base];
         if (!a || !b) return 0;
@@ -1433,6 +1464,10 @@ class WorldEnvironment {
         const gallery = i => (points[i].bits & 5) === 4;
         for (const [from, to] of RoadMesh.runs(points, 1 | 4)) {
             const tube = [along[from], along[to]];
+            // (one style for the whole tube, StructureStyles.tube: a tube with a gallery in it keeps the box)
+            let mixed = false;
+            for (let i = from; i <= to; i++) mixed = mixed || gallery(i);
+            const style = StructureStyles.tube({ x: Math.round(tube[0]), z: 0, gallery: mixed });
             let a = from;
             for (let i = from; i <= to; i++) {
                 if (i < to && gallery(i + 1) === gallery(a)) continue;
@@ -1445,7 +1480,7 @@ class WorldEnvironment {
                 const g = gallery(a), rock = lean >= 0 ? 1 : -1;
                 for (let j = a; j <= i; j++) run[j] = runs.length;
                 // (a gallery's mountain side is rock or sprayed concrete, by the run)
-                runs.push({ s0: along[a], s1: along[i], tube, gallery: g, rock, open: g ? -rock : 0, shotcrete: g && LandShade.hash(a, i, 7) > 0.5 });
+                runs.push({ s0: along[a], s1: along[i], tube, gallery: g, rock, open: g ? -rock : 0, shotcrete: g && LandShade.hash(a, i, 7) > 0.5, style, profile: style.profile });
                 a = i + 1;
             }
         }
@@ -1733,6 +1768,25 @@ class WorldEnvironment {
         return WorldStreamer.drain(this.holdSideSteps(rows, before, after));
     }
 
+    // Whether a ramp from row `e` of `rows` (toward `away`, `delta` metres off its own height over `length`) lies
+    // under the land past SIDE_FILL_M: the land drawn there (a resident tile, at full detail) over the ramp's edge
+    // lines. A tile not here reads as no land
+    rampUnderLand(rows, e, away, along, delta, length) {
+        for (let i = e + away; i >= 0 && i < rows.length && !rows[i].held; i += away) {
+            const d = Math.abs(along[i] - along[e]);
+            if (d >= length) break;
+            if (d <= WorldEnvironment.SIDE_FILL_M) continue;
+            const row = rows[i], t = d / length, share = 1 - t * t * (3 - 2 * t);
+            const own = row.own === undefined ? row.y : row.own, y = own + delta * share;
+            for (const lat of [-0.5, 0.5]) {
+                const o = lat * row.width, x = row.x + o * Math.cos(row.heading), z = row.z - o * Math.sin(row.heading);
+                const land = this.ground.tileHeight(x, z, false);
+                if (land !== null && land > y + 0.05) return true;
+            }
+        }
+        return false;
+    }
+
     // The same in steps, HOLD_SIDE_STEP rows at a time (a long side road's rows read whole took up to 38 ms)
     static get HOLD_SIDE_STEP() { return 24; }
 
@@ -1793,7 +1847,15 @@ class WorldEnvironment {
         out.forEach((from, e) => {
             if (!from.away) return;
             const delta = from.y - from.own;
-            const length = Math.min(WorldEnvironment.SIDE_MEET_MAX_M, Math.max(WorldEnvironment.SIDE_MEET_MIN_M, (1.5 * Math.abs(delta)) / WorldEnvironment.SIDE_MEET_GRADE));
+            let length = Math.min(WorldEnvironment.SIDE_MEET_MAX_M, Math.max(WorldEnvironment.SIDE_MEET_MIN_M, (1.5 * Math.abs(delta)) / WorldEnvironment.SIDE_MEET_GRADE));
+            // (a ramp that holds the road under its own height, where the land past the junction's fill stands over
+            // the road as the ramp lays it, ends within SIDE_FILL_M of the band: the land is shaped to the road's own
+            // height, and stood 0.32 m over the ramp 30 m out at leg 5's j208. Where the land lies under the ramp it
+            // keeps its length: shortened there too, the Gotthard leg's j29 and j76 grew too steep to ride up)
+            if (delta < 0 && length > WorldEnvironment.SIDE_FILL_M) {
+                const short = Math.max(WorldEnvironment.SIDE_FILL_M, (1.5 * -delta) / WorldEnvironment.SIDE_RAMP_GRADE);
+                if (short < length && this.rampUnderLand(out, e, from.away, along, delta, length)) length = short;
+            }
             for (let i = e + from.away; i >= 0 && i < out.length && !out[i].held; i += from.away) {
                 const d = Math.abs(along[i] - along[e]);
                 // The first row past the ramp is kept too: where the road is at its own height again
@@ -2228,6 +2290,17 @@ class WorldEnvironment {
             return low;
         };
         if (aprons) foot.mouth = atMouth;
+        // A side road's edge where the land at full detail meets it but a coarser level is drawn lower (its far ribbon is
+        // drawn from SIDE_NEAR_M on): how deep a face under the edge goes, the lowest land there less COARSE_UNDER_M, or
+        // null (RoadMesh.edgeWorks)
+        // (only where the land at full detail meets the edge: where it falls away there too, a face of ground under the
+        // edge stood over it near the road, an overhang of `world-spikes`)
+        if (!aprons) foot.coarse = (x, y, z, ox, oz) => {
+            const near = landNear(x + ox * 0.5, z + oz * 0.5);
+            if (near === null || near < y - WorldEnvironment.MEET_M - RoadMesh.APRON_UNDER_M) return null;
+            const low = this.landLowAt(x + ox * 0.1, z + oz * 0.1, missing);
+            return low !== null && low < y - WorldEnvironment.SIDE_COARSE_M ? low - WorldEnvironment.COARSE_UNDER_M : null;
+        };
         // A side road's edge that faces the ride's wall across a cleft: its wall plan leaves the wall out there
         // (RoadMesh.wallPlan), after its runs are judged, so the wall's other runs stand as they did
         if (!aprons) foot.facesRide = facesRideWall;
@@ -2236,7 +2309,7 @@ class WorldEnvironment {
 
         // Where a side road's wall would stand, before the rule that leaves it out across a cleft (cleftAt reads it)
         // The ground that closes a narrow gap between the ride's row i and a side road beside it (cleftAt)
-        if (aprons) foot.cleft = (i, sign) => this.cleftAt(i, sign);
+        if (aprons) foot.cleft = (i, sign, walled = true) => this.cleftAt(i, sign, walled);
         // Whether a side road's edge point stands in the ride's carriageway or its verge, with its coping over the
         // ride's surface there: the side road's walls keep out of the ride's road (RoadMesh.atMouth). Where a side road
         // leaves beside the ride, its wall stood in the ride's verge with its coping 0.28 to 0.38 m over it
@@ -2251,7 +2324,27 @@ class WorldEnvironment {
         // road is drawn: WorldGround.sideRoadY), found without a gap wider than SIDE_GORE_M, or null with none. The
         // ride lays paving from its edge to there (RoadMesh.edgeWorks), under the side roads' ribbons: whatever lies
         // between the ride and a side road in a junction, and behind the piece that joins their walls, is road
-        if (aprons) foot.gore = (x, y, z, ox, oz) => {
+        // With `turn` (the paving read between two of the ride's rows, RoadMesh.edgeWorks), a line square to the ride
+        // that meets no side road is turned, up to SIDE_GORE_TURNS from square either way, and the paving goes out
+        // along the turned line that meets one soonest, within SIDE_GORE_M of the edge: a side road that leaves at an
+        // angle and falls away lies beside the ride at its height square to itself, but square to the ride it lies
+        // farther out and under the step, and the land lay 1.4 m down in the corner between the two (leg 3's j35 by a
+        // bridge, leg 4's j95 in the open, 0.3 m down over 4 m). Turned on every segment before the paving's far edge
+        // came down to the land, its edges hung over the land elsewhere (overhangs 13 to 22 on the Gotthard leg); a
+        // turned line that met a side road farther out than SIDE_GORE_M paved a corner beside a side road's slope and
+        // left its side open (a flap on leg 2 at s 65)
+        if (aprons) foot.gore = (x, y, z, ox, oz, turn = false) => {
+            const square = scan(x, y, z, ox, oz);
+            if (square || !turn) return square;
+            let best = null;
+            for (const a of WorldEnvironment.SIDE_GORE_TURNS) {
+                const c = Math.cos(a), s = Math.sin(a);
+                const got = scan(x, y, z, ox * c - oz * s, ox * s + oz * c);
+                if (got && got.nearD <= WorldEnvironment.SIDE_GORE_M && (best === null || got.nearD < best.nearD)) best = got;
+            }
+            return best;
+        };
+        const scan = (x, y, z, ox, oz) => {
             let last = 0, lastY = null, near = null, nearD = 0;
             const under = [];
             // (the first gap counts the ride's verge, as the junction check reads the ride's drawn edge: a side road
@@ -2292,7 +2385,7 @@ class WorldEnvironment {
             if (lastY === null) return null;
             // (each point of `under` SIDE_GORE_UNDER_M under the road there as drawn or as the importer has it, the lower)
             const far = [x + ox * last, lastY - WorldEnvironment.SIDE_GORE_UNDER_M, z + oz * last];
-            return Object.assign(far, { near, under: under.map(u => u.p) });
+            return Object.assign(far, { near, nearD, under: under.map(u => u.p) });
         };
         // Whether a side road's wall ends within reach of the place (x, y, z), the end of one of the ride's walls: the
         // two are joined there (wallJoins), and the ride lays no slope from its wall's end into the mouth
@@ -2741,6 +2834,82 @@ class WorldEnvironment {
 
     // Rows with their heading made continuous (no 2 pi step between neighbours), as the ride's are: the markings read
     // a bend from the heading's change (RoadSurface.styles)
+    // A side road's ribbon never turns by more than SIDE_TURN_FOLD from one row to the next: between two rows that
+    // turn more, rows are put in on the curve between them, SIDE_TURN_MAX apart in heading (each row's heading its
+    // tangent, the chord its length). The importer's samples lie about 4 m apart, and where a 4 m road turns back on
+    // itself (leg 3's j17, 107 degrees between two rows 3.5 m apart) the ribbon folded over at the inside of the turn
+    // and left a wedge open at the outside, a hole of 0.5 m in the road. The rows put in carry the earlier row's own
+    // data, their height and width between the two. (Put in at every turn over SIDE_TURN_MAX, the rows of a bend of
+    // 22 degrees a row at leg 4's j151 opened an edge of 1.34 m in its mouth)
+    static get SIDE_TURN_FOLD() { return (45 * Math.PI) / 180; }
+    static get SIDE_TURN_MAX() { return (20 * Math.PI) / 180; }
+    static sideTurns(rows) {
+        if (!rows.some((row, i) => i > 0 && Math.abs(row.heading - rows[i - 1].heading) > WorldEnvironment.SIDE_TURN_FOLD)) return rows;
+        const out = [rows[0]];
+        for (let i = 1; i < rows.length; i++) {
+            const a = rows[i - 1], b = rows[i], turn = b.heading - a.heading;
+            const n = Math.abs(turn) > WorldEnvironment.SIDE_TURN_FOLD ? Math.ceil(Math.abs(turn) / WorldEnvironment.SIDE_TURN_MAX) : 1;
+            const chord = Math.hypot(b.x - a.x, b.z - a.z);
+            for (let k = 1; k < n; k++) {
+                const t = k / n, t2 = t * t, t3 = t2 * t;
+                const h00 = 2 * t3 - 3 * t2 + 1, h10 = t3 - 2 * t2 + t, h01 = -2 * t3 + 3 * t2, h11 = t3 - t2;
+                const x = h00 * a.x + h10 * chord * Math.sin(a.heading) + h01 * b.x + h11 * chord * Math.sin(b.heading);
+                const z = h00 * a.z + h10 * chord * Math.cos(a.heading) + h01 * b.z + h11 * chord * Math.cos(b.heading);
+                out.push({ ...a, x, z, y: a.y + (b.y - a.y) * t, width: a.width + (b.width - a.width) * t, heading: a.heading + turn * t, bits: a.bits & b.bits, fill: !!(a.fill && b.fill), held: !!(a.held && b.held), keep: true });
+            }
+            out.push(b);
+        }
+        return out;
+    }
+
+    // Where a side road meets a wider one at a node of three roads or more (wider by MEET_WIDTH_M), its rows whose
+    // ribbon lies inside the wider road's carriageway are held at that road's height there, SIDE_NODE_UNDER_M under
+    // it (no shared plane). Each road ended at the node at its own heights: the wider ribbon's end lies level across
+    // its width, and a narrower road that leaves it at an angle and falls ran on under that end, a step of 0.28 m in
+    // its surface (leg 3's j29, an 8 m and a 4 m road). A row held at the ride's height (holdSide) keeps it
+    static get SIDE_NODE_UNDER_M() { return 0.02; }
+    sideNodeHold(edge, rows) {
+        if (rows.length < 2 || !this.graph.nodes || !this.graph.nodes.degree) return rows;
+        let out = rows;
+        for (const node of [edge.a, edge.b]) {
+            if (!(this.graph.nodes.degree[node] >= 3)) continue;
+            for (const other of this.graph.edgesAt(node)) {
+                if (other.id === edge.id || other.onRide) continue;
+                const samples = this.graph.samples(other.id);
+                if (!samples || samples.x.length < 2) continue;
+                // (its carriageway near the node: the samples from its end at the node, as far as the ribbon reaches)
+                const n = samples.x.length, from = other.a === node ? 0 : n - 1, way = other.a === node ? 1 : -1;
+                const width = samples.width[from];
+                const start = [samples.x[from], samples.z[from]];
+                // (the end of this road at the node: the row nearest it)
+                const ends = [0, out.length - 1].map(i => Math.hypot(out[i].x - start[0], out[i].z - start[1]));
+                const first = ends[0] <= ends[1] ? 0 : out.length - 1, step = first === 0 ? 1 : -1;
+                if (Math.min(...ends) > 1 || !(width >= out[first].width + WorldEnvironment.MEET_WIDTH_M)) continue;
+                const inside = row => {
+                    let best = null;
+                    for (let j = from; j + way >= 0 && j + way < n && Math.abs(j - from) < 4; j += way) {
+                        const ax = samples.x[j], az = samples.z[j], bx = samples.x[j + way], bz = samples.z[j + way];
+                        const dx = bx - ax, dz = bz - az, run = dx * dx + dz * dz;
+                        const t = run ? Math.max(0, Math.min(1, ((row.x - ax) * dx + (row.z - az) * dz) / run)) : 0;
+                        // (not past the wider road's end at the node: its ribbon ends square there)
+                        if (j === from && t === 0 && ((row.x - ax) * dx + (row.z - az) * dz) < 0) continue;
+                        const d = Math.hypot(ax + dx * t - row.x, az + dz * t - row.z);
+                        if (best === null || d < best.d) best = { d, y: samples.y[j] + (samples.y[j + way] - samples.y[j]) * t };
+                    }
+                    return best && best.d <= (samples.width[from] + row.width) / 2 ? best.y : null;
+                };
+                for (let i = first; i >= 0 && i < out.length; i += step) {
+                    if (out[i].held && !out[i].ext) break;
+                    const y = inside(out[i]);
+                    if (y === null) break;
+                    if (out === rows) out = rows.slice();
+                    out[i] = { ...out[i], y: y - WorldEnvironment.SIDE_NODE_UNDER_M };
+                }
+            }
+        }
+        return out;
+    }
+
     static unwrap(rows) {
         for (let i = 1; i < rows.length; i++) {
             const step = rows[i].heading - rows[i - 1].heading;
@@ -2910,6 +3079,7 @@ class WorldEnvironment {
                 const turn = Math.atan2(Math.sin(other.heading - row.heading), Math.cos(other.heading - row.heading));
                 return { ...row, heading: row.heading + turn / 2 };
             };
+            rows = this.sideNodeHold(edge, WorldEnvironment.sideTurns(rows));
             if (rows.length > 1) {
                 rows = rows.slice();
                 if (before.length) rows[0] = meet(rows[0], before[before.length - 1]);
@@ -3063,9 +3233,11 @@ class WorldEnvironment {
         const foot = (p, sign) => { const o = sign * (p.width / 2 + RoadMesh.TUBE_WALL_M); return [p.x + o * Math.cos(p.heading), p.y, p.z - o * Math.sin(p.heading)]; };
         const tube = i => !!(points[i] && points[i].bits & 5);
         // (a box in front of a portal is marked `mouth`: the land is cut there, but no roof stands over it)
-        const add = (a, b, mouth = false) => { const box = TerrainMesh.tubeBox(foot(a, -1), foot(a, 1), foot(b, 1), foot(b, -1), WorldRoute.ROOF_M); if (box) list.push(mouth ? Object.assign(box, { mouth }) : box); };
+        const add = (a, b, mouth = false, profile = 'box') => { const box = TerrainMesh.tubeBox(foot(a, -1), foot(a, 1), foot(b, 1), foot(b, -1), WorldRoute.ROOF_M); if (box) list.push(mouth ? Object.assign(box, { mouth }) : Object.assign(box, { profile })); };
+        // (each box carries its tube's profile, StructureStyles.tube, for the camera's roof: tubeRoofY)
+        const info = this.tubeInfo();
         for (let i = 0; i + 1 < points.length; i++) {
-            if (tube(i) && tube(i + 1)) add(points[i], points[i + 1]);
+            if (tube(i) && tube(i + 1)) add(points[i], points[i + 1], false, info.run[i] >= 0 ? info.runs[info.run[i]].profile : 'box');
             // In front of each portal, out RoadMesh.TUBE_MOUTH_M along the road (RoadMesh.wings closes its sides)
             for (const [at, step] of [[i, -1], [i + 1, 1]]) {
                 if (!(tube(i) && tube(i + 1)) || tube(at + step) || !points[at + step]) continue;
@@ -3127,7 +3299,9 @@ class WorldEnvironment {
             if (!tube.planes.every(([nx, nz, d]) => nx * x + nz * z + d >= 0)) continue;
             const floor = tube.floor[0] + tube.floor[1] * x + tube.floor[2] * z;
             if (floor > y + WorldEnvironment.TUBE_LEVEL_M || floor + tube.roof < y) continue;
-            low = Math.min(low, floor + tube.roof - WorldEnvironment.TUBE_CAMERA_M);
+            // (a rounded tube's roof comes down over its walkways: the room kept is round the camera, StructureStyles)
+            const wall = Math.min(tube.planes[0][0] * x + tube.planes[0][1] * z + tube.planes[0][2], tube.planes[2][0] * x + tube.planes[2][1] * z + tube.planes[2][2]);
+            low = Math.min(low, floor + StructureStyles.ceilingAt(tube.profile, wall, tube.roof, WorldEnvironment.TUBE_CAMERA_M));
         }
         return low;
     }
@@ -3154,7 +3328,7 @@ class WorldEnvironment {
     // The tubes a side chunk draws ({la, ra, rb, lb, roof}, RoadMesh.sideStructures): the tiles under them are drawn
     // again, at the level of detail they have, when they change
     setSideTubes(k, segments) {
-        const boxes = segments.map(s => { const box = TerrainMesh.tubeBox(s.la, s.ra, s.rb, s.lb, s.roof); return box && s.mouth ? Object.assign(box, { mouth: true }) : box; }).filter(Boolean);
+        const boxes = segments.map(s => { const box = TerrainMesh.tubeBox(s.la, s.ra, s.rb, s.lb, s.roof); return box && s.mouth ? Object.assign(box, { mouth: true }) : box && Object.assign(box, { profile: s.profile || 'box' }); }).filter(Boolean);
         const sign = list => list.map(b => b.box.map(v => Math.round(v * 100)).join(',') + `:${Math.round(b.roof * 100)}`).join('|');
         const old = this.sideTubes.get(k) || [];
         if (sign(old) === sign(boxes)) return;

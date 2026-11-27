@@ -19,9 +19,11 @@
 //
 // What still stands, and is held here so it can only shrink (the committed head before the fix, 78aeeec: 3781
 // intrusions, 3477 seams, 8258 coplanar pairs):
-//   - 32 triangles: aprons a few centimetres into the ride's carriageway on the inside of held bends, a side road's
-//     underpass at km 6.5 under another side road, and the ride's walls between two of its own legs. (The ride's wall
-//     across the stub at the Bedrina junction, km 1.27, is gone: the ride has no wall at a side road's mouth, and the
+//   - 24 triangles: two side roads' walls at one node near Airolo, a side road's underpass at km 3.7 under the ride's
+//     deck, and side roads' faces hung to the coarse land where they meet another side road (km 7.7 and Airolo). A ride section's works are read at full
+//     detail only (a far section's coping chords a bend as its ribbon does: read against the curve, 160 far coping
+//     triangles stood a few centimetres into it), and an upright face's heights over a point are its own there. (The
+//     ride's wall across the stub at the Bedrina junction, km 1.27, is gone: the ride has no wall at a side road's mouth, and the
 //     physics reads the walls the ride's plan draws, WorldEnvironment.walledAt.) The ride's works never move for
 //     another leg of the ride: the physics reads its verge as ground and its wall as a wall
 //   - 7 seams of retaining walls where the walls of two legs of the ride meet in a hairpin (km 7.8, 7.9, 9.0, 9.4,
@@ -33,7 +35,7 @@ import { loadGame } from '../helpers/load-game.js';
 import { diskFetch } from '../helpers/world-fetch.js';
 import { structureWindow, structureSeams, coplanarOverlaps } from '../helpers/world-structures.js';
 
-const LIMIT = { intrusions: 32, physics: 0, seams: 7, coplanar: 284 };
+const LIMIT = { intrusions: 24, physics: 0, seams: 7, coplanar: 284 };
 
 const game = loadGame(undefined, []);
 const { THREE, WorldEnvironment } = game;

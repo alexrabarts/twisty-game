@@ -24,7 +24,9 @@ describe('the map data', () => {
             const line = WorldMapData.legs[leg.n];
             expect([leg.n, Array.isArray(line) && line.length >= 10]).toEqual([leg.n, true]);
             line.forEach(p => expect(p.every(Number.isFinite)).toBe(true));
-            const before = WorldMapData.legs[leg.n === 1 ? 12 : leg.n - 1];
+            // (the tour ends at Hospental, not where it starts: leg 1 has no leg before it)
+            if (leg.n === 1) continue;
+            const before = WorldMapData.legs[leg.n - 1];
             const [ex, ez] = before[before.length - 1], [sx, sz] = line[0];
             // (they join within a few hundred metres: a stop's way in and out, a built leg beside a planned one)
             expect([leg.n, Math.hypot(ex - sx, ez - sz) < 600]).toEqual([leg.n, true]);
@@ -41,7 +43,7 @@ describe('the map data', () => {
     });
 
     test('the places named are the passes and the towns of the loop and the ends of its legs, and nothing else', () => {
-        expect(WorldMapData.places.map(p => p.name).sort((a, b) => a.localeCompare(b, 'de'))).toEqual(['Airolo', 'Andermatt', 'Furka', 'Gadmen', 'Gletsch', 'Göschenen', 'Gotthard', 'Grimsel', 'Guttannen', 'Hospental', 'Innertkirchen', 'Lookout', 'Realp', 'Schöllenen', 'Susten', 'Tremola', 'Wassen']);
+        expect(WorldMapData.places.map(p => p.name).sort((a, b) => a.localeCompare(b, 'de'))).toEqual(['Airolo', 'Andermatt', 'Furka', 'Gadmen', 'Gletsch', 'Göschenen', 'Gotthard', 'Grimsel', 'Guttannen', 'Hospental', 'Innertkirchen', 'Lookout', 'Realp', 'Schöllenen', 'Susten', 'Wassen']);
         WorldMapData.places.forEach(p => expect(['n', 's', 'e', 'w']).toContain(p.side));
     });
 
@@ -64,19 +66,17 @@ describe('the map data', () => {
         expect(one.down).toBeLessThan(30);
     });
 
-    test('an earlier leg rides its tour leg\'s road the other way: the Tremola up is leg 12 reversed', () => {
-        const tremola = WorldMap.lineOf(WorldLegs.find('tremola'));
-        const twelve = WorldMapData.legs[12];
-        expect(tremola[0]).toEqual(twelve[twelve.length - 1]);
-        // (the 10 m step counts from the line's own start, so the two ways agree to a step or so)
-        expect(Math.abs(WorldMap.climb(tremola).up - WorldMap.climb(twelve).down)).toBeLessThanOrEqual(WorldMap.CLIMB_STEP_M);
+    test('the map holds the tour\'s legs alone: a line for each and none more, and no line for an earlier leg', () => {
+        expect(Object.keys(WorldMapData.legs).map(Number)).toEqual(WorldTour.LEGS.map(l => l.n));
+        for (const leg of WorldLegs.LIST.filter(l => !l.n)) expect(WorldMap.lineOf(leg)).toBe(null);
+        expect(WorldMap.entries({ storage: store() }).map(e => e.id)).toEqual(WorldLegs.LIST.filter(l => l.n).map(l => l.id));
     });
 });
 
 describe('the entries', () => {
     test('each row of the list has its state from WorldLegs\' rule; each tour row with a line has a pin, apart from the others', () => {
         const entries = WorldMap.entries({ storage: store() });
-        expect(entries.map(e => e.id)).toEqual(WorldLegs.LIST.map(l => l.id));
+        expect(entries.map(e => e.id)).toEqual(WorldLegs.LIST.filter(l => l.n).map(l => l.id));
         for (const entry of entries) {
             const want = WorldLegs.find(entry.id).planned ? 'planned' : WorldLegs.isOpen(entry.id, { storage: store() }) ? 'open' : 'locked';
             expect([entry.id, entry.state]).toEqual([entry.id, want]);
@@ -176,7 +176,7 @@ describe('the map on the menu', () => {
 
     const open = (options = {}) => WorldMap.open(document, { onPick: picked, onBack: backs, ...options });
 
-    test('every row of the tour has a line with a hit area and a pin, and each earlier leg a button', () => {
+    test('every row of the tour has a line with a hit area and a pin, and nothing on the map names an earlier leg', () => {
         open();
         for (const leg of WorldLegs.LIST.filter(l => l.n)) {
             const group = document.querySelector(`#world-legs .map-leg[data-leg="${leg.id}"]`);
@@ -186,7 +186,12 @@ describe('the map on the menu', () => {
             const pin = document.querySelector(`#world-legs .map-pin[data-leg="${leg.id}"]`);
             expect(pin.textContent).toBe(String(leg.n));
         }
-        for (const leg of WorldLegs.LIST.filter(l => !l.n)) expect(document.querySelector(`#world-legs .map-earlier-btn[data-leg="${leg.id}"]`)).not.toBe(null);
+        for (const leg of WorldLegs.LIST.filter(l => !l.n)) {
+            expect(document.querySelector(`#world-legs [data-leg="${leg.id}"]`)).toBe(null);
+            expect(document.getElementById('world-legs').textContent).not.toContain(leg.name);
+        }
+        expect(document.getElementById('world-legs').textContent).not.toMatch(/earlier/i);
+        expect(document.querySelector('#world-legs .map-count').textContent).toMatch(/ of 10 legs built/);
         // The first leg is chosen and focused, as the list focused it
         expect(document.activeElement).toBe(document.querySelector('#world-legs .map-pin[data-leg="airolo-lookout"]'));
     });
@@ -197,12 +202,12 @@ describe('the map on the menu', () => {
         pin.click();
         expect(picked).toHaveBeenCalledWith('airolo-lookout');
         expect(document.getElementById('world-legs')).toBe(null);
-        open();
-        document.querySelector('#world-legs .map-earlier-btn[data-leg="tremola"]').click();
+        open({ unlockAll: true });
+        document.querySelector('#world-legs .map-pin[data-leg="lookout-andermatt"]').click();
         expect(picked).toHaveBeenCalledTimes(1);
-        expect(document.querySelector('#world-legs .map-name').textContent).toBe(WorldLegs.find('tremola').name);
+        expect(document.querySelector('#world-legs .map-name').textContent).toBe(WorldLegs.find('lookout-andermatt').name);
         document.querySelector('#world-legs .map-ride').click();
-        expect(picked).toHaveBeenLastCalledWith('tremola');
+        expect(picked).toHaveBeenLastCalledWith('lookout-andermatt');
     });
 
     test('a closed leg cannot start: not by its pin, its line, RIDE or Enter', () => {
@@ -307,9 +312,14 @@ describe('the map on the menu', () => {
         expect(same().ride.textContent).toBe('FINISH LEG 1 TO OPEN');
         document.querySelector('#world-legs .map-ride').click();
         expect(picked).not.toHaveBeenCalled();
-        // The earlier legs too
-        document.querySelector('#world-legs .map-earlier-btn[data-leg="tremola"]').click();
-        expect(same().entry.id).toBe('tremola');
+    });
+
+    test('every built leg finished: the map offers an open leg of its own, never an earlier leg it does not draw', () => {
+        storage.setItem(WorldLegs.STORE, JSON.stringify(WorldTour.built().map(l => l.id)));
+        open();
+        const chosen = document.getElementById('world-legs').mapState().chosen;
+        expect(WorldTour.LEGS.some(l => l.id === chosen)).toBe(true);
+        expect(document.querySelector('#world-legs .map-ride').disabled).toBe(false);
     });
 
     test('free roam: the button says so', () => {

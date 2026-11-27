@@ -336,12 +336,14 @@ A world's bike meets a wall with its tyres: its place is the line of its tyres. 
 | `kickDeg` | 2 | The heading is turned this far off the face. |
 | `skinM` | 0.02 | The bike is held this far before the face. |
 | `deepM` | 0.3 | A bike found further into a wall than this did not touch its face: the crash it was. |
+| `slowMs` | 3 m/s | Under this speed a wall is never a crash. |
 
 The rule:
 
 - **The shape.** With the bike leaned `a` away from the wall, a part `half` to the side and `height` up stands `half x cos(a) - height x sin(a)` toward the wall and `height x cos(a) + half x sin(a)` high. A part that stands further toward the wall than `tyreM` is in the wall when the tyres touch it. From 15.3 degrees of lean away every part is inside the line of the tyres.
 - **The wall's height.** A part meets only a wall as high as the part. A wall with a drawn height has it in its zone (`WorldGround.zoneAt` `height`): a parapet is `RoadMesh.PARAPET_H_M` (0.8 m), a wall's coping `RoadMesh.COPING_UP_M` (0.5 m). A parapet is under the bars of an upright bike, so the tyres alone meet it. The rock beside a tunnel's road, a rock face of the land and a building have no height: they are as high as the rider.
 - **A crash**, with the class it had (`wall`, or `building`): a part meets the wall (upright or leaned toward a high wall); the speed into the wall is over `closeMax`; the heading is over `glanceDeg` off the face; the contact has lasted `mostS`; or the bike is found over `deepM` into the wall (the ride's projection came over from another strand of a ladder, so it did not touch the face).
+- **At walking pace no wall is a crash.** Under `slowMs` every touch is a brush, at any angle, any lean and for any time (`wallTouch`). Where the brush finds no face of its own (the bike found deep in the wall, a building), the bike is put back the step it came and stops against the wall (`checkWallCollision`, `worldLand`). Over `slowMs` every rule above is as it was: at 4 m/s head-on is still a crash. The owner ruled it on 2026-11-27: a touch against a wall at walking pace is not a crash.
 - **A brush** otherwise. The bike is held `skinM` before the face. It loses the speed it had into the wall, and `scrub` of its speed each second for `holdS` after each touch. Its heading is turned along the face and `kickDeg` off it. The game says "Brushed the wall" once for each contact, in the warn tone for `Game.CALLOUT_MS.brush`, with the tyre's screech (`Game.sayBrush`).
 - **Never in a drawn wall with a line.** A wall whose face is a line along the road (`zone.line`: a parapet, the rock beside a tunnel's road) and a building are looked for one step ahead: the place the bike reaches at its heading, and `skinM` more. A brush stops the bike before the face. Nothing is looked for while that place is on the carriageway, so a ride on the road costs nothing more.
 - **A rock face of the land is met where the crash was.** Its zone is read on the bike's piece of the ride, and a place one step ahead can be in one the bike never comes to. So the bike is in it for one step, 5 cm at the most (`closeMax` x the step), and is then put back.
@@ -356,6 +358,18 @@ Measured (`tests/unit/world-wall-brush.test.js`):
 - Upright or leaned 35 degrees toward a high wall: the crash. Upright at a parapet: a brush. At 16 degrees into the wall (4.1 m/s): a crash at every lean.
 - Round the outside rock of a 12 m bend, leaned 50 degrees into the bend: at 17 to 22 m/s the bike brushes 1 to 3 times and rides on at about 9 m/s; at 25 and 30 m/s it crashes.
 - The shipped stage: 15 of the 35 hairpins have a wall within 4 m of the outside edge, 14 of them a parapet 0.9 m past the edge. Ridden wide at the advised speed, 13 brush the wall once and ride on (the lean is 7 to 21 degrees), 2 never reach the wall, and none crashes. The fixture world has 2 such hairpins: one brush, and one ride that ends in a roadworks board on the wide line.
+
+## A stop ends with a foot down
+
+The owner fell over three times in 15 minutes when he stopped on an easy road (Tremola km 1.7, 1.8 and 5.2): "Fell over at walking pace: too much lean to put a foot down". The cause: he held a steer key while he braked to a stop, as in a bend. At walking pace the lean limit rose to `lowLeanDeg` (40 degrees), so the held key laid the bike over as it slowed. Under `fallSpeed` it was past `tipLeanDeg` and fell. A scripted stop from 10 m/s with the key held and the brake on fell in 0.5 s.
+
+The rule (`Vehicle.updateWorldPhysics`, `WorldPhysics.stopLean`):
+
+- **On the brake, no counterbalance lean.** With the brake on, the low-speed lean (`lowLeanDeg`) does not apply. The limit is the lean of the tightest turn at that speed, and it falls to nothing as the bike slows. The lean comes back with it.
+- **Under `fallSpeed` the steering turns the handlebar.** It leans the bike no further than `stopLean` (0.8) of `tipLeanDeg`. A lean the bike already has is kept.
+- **Real lean still falls.** A full-lock U-turn at 2 m/s with the throttle shut tips over, as before.
+
+`tests/unit/world-stop-foot.test.js` holds it: a stop from 10 m/s with the key held, half held or tapped, at full or half brake, and a tap at 3, 2, 1.5 and 1 m/s, each end with a foot down at 0 m/s. Stopped, a key held for 2 s leans the bike no further than `stopLean` of `tipLeanDeg`.
 
 ## A wheelie by the bike
 

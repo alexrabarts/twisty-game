@@ -393,11 +393,19 @@ export function spikeWindow(game, env, store, at, nearM = 350, rules = { rideM: 
     // at its height. A piece needs stone at its height over the wall's coping on one side
     // (`coping`, with the width it has); any face needs something drawn at its top on one side (`sheet`)
     const stoneTop = (x, z) => topOf(tops, x, z);
+    // Whether (x, z) lies square beside a row of the ride that is a structure's (a bridge, tunnel or gallery: bits 7)
+    const structureRowAt = (x, z) => {
+        const near = env.route.coldLookup(x, z, hint), points = env.route.points;
+        return [near.index, near.index + 1].some(i => points[i] && (points[i].bits & 7) && Math.abs(points[i].s - near.s) < 0.5);
+    };
     const anyTop = (x, z) => { const a = drawnTop(x, z), b = stoneTop(x, z); return a === null ? b : b === null ? a : Math.max(a, b); };
     const thinAt = q => {
         if (q.len < 0.05) return null;
         // (a coping that narrows to meet a bridge's parapet at the deck's corner, where the wall meets the structure)
         if ([q.a, q.b].some(p => { const deck = topOf(decks, p.x, p.z); return deck !== null && Math.abs(deck - p.top) < 2.5; }) || [q.a, q.b].some(p => [[0.4, 0], [-0.4, 0], [0, 0.4], [0, -0.4]].some(([dx, dz]) => { const deck = topOf(decks, p.x + dx, p.z + dz); return deck !== null && Math.abs(deck - p.top) < 2.5; }))) return null;
+        // (nor one of the ride's that narrows to the carriageway's edge at a tube's mouth: the wall meets the portal at a
+        // structure's row as it meets a deck's corner, RoadMesh.edgeWorks)
+        if (q.owner === -1 && [q.a, q.b].some(p => structureRowAt(p.x, p.z))) return null;
         const nx = -(q.b.z - q.a.z) / q.len, nz = (q.b.x - q.a.x) / q.len, my = (q.a.top + q.b.top) / 2;
         let worst = null;
         for (const u of [0.25, 0.5, 0.75]) {

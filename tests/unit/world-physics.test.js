@@ -756,12 +756,19 @@ describe('low-speed turn', () => {
         expect(vehicle.crashed).toBe(false);
     });
 
-    test('slowing to a stop at full lock tips the bike over; upright with the brake it stops with a foot down', () => {
+    test('rolling to a stop at full lock tips the bike over; on the brake, leaned or upright, it stops with a foot down', () => {
+        // (the throttle shut and no brake: the rider lays the bike over for the turn and runs out of speed, real lean)
         const leaned = worldVehicle();
         leaned.speed = 10;
-        for (let tick = 0; tick < 600 && !leaned.crashed; tick++) leaned.update(DT, 1, 0, 0.4);
+        for (let tick = 0; tick < 60 * 30 && !leaned.crashed; tick++) leaned.update(DT, 1, 0, 0);
         expect(leaned.crashed).toBe(true);
         expect(leaned.crashCause).toMatch(/Fell over/);
+        // On the brake with the lock held the rider stands the bike up as it slows (WorldPhysics.stopLean; the owner fell
+        // over stopping on an easy road with a steer key held: tests/unit/world-stop-foot.test.js)
+        const braked = worldVehicle();
+        braked.speed = 10;
+        for (let tick = 0; tick < 600; tick++) braked.update(DT, 1, 0, 0.4);
+        expect([braked.crashed, braked.speed, braked.footDown]).toEqual([false, 0, true]);
         const upright = worldVehicle();
         upright.speed = 10;
         for (let tick = 0; tick < 600; tick++) upright.update(DT, tick < 120 ? 1 : 0, 0, tick < 120 ? 0 : 0.4);

@@ -89,7 +89,7 @@ const Game = new Function('THREE', 'WorldCamera', 'showCallout', 'TourSystem', '
 // the side
 function chase(lean) {
     const offset = new THREE.Vector3(0, 3, -6);
-    const mode = { name: 'Standard', type: 'follow', offset, lerpFactor: 0.10 };
+    const mode = { name: 'Near chase', type: 'near', offset, lerpFactor: 0.10 };
     const vehicle = {
         position: new THREE.Vector3(0, 100, 40), velocity: new THREE.Vector3(), speed: 0, maxSpeed: 60, leanAngle: lean, yawAngle: 0,
         comfortShake: 0, isWheelie: false, isJumping: false, fallingOffCliff: false, crashed: false, projection: { s: 40, index: 10 }, routeS: 40

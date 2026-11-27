@@ -30,7 +30,7 @@ const { THREE, WorldEnvironment, WorldGround } = game;
 const list = (items, n = 12) => items.slice(0, n).map(i => JSON.stringify(i)).join('\n');
 
 // Every shipped stage: a new world passes with every count at its limit before it ships
-for (const stage of ['tremola', 'gotthard-north', 'andermatt-goeschenen', 'goeschenen-susten', 'susten-gadmen']) describe(`the ${stage} stage: every side road meets the ride`, () => {
+for (const stage of ['tremola', 'gotthard-north', 'andermatt-goeschenen', 'goeschenen-susten', 'susten-gadmen', 'gadmen-innertkirchen', 'innertkirchen-guttannen', 'guttannen-grimsel']) describe(`the ${stage} stage: every side road meets the ride`, () => {
     // (the new legs' open faults are their stage's debt: junctionLimits)
     const JUNCTION_LIMITS = junctionLimits(stage);
     let env, found;
@@ -70,7 +70,13 @@ for (const stage of ['tremola', 'gotthard-north', 'andermatt-goeschenen', 'goesc
     test('every side road of every junction was read', () => {
         const sides = env.graph.junctions.filter(inStage).reduce((n, j) => n + j.incident.filter(i => !env.data.edges[i.edgeId].onRide).length, 0);
         expect(found.roads).toBeGreaterThanOrEqual(sides);
-        expect(found.samples).toBeGreaterThan(200 * found.roads);
+        // (each read along its centre and wheel lines every 0.5 m out to 40 m, or to its end: a side road that goes
+        // into a tunnel 7 m out, leg 4's j83, has 3 x 14 places)
+        const reads = env.graph.junctions.filter(inStage).reduce((n, j) => n + j.incident.filter(i => !env.data.edges[i.edgeId].onRide).reduce((m, i) => {
+            const { rows } = env.graph.chainFrom(i.edgeId, j.node, 40);
+            return m + (rows.length > 1 ? 3 * Math.floor(Math.min(40, rows[rows.length - 1].run) / 0.5) : 0);
+        }, 0), 0);
+        expect(found.samples).toBeGreaterThanOrEqual(0.9 * reads);
     });
 
     test('a side road meets the ride: no step, no hole, no land over it', () => {

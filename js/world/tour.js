@@ -1,5 +1,6 @@
-// WorldTour: the loop the owner chose (2026-11-26), Airolo round five passes and back, in twelve legs. Each leg starts
-// at the stop where the leg before it ended. The one table the game and the tools read: the menu's leg list
+// WorldTour: the tour the owner chose (2026-11-26), from Airolo over five passes to the car park at Hospental, in ten
+// legs (the loop's last two legs, back over the Gotthard to Airolo, were dropped the same day). Each leg starts at the
+// stop where the leg before it ended. The one table the game and the tools read: the menu's leg list
 // (WorldLegs), the data folder of a stage (WorldData.FOLDERS) and the stages the tools derive from a folder's ride
 // (tools/world/tour.mjs).
 //
@@ -20,16 +21,18 @@ const WorldTour = {
         { n: 3, id: 'andermatt-goeschenen', folder: 'worlds/susten/', start: 'andermatt-goeschenen-start', end: 'andermatt-goeschenen-end', pass: 'Schöllenen', name: 'Andermatt through the Schöllenen to Göschenen', km: 6.4, note: 'Down the gorge through its tunnels and galleries and over the Devil\'s Bridge.', from: 'A hotel car park in Andermatt', to: 'The station car park at Göschenen' },
         { n: 4, id: 'goeschenen-susten', folder: 'worlds/susten/', start: 'andermatt-goeschenen-end', end: 'goeschenen-susten-end', pass: 'Susten', name: 'Göschenen down to Wassen and up to the Susten pass', km: 21.9, note: 'Down the valley to Wassen, then the long climb of the Meiental to the pass.', from: 'The station car park at Göschenen', to: 'The car park at the Susten pass' },
         { n: 5, id: 'susten-gadmen', folder: 'worlds/susten/', start: 'goeschenen-susten-end', end: 'susten-gadmen-end', pass: 'Susten', name: 'The Susten pass down to Gadmen', km: 15.8, note: 'Down the west side past the glacier and its hairpins to the village.', from: 'The car park at the Susten pass', to: 'The car park at Gadmen' },
-        { n: 6, pass: 'Susten', name: 'Gadmen to Innertkirchen', km: 12.3 },
-        { n: 7, pass: 'Grimsel', name: 'Innertkirchen to Guttannen', km: 8.5 },
-        { n: 8, pass: 'Grimsel', name: 'Guttannen up to the Grimsel pass', km: 17.8 },
+        // (leg 6 starts at the car park where leg 5 ends, the first stop of worlds/haslital: the two folders meet there, as
+        // legs 2 and 3 meet at Andermatt. Leg 6 ends at the car park on the Grimsel road past the village's junction, the
+        // public one nearest it)
+        { n: 6, id: 'gadmen-innertkirchen', folder: 'worlds/haslital/', start: 'gadmen-innertkirchen-start', end: 'gadmen-innertkirchen-end', pass: 'Susten', name: 'Gadmen to Innertkirchen', km: 12.4, note: 'Down the Gadmental through its tunnels and galleries to the valley floor.', from: 'The car park at Gadmen', to: 'A car park in Innertkirchen' },
+        { n: 7, id: 'innertkirchen-guttannen', folder: 'worlds/haslital/', start: 'gadmen-innertkirchen-end', end: 'innertkirchen-guttannen-end', pass: 'Grimsel', name: 'Innertkirchen to Guttannen', km: 8.1, note: 'Up the Haslital on the Grimsel road, through the narrows to the village.', from: 'A car park in Innertkirchen', to: 'The car park at Guttannen' },
+        { n: 8, id: 'guttannen-grimsel', folder: 'worlds/haslital/', start: 'innertkirchen-guttannen-end', end: 'guttannen-grimsel-end', pass: 'Grimsel', name: 'Guttannen up to the Grimsel pass', km: 17.5, note: 'The long climb past the dams and their lakes, through the galleries, to the pass.', from: 'The car park at Guttannen', to: 'The car park at the Grimsel pass' },
         { n: 9, pass: 'Furka', name: 'The Grimsel down to Gletsch and up to the Furka pass', km: 16.4 },
-        { n: 10, pass: 'Furka', name: 'The Furka pass down to Hospental', km: 18.2 },
-        { n: 11, id: 'hospental-summit', folder: 'worlds/gotthard/', base: 'gotthard-north', dir: 1, start: 'gotthard-north-via-2', end: 'gotthard-north-via-1', pass: 'Gotthard', name: 'Hospental up to the Gotthard summit', km: 8.9, note: 'The north road from the village up the open valley to the hospice square.', from: 'The car park at Hospental', to: 'The hospice square at the summit' },
-        { n: 12, id: 'summit-airolo', folder: 'world/', base: 'tremola', dir: -1, start: 'tremola-end', end: 'tremola-start', pass: 'Gotthard', name: 'The summit down the Tremola to Airolo', km: 12.5, note: 'Down the old cobbled road and its stacked hairpins to the valley.', from: 'The hospice square at the summit', to: 'The station car park at Airolo' }
+        { n: 10, pass: 'Furka', name: 'The Furka pass down to Hospental', km: 18.2 }
     ].map(Object.freeze)),
 
-    // The legs shipped before the tour: still on the menu, with their boards, after the tour's
+    // The legs shipped before the tour, with their boards: in the menu's list (WorldLegs) but not on its map; a ride of
+    // one starts from the address (?world=<id>, js/ridemode.js), and free roam and debug mode use their worlds
     EARLIER: Object.freeze([
         { id: 'gotthard-north', folder: 'worlds/gotthard/', pass: 'Earlier legs', name: 'Andermatt over the Gotthard to the lookout over Airolo', km: 14.5, note: 'A gentle run-in from the north, past the hospice square, then down the modern pass road through the galleries.', from: 'A hotel car park in Andermatt', to: 'The lookout over Airolo', open: true },
         { id: 'tremola', folder: 'world/', pass: 'Earlier legs', name: 'Tremola, Airolo to the Gotthard summit', km: 13.2, note: 'The old cobbled road and its hairpins.', from: 'Airolo', to: 'The Gotthard summit', open: true }

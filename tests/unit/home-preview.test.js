@@ -69,22 +69,27 @@ describe('the rider on the menu\'s stage', () => {
         frames.length = 0;
     });
 
-    test('each rider stands on the stage once, on their chosen bike, in their chosen outfit', () => {
+    test('the stand shows the focused rider alone, on their chosen bike, built once when first shown and kept for a step back', () => {
         g.startRiderShowcase(CHARACTERS[0].id);
-        expect(Object.keys(g.showcaseBikes).sort()).toEqual(CHARACTERS.map(c => c.id).sort());
-        for (const c of CHARACTERS) {
-            const v = g.showcaseBikes[c.id];
-            expect([c.id, v.model]).toEqual([c.id, g.tourSystem.getSelectedBike(c.id)]);
-            expect(g.scene.children).toContain(v.group);
-        }
-        expect(g.showcaseFocusId).toBe(CHARACTERS[0].id);
+        expect(Object.keys(g.showcaseBikes)).toEqual([CHARACTERS[0].id]);
+        const first = g.showcaseBikes[CHARACTERS[0].id];
+        expect(first.model).toBe(g.tourSystem.getSelectedBike(CHARACTERS[0].id));
         g.focusRiderShowcase(CHARACTERS[1].id);
-        expect(g.showcaseFocusId).toBe(CHARACTERS[1].id);
+        expect(Object.keys(g.showcaseBikes).sort()).toEqual([CHARACTERS[0].id, CHARACTERS[1].id].sort());
+        g.focusRiderShowcase(CHARACTERS[0].id);
+        expect(g.showcaseBikes[CHARACTERS[0].id]).toBe(first);
+        // One stand, and every bike on it at its one spot
+        expect(g.showcaseExtras.filter(o => o.geometry && o.geometry.type === 'CylinderGeometry')).toHaveLength(1);
+        Object.values(g.showcaseBikes).forEach(v => expect(v.position.distanceTo(g.showcaseSpot)).toBe(0));
+        // With no files to dress them (no BikeModels here) nothing is drawn: never the procedural stand-in
+        Object.values(g.showcaseBikes).forEach(v => expect(v.group.visible).toBe(false));
     });
 
     test('a bike or an outfit chosen: that rider\'s bike is built again, once, and the one it replaces is freed', () => {
         const rider = CHARACTERS.find(c => Array.isArray(c.bikes) && c.bikes.length > 1 && Array.isArray(c.outfits) && c.outfits.length > 1);
         g.startRiderShowcase(rider.id);
+        CHARACTERS.forEach(c => g.focusRiderShowcase(c.id));
+        g.focusRiderShowcase(rider.id);
         const others = Object.entries(g.showcaseBikes).filter(([id]) => id !== rider.id).map(([, v]) => v);
         const old = g.showcaseBikes[rider.id];
         const { held, freed } = watch(old.group);
@@ -113,7 +118,7 @@ describe('the rider on the menu\'s stage', () => {
         expect(g.camera.view.enabled).toBe(true);
         expect(g.camera.view.offsetX).toBeCloseTo(want.offsetX);
         expect(g.camera.fov).toBe(Game.SHOWCASE_FOV);
-        const target = g.showcaseBikes[CHARACTERS[0].id].position;
+        const target = g.showcaseSpot;
         expect(Math.hypot(g.camera.position.x - target.x, g.camera.position.z - target.z)).toBeCloseTo(want.distance, 5);
         // The focused bike's centre lands at the stage box's centre on screen
         g.camera.updateMatrixWorld();
@@ -139,7 +144,7 @@ describe('the rider on the menu\'s stage', () => {
         expect(g.camera.view === null || g.camera.view.enabled === false).toBe(true);
         // Opened again: built again from nothing, the same once more
         g.startRiderShowcase(CHARACTERS[0].id);
-        expect(Object.keys(g.showcaseBikes)).toHaveLength(CHARACTERS.length);
+        expect(Object.keys(g.showcaseBikes)).toHaveLength(1);
         g.endMenuShowcase();
         expect(g.scene.children.filter(o => o.isGroup || o.isMesh)).toEqual([]);
     });

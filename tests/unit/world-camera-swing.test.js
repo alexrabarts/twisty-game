@@ -24,10 +24,8 @@ const RoadBoomGame = new Function('THREE', 'WorldCamera', 'showCallout', 'TourSy
 
 const DT = 1 / 60;
 const MODES = [
-    { name: 'Onboard', type: 'onboard', offset: new THREE.Vector3(0, 1.2, 0.5), lerpFactor: 0.18 },
-    { name: 'Helmet Cam', type: 'helmet', offset: new THREE.Vector3(0, 1.15, 0.35), lerpFactor: 1.0 },
-    { name: 'Standard', type: 'follow', offset: new THREE.Vector3(0, 3, -6), lerpFactor: 0.10 },
-    { name: 'High View', type: 'high', offset: new THREE.Vector3(0, 8, -12), lerpFactor: 0.08 }
+    { name: 'Far chase', type: 'far', offset: new THREE.Vector3(0, 8, -12), lerpFactor: 0.08 },
+    { name: 'Near chase', type: 'near', offset: new THREE.Vector3(0, 3, -6), lerpFactor: 0.10 }
 ];
 
 // A weave on a straight road along +z (the code's lateral is +x): the bike's line is x = A sin(wt), its yaw the
@@ -124,7 +122,7 @@ const measure = rows => ({
 
 describe('the world chase camera carves like the legs camera', () => {
     for (const speed of [12, 20]) {
-        for (const mode of [2, 3]) {
+        for (const mode of [0, 1]) {
             test(`a weave at ${speed} m/s in ${MODES[mode].name}: the camera swings sideways and its view swings into the corner, behind the lean, as far as the legs camera with its boom held to the road`, () => {
                 const legs = measure(ride(false, mode, speed, undefined, RoadBoomGame));
                 const rows = ride(true, mode, speed);
@@ -139,7 +137,7 @@ describe('the world chase camera carves like the legs camera', () => {
                 expect(Math.abs(world.cameraLag - legs.cameraLag)).toBeLessThan(0.15);
                 // The look point leads into the corner by the legs' gain, a lerp behind the lean
                 const lead = fit(rows, 'lead').amplitude, lean = fit(rows, 'lean').amplitude;
-                const gain = mode === 3 ? 2 : 4;
+                const gain = MODES[mode].type === 'far' ? 2 : 4;
                 expect(lead).toBeGreaterThan(0.85 * gain * lean);
                 expect(lead).toBeLessThan(gain * lean);
                 expect(lagBehindLean(rows, 'lead')).toBeGreaterThan(0.05);

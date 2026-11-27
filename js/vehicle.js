@@ -560,63 +560,6 @@ const BIKE_MODELS = {
 Object.entries(BIKE_MODELS).forEach(([id, bike]) => Object.assign(bike, { id, file: `assets/bikes/detail/${id}.glb`, far: `assets/bikes/far/${id}.glb`, keepFileColours: true }));
 
 class Vehicle {
-    // The layer a mesh the camera is inside is moved to: the camera draws layer 0 only
-    static get HIDDEN_LAYER() { return 31; }
-
-    // Every mesh under `root` (the bike and rider) that holds `point` inside its surface, or has its surface within
-    // `margin` of it, is drawn on no layer the camera sees; every other one goes back to what it was. A camera inside
-    // a mesh draws its inside as a dark shell across the view (the rider's own helmet in Helmet Cam). `point` null
-    // puts every mesh back. Layers, not `visible`, so a level of detail switching its levels cannot show a hidden part
-    // again. Returns how many meshes are hidden
-    static hideAround(root, point, margin = 0.1) {
-        let hidden = 0;
-        const local = Vehicle.hideScratch || (Vehicle.hideScratch = { p: new THREE.Vector3(), m: new THREE.Matrix4(), box: new THREE.Box3() });
-        root.updateMatrixWorld(true);
-        root.traverse(o => {
-            if (!o.isMesh || !o.geometry) return;
-            let inside = false;
-            if (point) {
-                if (!o.geometry.boundingBox) o.geometry.computeBoundingBox();
-                local.m.copy(o.matrixWorld).invert();
-                local.p.copy(point).applyMatrix4(local.m);
-                const scale = o.matrixWorld.getMaxScaleOnAxis() || 1;
-                inside = local.box.copy(o.geometry.boundingBox).expandByScalar(margin / scale).containsPoint(local.p) && Vehicle.encloses(o, local.p, margin / scale);
-            }
-            if (inside) {
-                if (o.userData.layersBeforeHide === undefined) o.userData.layersBeforeHide = o.layers.mask;
-                o.layers.set(Vehicle.HIDDEN_LAYER);
-                hidden++;
-            } else if (o.userData.layersBeforeHide !== undefined) {
-                o.layers.mask = o.userData.layersBeforeHide;
-                delete o.userData.layersBeforeHide;
-            }
-        });
-        return hidden;
-    }
-
-    // Whether the mesh's own surface holds the local point `p` (a ray up from it crosses the surface an odd number of
-    // times) or comes within `margin` of it. Kept per mesh for a point on a 2 cm grid: a camera pinned to the rider
-    // hardly moves against it
-    static encloses(mesh, p, margin) {
-        const key = `${Math.round(p.x * 50)},${Math.round(p.y * 50)},${Math.round(p.z * 50)},${mesh.geometry.uuid}`;
-        if (mesh.userData.enclosesKey === key) return mesh.userData.encloses;
-        const pos = mesh.geometry.attributes.position, index = mesh.geometry.index;
-        const count = index ? index.count : pos.count;
-        const tri = new THREE.Triangle(), hit = new THREE.Vector3();
-        const ray = new THREE.Ray(p.clone(), new THREE.Vector3(0, 1, 0));
-        let up = 0, near = false;
-        for (let t = 0; t < count && !near; t += 3) {
-            tri.a.fromBufferAttribute(pos, index ? index.getX(t) : t);
-            tri.b.fromBufferAttribute(pos, index ? index.getX(t + 1) : t + 1);
-            tri.c.fromBufferAttribute(pos, index ? index.getX(t + 2) : t + 2);
-            if (ray.intersectTriangle(tri.a, tri.b, tri.c, false, hit)) up++;
-            if (margin > 0 && tri.closestPointToPoint(p, hit).distanceTo(p) < margin) near = true;
-        }
-        mesh.userData.enclosesKey = key;
-        mesh.userData.encloses = near || up % 2 === 1;
-        return mesh.userData.encloses;
-    }
-
     constructor(scene, onWheelieScore = null, character = null, bikeId = null, options = {}) {
         this.scene = scene;
         // { model: false } builds the procedural bike only. { model: 'far' } is
@@ -836,6 +779,8 @@ class Vehicle {
         this.riderStandHeight = kind.stand;
 
         this.scene.add(this.group);
+        // A soft patch under each tyre where it meets the ground (ContactShadow)
+        if (typeof ContactShadow !== 'undefined') ContactShadow.attach(this);
 
         // The Blender-made bike and rider take the place of the parts built
         // above once their files are in; until then, and if a file fails,
@@ -1715,7 +1660,7 @@ class Vehicle {
     // updateMesh() (contract: this.brakeLight.material.emissive)
     buildBrakeLight(x, y, z, tiltX = 0) {
         const brakeMaterial = new THREE.MeshStandardMaterial({
-            color: 0xc40b0b, emissive: 0x000000, emissiveIntensity: 0.0,
+            color: 0xc40b0b, emissive: Vehicle.TAIL_LIGHT, emissiveIntensity: Vehicle.TAIL_LIGHT_INTENSITY,
             roughness: 0.15, metalness: 0.2
         });
         this.brakeLight = new THREE.Mesh(new THREE.BoxGeometry(0.1, 0.045, 0.035), brakeMaterial);
@@ -3478,10 +3423,17 @@ class Vehicle {
         const hold = this.offroad > 0 && this.runoff && !this.isJumping && this.worldBrake <= world.slideBrake
             ? this.offroad * this.worldThrottle : 0;
         const capLean = hold > 0 ? Math.atan(Math.tan(capEff) * (1 + world.slideLean * hold)) : capEff;
-        // At walking pace the rider lays the bike over and counterbalances: the limit rises to lowLeanDeg
-        const low = this.lowLeanShare(v);
+        // At walking pace the rider lays the bike over and counterbalances: the limit rises to lowLeanDeg. Not on the
+        // brake: a rider stopping stands the bike up, and the limit is the lean of the tightest turn at this speed, which
+        // falls to nothing with it (the owner fell over three times in 15 minutes, braking to a stop on an easy road
+        // with a steer key held: the lean rose to lowLeanDeg as the bike slowed, and it tipped under fallSpeed)
+        const low = this.worldBrake > 0 ? 0 : this.lowLeanShare(v);
         // (and never past what the bike itself leans: leanMostRad, Infinity for a bike held by the grip alone)
-        const leanLimit = Math.min(capLean, this.leanMostRad, Math.max(Math.atan(v2 / (g * radiusFloor)), low * world.lowLeanDeg * Math.PI / 180));
+        let leanLimit = Math.min(capLean, this.leanMostRad, Math.max(Math.atan(v2 / (g * radiusFloor)), low * world.lowLeanDeg * Math.PI / 180));
+        // Under fallSpeed the steering turns the handlebar and leans the bike no further than stopLean x tipLeanDeg: a
+        // rider with a foot down does not lay the bike over. A lean it already has (a U-turn that ran out of speed) is
+        // kept, and tips it as before
+        if (v < world.fallSpeed) leanLimit = Math.min(leanLimit, Math.max(Math.abs(lean), world.stopLean * world.tipLeanDeg * Math.PI / 180));
 
         // The steering torque falls with speed as the legacy speedFactor does, and picking the bike up is quicker
         const speedFactor = v > world.steerSpeed ? Math.max(0.3, Math.pow(world.steerSpeed / v, world.steerFalloff)) : 1;
@@ -3777,8 +3729,13 @@ class Vehicle {
         }
         const capture = world.lineCapture * (this.lineCaptured ? 2 : 1);
         // Under turnBlendSpeed a turn tighter than the line is captured too: the handlebar can turn the bike far
-        // tighter than any hairpin, and a rider holding the lock would otherwise circle on the spot
-        this.lineCaptured = Math.abs(radius / lineRadius - 1) <= capture || (handlebarShare > 0 && radius < lineRadius);
+        // tighter than any hairpin, and a rider holding the lock would otherwise circle on the spot. So it is at up
+        // to holdSpeedMs where the bend ahead is holdTightR or tighter: full lean turns the bike on about 8 m there,
+        // and a rider holding it cut across the inside onto the grass (leg 3, s 2 980 and 4 060, at 9 m/s)
+        // (hold, 0 to 1: it comes in over the last metre per second under holdSpeedMs and over a bend a quarter tighter
+        // than holdTightR, so the line's weight never steps as a bend comes into reach)
+        const hold = Math.min(1, Math.max(0, world.holdSpeedMs - v)) * Math.min(1, Math.max(0, (this.tightAhead(v) * world.holdTightR - 1) * 4));
+        this.lineCaptured = Math.abs(radius / lineRadius - 1) <= capture || ((handlebarShare > 0 || hold > 0) && radius < lineRadius);
         if (!this.lineCaptured) return this.releaseLine(rate);
         // The arc runs along the road: a heading turned past the road's (or short of it) is brought back over
         // about a second of riding, so an early or late turn-in ends on the arc rather than parallel to it
@@ -3787,12 +3744,22 @@ class Vehicle {
         const want = Math.max(0, Math.min(1 / radiusFloor, 1 / lineRadius - 2 * Math.sin(ahead) / reach));
         const lineLean = -sign * Math.min(leanLimit, Math.atan(v * v * want / 9.81));
         this.lineLeanTarget = lineLean; // read by the smoothness tests
-        const weight = Math.min(1, world.lineStrength * share * fade * Math.abs(u));
+        // (held whole in a tight bend at a low pace, hold: at lineStrength a rider at 4 m/s still leaned 35 degrees
+        // on the handlebar's turn and went onto the inside grass of leg 3's 10 m hairpins)
+        const weight = Math.min(1, (world.lineStrength + (1 - world.lineStrength) * hold) * share * fade * Math.abs(u));
         this.lineWant = sign * want;
         // The handlebar is steered onto the line whole at full input (the rider's share of a lock that turns the bike
         // at under 3 m would still cut every hairpin)
         this.lineWeight = handlebarShare > 0 ? Math.min(1, share * fade * Math.abs(u)) : 0;
         return rate * (1 - weight) + weight * WorldAssist.LINE_GAIN * (lineLean - this.leanAngle);
+    }
+
+    // The tightest the road bends (1/m) from the bike's place to HOLD_LOOK_S of riding ahead of it, 8 m at the least
+    tightAhead(v) {
+        let most = 0;
+        const reach = Math.max(8, v * Vehicle.HOLD_LOOK_S);
+        for (let d = 0; d <= reach; d += 2) most = Math.max(most, Math.abs(this.roadCurvature(d)));
+        return most;
     }
 
     releaseLine(rate) {
@@ -4037,8 +4004,9 @@ class Vehicle {
             this.brakeLight.material.emissive.setHex(0xff0000);
             this.brakeLight.material.emissiveIntensity = 1.0;
         } else {
-            this.brakeLight.material.emissive.setHex(0x000000);
-            this.brakeLight.material.emissiveIntensity = 0.0;
+            // The tail light is on while riding, as on a road bike, and brighter under braking
+            this.brakeLight.material.emissive.setHex(Vehicle.TAIL_LIGHT);
+            this.brakeLight.material.emissiveIntensity = Vehicle.TAIL_LIGHT_INTENSITY;
         }
         this.previousSpeed = this.speed;
         this.updateFooting();
@@ -5217,8 +5185,18 @@ class Vehicle {
         if (world && !this.crashed) this.brushStep(deltaTime);
         const brushed = world && !this.crashed && this.brushWall(zone, projection, halfRoadWidth, deltaTime);
 
-        // Hit a wall: crash with a bounce back toward the road
-        if (zone.kind === 'wall' && !this.crashed && !brushed) {
+        // At walking pace (wallBrush.slowMs) a wall is no crash, wherever the bike met it: it is put back the step it
+        // came and stands against the wall (a wall met where the brush finds no face of its own, the inside of leg 3's
+        // hairpin at s 2 980, crashed a rider at 0.8 m/s)
+        const slow = world && world.wallBrush && this.speed < (world.wallBrush.slowMs || 0);
+        if (zone.kind === 'wall' && !this.crashed && !brushed && slow) {
+            this.position.x -= this.velocity.x * deltaTime;
+            this.position.z -= this.velocity.z * deltaTime;
+            this.speed = 0;
+            this.velocity.x = 0;
+            this.velocity.z = 0;
+        } else if (zone.kind === 'wall' && !this.crashed && !brushed) {
+            // Hit a wall: crash with a bounce back toward the road
             this.crashed = true;
             this.crashWhy = 'wall';
             // The wall's face, out of it toward the road, for how the rider meets it (Vehicle.riderCrash)
@@ -5281,6 +5259,8 @@ class Vehicle {
         const rule = this.worldPhysics && this.worldPhysics.wallBrush;
         if (!rule) return false;
         const sin = Math.sin(this.yawAngle), cos = Math.cos(this.yawAngle);
+        // At walking pace every touch is a brush (WorldPhysics.wallBrush.slowMs)
+        if (this.speed < (rule.slowMs || 0)) return true;
         // The share of the heading that goes into the wall: 0 along it, 1 head-on
         const into = -(sin * nx + cos * nz);
         // The speed into the wall counts over the whole contact: a wall may turn a bike that grazes it, not carry it
@@ -5492,6 +5472,16 @@ class Vehicle {
         if (house) {
             // A building's face is a wall as any other: the tyres alone at a glance brush it (wallTouch)
             if (house !== true && this.brushHouse(house, world.houseHitM || 0)) return;
+            // At walking pace a building is no crash either (wallBrush.slowMs): the bike is put back the step it came
+            // and stands against it
+            if (world.wallBrush && this.speed < (world.wallBrush.slowMs || 0)) {
+                this.position.x -= this.velocity.x * deltaTime;
+                this.position.z -= this.velocity.z * deltaTime;
+                this.speed = 0;
+                this.velocity.x = 0;
+                this.velocity.z = 0;
+                return;
+            }
             // (a stopping place's props name themselves: PlaceMesh)
             this.worldCrash(house.label ? `Rode into a ${house.label}` : 'Rode into a building', null, 'building');
             return;
@@ -5796,12 +5786,19 @@ Vehicle.mirrorParts = (group, rider) => {
 Vehicle.LEFT = typeof Route !== 'undefined' ? Route.LEFT : 1;
 // The share of the steering angle the front end is drawn turned by, and the axle a wheel spins about
 Vehicle.STEER_SHOWN = 0.5;
+// The tail light while riding (the lens's glow; braking turns it to full red): dark, the lens read as no light at all
+// from behind (the critic panel, bike15)
+Vehicle.TAIL_LIGHT = 0xb00000;
+Vehicle.TAIL_LIGHT_INTENSITY = 1.0;
 // The drawn handlebar at speed (Vehicle.shownBar): `counter` s, the bar angle against each rad/s of roll (a full roll
 // rate of 1.15 rad/s shows 8 degrees), at most counterMax; at most intoMax into the turn at a held lean; the roll rate
 // is smoothed over `lag` s; under directSpeed m/s the drawn bar goes over to the steering angle
 // A lowside or a fall at walking pace as it is drawn (Vehicle.drawFall): downS and tipS seconds for the bike to go
 // from its lean to its side; spin rad the sliding bike turns into the bend for each metre slid, at most spinMax;
 // sparkS seconds between the sparks a bike sliding on the carriageway throws, over sparkSpeed m/s (Game)
+// Seconds of riding the line capture's hold looks ahead for a tight bend (Vehicle.tightAhead)
+Vehicle.HOLD_LOOK_S = 1.5;
+
 Vehicle.FALL = Object.freeze({ downS: 0.45, tipS: 0.8, spin: 0.07, spinMax: 1.3, sparkS: 0.08, sparkSpeed: 4 });
 
 // How the rider comes off, by what caused the crash. Whoever raises a crash names the class of its cause

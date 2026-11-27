@@ -337,7 +337,9 @@ describe.each(IDS)('swapping the model of %s', id => {
         vehicle.isJumping = true;
         for (let i = 0; i < 120; i++) vehicle.updateMesh();
         expect(vehicle.rider.position.y).toBeCloseTo(vehicle.riderBasePos.y + vehicle.riderStandHeight, 2);
-        expect(vehicle.brakeLight.material.emissiveIntensity).toBe(0);
+        // Off the brake the tail light still glows, as a road bike's does, dimmer than under braking
+        expect(vehicle.brakeLight.material.emissive.getHex()).toBe(game.Vehicle.TAIL_LIGHT);
+        expect(vehicle.brakeLight.material.emissive.getHex()).not.toBe(0xff0000);
         vehicle.isJumping = false;
 
         // The crash tint Vehicle writes to this.frame reaches the painted bodywork
@@ -599,50 +601,6 @@ describe.each(Object.keys(load().BIKE_MODELS))('the detailed bike %s', id => {
         const has = near.meshes.has('luggage');
         expect(!!vehicle.luggage).toBe(has);
         if (has) expect(vehicle.luggage.visible).toBe(!!game.BIKE_MODELS[id].luggage);
-    });
-});
-
-// The first-person cameras (js/main.js: Helmet Cam's mount at the visor, Onboard's offset) see out of the rider, never
-// the inside of the rider's own head: for every character on each bike they ride, with the meshes the camera is inside
-// hidden (Vehicle.hideAround, as the game does before it draws), the camera is inside no part still drawn and a ray
-// through the middle of the screen meets no part of the rider within 1 m
-describe('the first-person cameras', () => {
-    const game = load();
-    const MOUNTS = { helmet: [0, 1.18, 0.3], onboard: [0, 1.2, 0.5] };
-    beforeAll(() => game.BikeModels.preload([...KIND_IDS, ...Object.keys(game.BIKE_MODELS)]));
-
-    test('see out of the rider, not the inside of the helmet', () => {
-        const { THREE } = game;
-        const bad = [];
-        for (const c of game.CHARACTERS) {
-            for (const bike of [...c.bikes, ...(KINDS[c.id] ? [KINDS[c.id][0]] : [])]) {
-                const vehicle = new game.Vehicle(new THREE.Scene(), null, c, bike);
-                // Riding, as the camera sees the rider: updateMesh poses the rider for speed
-                vehicle.currentDeltaTime = 1 / 60;
-                vehicle.speed = 20;
-                for (let i = 0; i < 60; i++) vehicle.updateMesh();
-                vehicle.group.position.set(0, 0, 0);
-                vehicle.group.rotation.set(0, 0, 0);
-                vehicle.group.updateMatrixWorld(true);
-                for (const [mode, at] of Object.entries(MOUNTS)) {
-                    const eye = new THREE.Vector3(...at);
-                    game.Vehicle.hideAround(vehicle.rider, eye, 0.1);
-                    const drawn = [];
-                    vehicle.rider.traverse(o => { if (o.isMesh && o.layers.isEnabled(0) && (!o.parent.isLOD || o.parent.levels[0].object === o)) drawn.push(o); });
-                    const inside = drawn.filter(o => {
-                        const p = eye.clone().applyMatrix4(o.matrixWorld.clone().invert());
-                        o.geometry.computeBoundingBox();
-                        return o.geometry.boundingBox.containsPoint(p) && game.Vehicle.encloses(o, p, 0);
-                    });
-                    drawn.forEach(o => { o.material.side = THREE.DoubleSide; });
-                    const ray = new THREE.Raycaster(eye, new THREE.Vector3(0, 0, 1), 0, 1);
-                    const hits = ray.intersectObjects(drawn, false);
-                    if (inside.length || hits.length) bad.push({ rider: c.id, bike, mode, inside: inside.map(o => o.name || o.material.name), hits: hits.map(h => `${h.object.name || h.object.material.name}@${h.distance.toFixed(2)}`) });
-                    game.Vehicle.hideAround(vehicle.rider, null);
-                }
-            }
-        }
-        expect(bad).toEqual([]);
     });
 });
 

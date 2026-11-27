@@ -26,6 +26,22 @@ export const JUNCTION_M = 40;
 export const INNER_EDGE_M = R_MIN - RIDE_WIDTH_M / 2;
 const HELD_BEND = 0.95;
 export const END_JOIN_M = 8;
+// A junction's two samples are its mouth only while they lie within JUNCTION_RISE_M of each other's height (the runtime's
+// WorldEnvironment.SIDE_PASS_M: further apart a side road is a road over or under the ride): a side road that runs on
+// beside the ride and falls or climbs away from it is another piece of road there, and the ride narrows for it. Leg 4's
+// j142: a 3 m road ran 6.5 m from the ride's centre for 40 m, 4.5 m under it at the end, inside the ride's 10 m band; it
+// was held at the ride's height, stepped 2.5 m back to its own, and the ride's wall stood on it. At 1 m the Tremola's
+// j15 narrowed too, and the ground between the two opened there. Only where the side road runs beside the ride (their
+// headings within JUNCTION_ALONG_DEG) and past JUNCTION_MOUTH_M from the node (the runtime's SIDE_MEET_REACH_M): a road
+// that leaves the ride at an angle, or drops steeply out of the mouth, keeps the ride's full width in the mouth (in the
+// synthetic world's steep dip, narrowed there, the ride's slope stood as a face 11 m high in the side road's mouth)
+export const JUNCTION_RISE_M = 2;
+export const JUNCTION_MOUTH_M = 12;
+export const JUNCTION_ALONG_DEG = 20;
+// (and while the two lie within JUNCTION_STACK_M of each other's height: a side road further under or over the ride is
+// a road under its works or on its own structure, as the synthetic world's 12 m drop out of a junction, and keeps the
+// rule it had)
+export const JUNCTION_STACK_M = 8;
 const STRUCTURE = FLAG.tunnel | FLAG.bridge | FLAG.gallery;
 const CELL = 16;
 
@@ -66,8 +82,21 @@ export function sampleGrid(edges, ride) {
     }
   });
   const ends = e => [[e.x[0], e.z[0]], [e.x[e.x.length - 1], e.z[e.z.length - 1]]];
-  const junction = (e, i, f, j) => ends(e).some(p => ends(f).some(q => Math.hypot(p[0] - q[0], p[1] - q[1]) <= END_JOIN_M
-    && Math.hypot(e.x[i] - p[0], e.z[i] - p[1]) <= JUNCTION_M && Math.hypot(f.x[j] - p[0], f.z[j] - p[1]) <= JUNCTION_M));
+  // (between the ride and a side road only: two pieces of the ride that meet at a node keep the rule they had)
+  const level = (e, i, f, j, p, d) => {
+    if (e.onRide === f.onRide || !e.y || !f.y) return true;
+    const dy = Math.abs(e.y[i] - f.y[j]);
+    if (dy <= JUNCTION_RISE_M || dy > JUNCTION_STACK_M) return true;
+    const [g, k] = e.onRide ? [f, j] : [e, i];
+    if (Math.hypot(g.x[k] - p[0], g.z[k] - p[1]) <= JUNCTION_MOUTH_M) return true;
+    // (and only where the two bands overlap as drawn: a side road clear of the ride's band asks nothing of it, and
+    // the Tremola's one such sample, 8.1 m off, narrowed by 0.1 m for nothing)
+    if (d >= bandHalf(e.width[i], e.onRide) + bandHalf(f.width[j], f.onRide)) return true;
+    // (beside it either way along: the two headings within JUNCTION_ALONG_DEG, or of opposite sense)
+    return !e.heading || !f.heading || Math.abs(Math.sin(e.heading[i] - f.heading[j])) > Math.sin((JUNCTION_ALONG_DEG * Math.PI) / 180);
+  };
+  const junction = (e, i, f, j, d) => ends(e).some(p => ends(f).some(q => Math.hypot(p[0] - q[0], p[1] - q[1]) <= END_JOIN_M
+    && Math.hypot(e.x[i] - p[0], e.z[i] - p[1]) <= JUNCTION_M && Math.hypot(f.x[j] - p[0], f.z[j] - p[1]) <= JUNCTION_M && level(e, i, f, j, p, d)));
   // The samples of other pieces of road within `reach` of sample i of edge id: [{edge, sample, d}]
   function others(id, i, reach) {
     const e = edges[id];
@@ -84,7 +113,7 @@ export function sampleGrid(edges, ride) {
         if (d > reach) continue;
         const sb = along(jd, j);
         if (sa !== null && sb !== null ? Math.abs(sa - sb) <= SAME_ARC_M : jd === id && Math.abs(j - i) * (n => (n > 1 ? (e.length ?? 0) / (n - 1) : 0))(e.x.length) <= SAME_ARC_M) continue;
-        if (jd !== id && junction(e, i, f, j)) continue;
+        if (jd !== id && junction(e, i, f, j, d)) continue;
         out.push({ edge: jd, sample: j, d });
       }
     }

@@ -152,8 +152,15 @@ const DEBT = {
     'gotthard-north': { steep: 3, unrestarted: 2, onRoad: 5 },
     'airolo-lookout': { steep: 2, unrestarted: 4, onRoad: 2 },
     'lookout-andermatt': { steep: 7, unrestarted: 1, onRoad: 5 },
-    'hospental-summit': { steep: 3, unrestarted: 2, onRoad: 5 },
-    'summit-airolo': { steep: 7, unrestarted: 3, onRoad: 0 }
+    // Legs 3 to 5 (worlds/susten) ride every side road of their folder too: failing since they were built (fd8a262),
+    // held at the counts measured on 2026-11-27
+    'andermatt-goeschenen': { steep: 12, unrestarted: 5, onRoad: 4 },
+    'goeschenen-susten': { steep: 12, unrestarted: 5, onRoad: 4 },
+    'susten-gadmen': { steep: 12, unrestarted: 5, onRoad: 4 },
+    // Legs 6 to 8 (worlds/haslital) ride every side road of their folder, so each reads the folder's count (2026-11-27)
+    'gadmen-innertkirchen': { steep: 13, unrestarted: 12, onRoad: 3 },
+    'innertkirchen-guttannen': { steep: 13, unrestarted: 12, onRoad: 3 },
+    'guttannen-grimsel': { steep: 13, unrestarted: 12, onRoad: 3 }
 };
 
 describe.each(stagesFor())('the %s stage: a side road is open, and the off-route rule brings back a rider who takes one', (stage) => {

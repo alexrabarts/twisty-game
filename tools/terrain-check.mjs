@@ -12,15 +12,16 @@
 // Probes: legs snapshot raycast surface parts frames traj gates look shortcuts runoff fog pages budget frametime scene submit mutate atmostate draws atmo
 // World probes (the streamed world, `?world=<id>`; --world <id> picks it, default tremola; --worldData <path> picks the data folder):
 //   world-near-ground world-cover-off world-toggle-ride world-ground-flip world-ground-scan world-ground-off world-window world-haze world-budget world-ground world-junction world-wrongway world-credit world-net world-finish world-restart world-cut world-camera world-frustum world-camera-smooth world-camera-chicane world-camera-frames world-camera-walls world-hud world-shots world-hairpin-shots world-buildings world-frametime world-ride-shots world-hairpin-assist world-floating world-watertight world-trees world-stones world-quality world-fall-shots world-group-shots world-place-shots
-//   node tools/terrain-check.mjs world-camera-chicane --world gotthard-north [--modes 2,3] [--speed 20] [--from s --to s] [--dump <file>]   (the chase camera's yaw rate, yaw acceleration and sway over the whole stage, its worst places and every chicane)
-//   node tools/terrain-check.mjs camera-swing --legs id,id [--modes 2,3] [--speed 25]   (the same on the classic legs)
-//   node tools/terrain-check.mjs world-camera-walls --world tremola --gpu [--modes 2,3] [--lane M] [--swing K] [--far K] [--apex s,s] [--off] [--shots s,s,s --out <dir>]   (nothing drawn between the chase camera and the bike in any hairpin)
+//   node tools/terrain-check.mjs world-camera-chicane --world gotthard-north [--modes near,far] [--speed 20] [--from s --to s] [--dump <file>]   (the chase camera's yaw rate, yaw acceleration and sway over the whole stage, its worst places and every chicane; ridden alone, the crew dropped)
+//   node tools/terrain-check.mjs camera-swing --legs id,id [--modes near,far] [--speed 25]   (the same on the classic legs)
+//   node tools/terrain-check.mjs world-camera-walls --world tremola --gpu [--modes near,far] [--lane M] [--swing K] [--far K] [--apex s,s] [--off] [--shots s,s,s --out <dir>]   (nothing drawn between the chase camera and the bike in any hairpin)
 //   node tools/terrain-check.mjs world-fall-shots --world tremola --gpu --out <dir> [--at s] [--speeds 6,14,28] [--moments 0.15,0.5,1.2]   (the rider's fall of each kind, beside him)
 //   node tools/terrain-check.mjs world-trees --world tremola --gpu [--views 300,1800] [--out <dir> --tag T]   (tree colour against the photos and the land round it)
 //   node tools/terrain-check.mjs world-floating --world tremola --gpu [--every 500] [--views 3600,7990] [--out <dir> --tag T]   (floating roads and land over the road, drawn)
 //   node tools/terrain-check.mjs world-tunnels --world gotthard-north --gpu [--every 200] [--out <dir> --tag T]   (no land in a tunnel's or gallery's box or across its portals; pictures of every portal)
-//   node tools/terrain-check.mjs world-watertight --world tremola --gpu [--every 50] [--from S --to S] [--modes 1,2,3] [--at s,s]   (no gap in the drawn land, no edge works foot over it)
-//   node tools/terrain-check.mjs world-seams --world gotthard-north --gpu [--every 250] [--modes 1,2] [--turns 0,-60,60] [--at s,s] [--out <dir> --tag T]   (no tile edge drawn as a dark line, no line of a new tone where the tiles meet the far land, out to the horizon)
+//   node tools/terrain-check.mjs world-watertight --world tremola --gpu [--every 50] [--from S --to S] [--modes near,far] [--at s,s]   (no gap in the drawn land, no edge works foot over it)
+//   node tools/terrain-check.mjs world-seams --world gotthard-north --gpu [--every 250] [--modes near] [--turns 0,-60,60] [--at s,s] [--out <dir> --tag T]   (no tile edge drawn as a dark line, no line of a new tone where the tiles meet the far land, out to the horizon)
+//   node tools/terrain-check.mjs world-far-seams --world airolo-lookout --gpu [--every 100] [--modes near,far] [--turns 0,-60,60] [--at s,s [--at-only]] [--out <dir> --tag T]   (no sky seen through the land out to 40 km, no line of a new tone at a far grid's edge)
 //   node tools/terrain-check.mjs world-look --world gotthard-north --gpu --script <file> [--out <dir>]   (a script of the caller's in a world page; its pictures saved)
 //   node tools/terrain-check.mjs world-fairness --world tremola --gpu [--every 100]   (physics solid only where something is drawn, the band the drawn ribbon, every hairpin ridden at 5 and 7 m/s)
 //   node tools/terrain-check.mjs world-frametime --world tremola --gpu [--frames N]   (chase-view frame time at five points: median and worst)
@@ -57,6 +58,7 @@ import { execFileSync, spawnSync } from 'node:child_process';
 import { createReadStream, existsSync, mkdirSync, readdirSync, readFileSync, statSync, writeFileSync } from 'node:fs';
 import { createServer } from 'node:http';
 import { dirname, extname, join, normalize, relative, resolve, sep } from 'node:path';
+import { cpus, loadavg } from 'node:os';
 import { fileURLToPath } from 'node:url';
 import puppeteer from 'puppeteer';
 import { D6_CLASSES, buildEnvironment, captureLeg, loadGame } from '../tests/helpers/load-game.js';
@@ -101,6 +103,13 @@ const option = name => {
     return at >= 0 ? argv[at + 1] : undefined;
 };
 const command = argv[0] && !argv[0].startsWith('--') ? argv[0] : undefined;
+// The chase views a probe rides (the types of Game.cameraModes): --modes, --mode and --camera name them
+const VIEWS = ['near', 'far'];
+const viewsOption = (name, fallback) => {
+    const list = option(name) ? option(name).split(',') : fallback;
+    for (const view of list) if (!VIEWS.includes(view)) throw new Error(`--${name}: no chase view ${view} (${VIEWS.join(', ')})`);
+    return list;
+};
 const probes = command ? command.split(',') : [];
 const legIds = option('legs') ? option('legs').split(',') : LEG_IDS;
 // The run-off probe pins the valley's timings and lateral 14 (mountain-dawn), which is a wall or a drop on other legs
@@ -1631,11 +1640,11 @@ const PROBES = {
     preview: (page, i) => inPage(page, 'preview', i),
     finish: (page, i) => inPage(page, 'finish', i),
     // The chase camera's swing on a classic leg: the leg's autopilot rides it whole (--speed, default 25) in the
-    // standard and the high view (--modes), the shake held at zero. Per view: the peaks of the view's yaw rate, yaw
+    // near and the far chase (--modes), the shake held at zero. Per view: the peaks of the view's yaw rate, yaw
     // acceleration and the bike's sideways rate across the view (tests/helpers/world-chase-ride.js swingOf), the
     // bike's least room in the view, and the three worst places by distance ridden, with the bike's own turn there
     'camera-swing': async (page, i) => {
-        const modes = (option('modes') || '2,3').split(',').map(Number);
+        const modes = viewsOption('modes', VIEWS);
         const out = {};
         for (const mode of modes) {
             const ride = await page.evaluate((legIndex, mode, cruise) => {
@@ -1644,7 +1653,7 @@ const PROBES = {
                 twistyDev.freeze();
                 game.rockfalls = null;
                 game.traffic = null;
-                game.cameraMode = mode;
+                game.setCameraView(mode);
                 twistyDev.autopilot({ speed: cruise });
                 const update = game.updateCamera.bind(game);
                 game.updateCamera = (...args) => {
@@ -2308,6 +2317,21 @@ const WORLD_RESIDENT_TILES = 60;
 const WORLD_MESH_MARGIN = 0.15;
 const WORLD_BIKE_TILE_M = 900;
 
+// In a world the pilot rides alone: it holds its cruise and its bend speeds and never brakes for a vehicle ahead, so it
+// rode into the crew where the crew took a hairpin slower than it (leg 6, s 6 224), and a probe of the camera or the
+// road failed on a crash of the group's. Installed after tools/autopilot.js, which a page that loads it again replaces.
+// A probe about the group (CREW_PROBES) keeps its crew
+async function rideAlone(page) {
+    await page.evaluate(() => {
+        const autopilot = twistyDev.autopilot.bind(twistyDev);
+        twistyDev.autopilot = (options = {}) => {
+            const g = window.game, traffic = g && g.traffic;
+            if (!window.probeCrew && (options.speed || 0) > 0 && g.environment && g.environment.isWorld && traffic && traffic.dropCrew && !traffic.noCrew) traffic.dropCrew();
+            return autopilot(options);
+        };
+    });
+}
+
 async function openWorld(browser, port, id, seed = 1, data = option('worldData')) {
     for (let attempt = 0; attempt < 3; attempt++) {
         // (--query adds to the address: free roam is `--query 'mode=roam&debug'`)
@@ -2321,6 +2345,7 @@ async function openWorld(browser, port, id, seed = 1, data = option('worldData')
         }
         await page.evaluate(() => { window.game.adaptResolution = () => {}; });
         await page.addScriptTag({ path: join(root, 'tools/autopilot.js') });
+        await rideAlone(page);
         await pageLook(page);
         return page;
     }
@@ -2410,6 +2435,47 @@ function countScene() {
     });
     const byKind = Object.fromEntries(Object.entries(kinds).sort((a, b) => b[1] - a[1]).slice(0, 24).map(([k, v]) => [k, Math.round(v)]));
     return { meshes, triangles: Math.round(triangles), instances, coverTriangles: Math.round(coverTriangles), trianglesByKind: byKind };
+}
+
+// In the page: the frame as it stands drawn again and again, whole and with each part of the scene left out (each
+// child of the scene and of the world's group, the houses, trees and boulders, the shadows), each timed to the GPU's
+// finish (a pixel read back) as the median of five draws. Returns [{part, ms, saved}] dearest first
+function profileFrame() {
+    const renderer = game.graphics.renderer, gl = renderer.getContext(), px = new Uint8Array(4);
+    const draw = () => {
+        const times = [];
+        for (let k = 0; k < 5; k++) {
+            const a = performance.now();
+            game.graphics.render(game.scene, game.camera);
+            gl.readPixels(0, 0, 1, 1, gl.RGBA, gl.UNSIGNED_BYTE, px);
+            times.push(performance.now() - a);
+        }
+        return times.sort((p, q) => p - q)[2];
+    };
+    draw();
+    const whole = draw();
+    const env = game.environment, sc = env.scenery;
+    const parts = [];
+    const named = (o, prefix) => `${prefix}${o.name || o.type}`;
+    for (const o of game.scene.children) if (o !== env.group && o.visible) parts.push([named(o, 'scene/'), [o]]);
+    for (const o of env.group.children) if (o.visible) parts.push([named(o, 'world/'), [o]]);
+    for (const o of env.sceneryGroup.children) if (o.visible) parts.push([named(o, 'scenery/'), [o]]);
+    if (sc.houseGroup) for (const o of sc.houseGroup.children) parts.push([named(o, 'house/'), [o]]);
+    const out = [];
+    for (const [part, list] of parts) {
+        list.forEach(o => { o.visible = false; });
+        const ms = draw();
+        list.forEach(o => { o.visible = true; });
+        out.push({ part, ms: Math.round(ms * 10) / 10, saved: Math.round((whole - ms) * 10) / 10 });
+    }
+    const sm = renderer.shadowMap.enabled;
+    renderer.shadowMap.enabled = false;
+    const noShadow = draw();
+    renderer.shadowMap.enabled = sm;
+    renderer.shadowMap.needsUpdate = true;
+    out.push({ part: 'shadows', ms: Math.round(noShadow * 10) / 10, saved: Math.round((whole - noShadow) * 10) / 10 });
+    const info = renderer.info.render;
+    return { whole: Math.round(whole * 10) / 10, calls: info.calls, triangles: info.triangles, camera: { x: game.camera.position.x, y: game.camera.position.y, z: game.camera.position.z }, parts: out.sort((p, q) => q.saved - p.saved).slice(0, 20) };
 }
 
 // Put the bike on the ride at s, build the ground round it and wait for the queue to drain
@@ -2519,6 +2585,9 @@ const FLOAT_SEAM_SHARE = 0.1;
 // (the LOD each tile and each road section is drawn at from there). Returns per-LOD counts and the worst cases.
 async function floatingWalk(placeSource, every, tol, upM, sideFloatM = 3) {
     const SIDE_FLOAT_M = sideFloatM;
+    // The edges' rays (as tests/unit/world-far-edges.test.js reads them): how far along the edge from the row, and the
+    // highest under the edge (in the page: the function is passed as source)
+    const FLOAT_AT_M = 0.5, FLOAT_PIXEL_M = 0.3;
     const placeAt = new Function('game', `return (${placeSource})`)(game);
     const env = game.environment;
     const route = env.route;
@@ -2647,45 +2716,15 @@ async function floatingWalk(placeSource, every, tol, upM, sideFloatM = 3) {
                     }
                 }
                 if (structureNear(k, 7)) continue;
-                // Down: the drawn land meets each drawn edge, or a skirt closes the gap
+                // (the physics beside the road is read at the ride's own rows; the edges are read below, at the rows each
+                // section draws)
                 const offsets = RoadMesh.hold(held.lod === 0 ? [-h - VERGE, h + VERGE] : [-h, h], curve).offsets;
                 for (const [side, edge] of [[-1, offsets[0]], [1, offsets[1]]]) {
                     const out = place(p, edge + side * 0.05);
                     const land = drawnLand(out.x, out.z);
-                    if (!land) { missing++; continue; }
-                    checked++;
-                    const gap = roadY - land.y;
-                    let open = false;
-                    if (gap > tol) {
-                        // Another road drawn under the edge (a junction, a road below) is ground too
-                        raycaster.set(new THREE.Vector3(out.x, roadY + 0.3, out.z), down);
-                        raycaster.far = gap + 0.3;
-                        const under = raycaster.intersectObjects(roads, false).find(hit => hit.point.y < roadY - 0.01);
-                        const top = under ? Math.max(land.y, under.point.y) : land.y;
-                        if (roadY - top > tol) {
-                            // The edge works under the edge (an apron at the batter, a wall, a deck side): a ray from under
-                            // the road, out across the edge, at three heights of the gap, must meet them
-                            const from = place(p, edge - side * 0.5);
-                            const dir = new THREE.Vector3(Math.cos(p.heading) * side, 0, -Math.sin(p.heading) * side);
-                            raycaster.far = 0.6 + 1.6 * (roadY - top);
-                            open = [0.2, 0.5, 0.8].some(f => {
-                                raycaster.set(new THREE.Vector3(from.x, roadY - (roadY - top) * f, from.z), dir);
-                                return !raycaster.intersectObjects(skirts, false).length;
-                            });
-                        }
-                    }
-                    const key = `${k}:${side}:${held.lod}:${land.lod}`;
-                    const was = edges.get(key);
-                    // What the edge works were built on there (WorldEnvironment.edgeFoot), for an open edge
-                    let foot;
-                    if (open && env.edgeFoot) {
-                        const at = place(p, edge);
-                        const f = env.edgeFoot()(at.x, roadY, at.z, Math.cos(p.heading) * side, -Math.sin(p.heading) * side);
-                        foot = f ? { kind: f.kind, y: f.y !== undefined ? r2(f.y - roadY) : null } : null;
-                    }
-                    if (!was || was.gapM < gap) edges.set(key, { s: Math.round(p.s), side: side > 0 ? 'right' : 'left', roadLod: held.lod, landLod: land.lod, gapM: r2(gap), open, foot });
+                    if (!land) continue;
                     // Physics: the ground the bike reads beside the road against the drawn land, where the land is drawn at LOD0
-                    if (land.lod === 0 && Math.abs(k - bikeK) < 120 && !open) {
+                    if (land.lod === 0 && Math.abs(k - bikeK) < 120) {
                         for (const o of [h + 0.3, h + VERGE]) {
                             const q = place(p, side * o);
                             const near = drawnLand(q.x, q.z);
@@ -2702,6 +2741,69 @@ async function floatingWalk(placeSource, every, tol, upM, sideFloatM = 3) {
                             physics.push({ s: Math.round(p.s), side: side > 0 ? 'right' : 'left', offset: r2(o), deltaM: r2(ground - drawn) });
                         }
                     }
+                }
+            }
+        }
+        // Down: the drawn land meets each drawn edge, or the edge works close the gap. Read at the rows and edges each
+        // section draws (its ribbon's sides, RoadMesh.sectionSteps `userData.sides`: a far ribbon keeps more rows than
+        // RoadMesh.decimate of all the rows, round a wall's end, a mouth and a structure), as tests/unit/world-far-edges
+        // reads them: rays from under the road out across the edge, FLOAT_AT_M along toward each row beside it (on the
+        // row's own line a ray ran along the edge two slopes share, or into the sliver of a few centimetres left between
+        // two feet at a bend), no higher than FLOAT_PIXEL_M under the edge (a 6 cm lip under the ribbon's edge is no gap
+        // anyone sees), and not toward a row past the section's drawn rows where no section is held beside it (the
+        // window's end, where the road ends)
+        for (const [index, held] of env.streamer.roads) {
+            const group = env.roadMeshes.get(index), sides = group && group.userData.sides;
+            if (!sides) continue;
+            const [from, to] = sides.draw || [0, sides.length - 1];
+            for (let k = from; k <= to; k++) {
+                const row = sides[k];
+                if (!Number.isFinite(row.s) || row.s < span[0] || row.s > span[1]) continue;
+                // (a structure's row and the rows beside it: a deck has no works under its edge)
+                if ([k - 1, k, k + 1].some(j => sides[j] && (sides[j].bits & 7))) continue;
+                const outs = RoadMesh.outward(row);
+                for (const key of ['l', 'r']) {
+                    const e = row[key], o = outs[key], side = key === 'l' ? -1 : 1;
+                    const roadY = e[1];
+                    const out = { x: e[0] + o[0] * 0.05, z: e[2] + o[1] * 0.05 };
+                    const land = drawnLand(out.x, out.z);
+                    if (!land) { missing++; continue; }
+                    checked++;
+                    const gap = roadY - land.y;
+                    let open = false;
+                    if (gap > tol) {
+                        // Another road drawn under the edge (a junction, a road below) is ground too
+                        raycaster.set(new THREE.Vector3(out.x, roadY + 0.3, out.z), down);
+                        raycaster.far = gap + 0.3;
+                        const under = raycaster.intersectObjects(roads, false).find(hit => hit.point.y < roadY - 0.01);
+                        const top = under ? Math.max(land.y, under.point.y) : land.y;
+                        if (roadY - top > tol) {
+                            const ways = [];
+                            for (const [j, nb] of [[k - 1, index - 1], [k + 1, index + 1]]) {
+                                if ((j < from || j > to) && !env.streamer.roads.has(nb)) continue;
+                                const q = sides[j] && sides[j][key];
+                                if (!q) continue;
+                                const len = Math.hypot(q[0] - e[0], q[2] - e[2]);
+                                if (len > 1e-6) ways.push([(q[0] - e[0]) / len * Math.min(FLOAT_AT_M, len / 2), (q[2] - e[2]) / len * Math.min(FLOAT_AT_M, len / 2)]);
+                            }
+                            const dir = new THREE.Vector3(o[0], 0, o[1]);
+                            raycaster.far = 0.6 + 1.6 * (roadY - top);
+                            open = [0.2, 0.5, 0.8].some(f => ways.some(w => {
+                                const depth = Math.min(roadY - top, Math.max(FLOAT_PIXEL_M, (roadY - top) * f));
+                                raycaster.set(new THREE.Vector3(e[0] - o[0] * 0.5 + w[0], roadY - depth, e[2] - o[1] * 0.5 + w[1]), dir);
+                                return !raycaster.intersectObjects(skirts, false).length;
+                            }));
+                        }
+                    }
+                    const id = `${Math.round(row.s * 10)}:${side}:${held.lod}:${land.lod}`;
+                    const was = edges.get(id);
+                    // What the edge works were built on there (WorldEnvironment.edgeFoot), for an open edge
+                    let foot;
+                    if (open && env.edgeFoot) {
+                        const f = env.edgeFoot(null, { far: held.lod > 0 })(e[0], roadY, e[2], o[0], o[1]);
+                        foot = f ? { kind: f.kind, y: f.y !== undefined ? r2(f.y - roadY) : null } : null;
+                    }
+                    if (!was || was.gapM < gap) edges.set(id, { s: Math.round(row.s), side: side > 0 ? 'right' : 'left', roadLod: held.lod, landLod: land.lod, gapM: r2(gap), open, foot });
                 }
             }
         }
@@ -2759,7 +2861,7 @@ async function floatingWalk(placeSource, every, tol, upM, sideFloatM = 3) {
 async function floatingView(placeSource, pilotSource, s) {
     const placeAt = new Function('game', `return (${placeSource})`)(game);
     const v = game.vehicle;
-    game.cameraMode = 2;
+    game.setCameraView('near');
     // Put down at s, and the chase camera eased in behind the stopped bike (as world-hairpin-shots' start view)
     await placeAt(s);
     // The walk may have ridden past the finish: its banner is not part of the view
@@ -3030,7 +3132,7 @@ async function hazeView(placeSource, s, turnDeg, eyeM, bands, skyOver) {
     if (!window.hazeTrack) window.hazeTrack = game.atmosphereTrack;
     const dry = WorldLooks.variants.dry.tremola[0].look;
     game.atmosphereTrack = AtmosphereTrack.forWorld(env.route.stages, env.route, Object.fromEntries(env.route.stages.map(stage => [stage.id, [{ from: 0, to: 1, look: dry }]])));
-    game.cameraMode = 2;
+    game.setCameraView('near');
     await placeAt(s);
     game.atmosphereWritten = null;
     game.snapAtmosphere(game.atmosphereTrack, game.atmosphereUnit(s), { environment: env, weatherSystem: game.weatherSystem });
@@ -3136,7 +3238,7 @@ async function treeColourView(placeSource, s, turnDeg, eyeM, rain) {
     if (!window.treeTrack) window.treeTrack = game.atmosphereTrack;
     const rainPart = WorldLooks.tremola.find(part => part.look.weather === 'rain');
     game.atmosphereTrack = rain ? AtmosphereTrack.forWorld(env0.route.stages, env0.route, Object.fromEntries(env0.route.stages.map(stage => [stage.id, [{ from: 0, to: 1, look: rainPart.look }]]))) : window.treeTrack;
-    game.cameraMode = 2;
+    game.setCameraView('near');
     await placeAt(s);
     game.atmosphereWritten = null;
     game.snapAtmosphere(game.atmosphereTrack, game.atmosphereUnit(s), { environment: env0, weatherSystem: game.weatherSystem });
@@ -3248,7 +3350,7 @@ async function treeColourView(placeSource, s, turnDeg, eyeM, rain) {
     };
 }
 
-// world-watertight: the drawn land is closed. From the helmet, the chase and the high camera at stations along the
+// world-watertight: the drawn land is closed. From the near and the far chase camera at stations along the
 // slice, the land, the road and its edge works are drawn alone (each kind in its own colour, back faces marked) and
 // each pixel is read:
 //   holes      a pixel that shows nothing (the horizon and the far land are not drawn) although its ray passes under
@@ -3263,7 +3365,7 @@ async function treeColourView(placeSource, s, turnDeg, eyeM, rain) {
 // corner or centre of one may stand over the ride's carriageway (`footOverRoad`: fill off an upper hairpin leg
 // reaching out over the lower one).
 const WATERTIGHT_EVERY_M = 50;
-const WATERTIGHT_MODES = [1, 2, 3];
+const WATERTIGHT_MODES = ['near', 'far'];
 // Places the play-test found open: 400 to 500 the cut bank on the right (a crack along a tile edge), 2100 and 8700 a
 // fill slope off an upper hairpin leg ending in the air, 4600 a slab of land over a hollow, 6900 a folded cut face
 const WATERTIGHT_VIEWS = [400, 450, 500, 2100, 4600, 6900, 8700];
@@ -3499,7 +3601,7 @@ async function watertightWalk(placeSource, every, from, to, modes, tol, shotsAt)
             }
         });
         for (const mode of modes) {
-            game.cameraMode = mode;
+            game.setCameraView(mode);
             game.worldCamera.reset(v.yawAngle);
             v.speed = 0;
             twistyDev.autopilot({ speed: 0 });
@@ -3595,7 +3697,7 @@ async function watertightWalk(placeSource, every, from, to, modes, tol, shotsAt)
 
 const WORLD = {
     // The drawn land is closed: holes, land undersides and skirts in view, and edge works whose outline stands over
-    // the land, from the helmet, chase and high cameras every --every metres (50) between --from and --to
+    // the land, from the near and the far chase every --every metres (50) between --from and --to
     // The drawn trees' colour against the photos' ranges and the land round them (treeColourView), at TREE_VIEWS
     // (--views s,s,...); --out <dir> saves each view as drawn
     'world-trees': async (page) => {
@@ -3633,7 +3735,7 @@ const WORLD = {
         }
         return { views };
     },
-    'world-watertight': async (page) => page.evaluate(watertightWalk, placeAt.toString(), Number(option('every') || WATERTIGHT_EVERY_M), Number(option('from') || 0), Number(option('to') || Infinity), option('modes') ? option('modes').split(',').map(Number) : WATERTIGHT_MODES, WATERTIGHT_TOL_M, option('at') ? option('at').split(',').map(Number) : WATERTIGHT_VIEWS),
+    'world-watertight': async (page) => page.evaluate(watertightWalk, placeAt.toString(), Number(option('every') || WATERTIGHT_EVERY_M), Number(option('from') || 0), Number(option('to') || Infinity), viewsOption('modes', WATERTIGHT_MODES), WATERTIGHT_TOL_M, option('at') ? option('at').split(',').map(Number) : WATERTIGHT_VIEWS),
     // Floating roads and land over the road, as drawn: floatingWalk over the whole slice (every --every metres, 500 by
     // default), then the named views (FLOATING_VIEWS, or --views), each saved to --out when given
     'world-floating': async (page) => {
@@ -3712,7 +3814,7 @@ const WORLD = {
         for (const f of [0.1, 0.3, 0.5, 0.7, 0.9]) {
             const s = Math.round(f * route.length);
             await placeAt(s);
-            game.cameraMode = 2;
+            game.setCameraView('near');
             game.worldCamera.reset(game.vehicle.yawAngle);
             twistyDev.autopilot({ speed: 0 });
             for (let i = 0; i < 240; i++) twistyDev.step(1);
@@ -3740,7 +3842,7 @@ const WORLD = {
             const at = await page.evaluate(async (placeSource, pilotSource, s) => {
                 const placeAt = new Function('game', `return (${placeSource})`)(game);
                 const v = game.vehicle;
-                game.cameraMode = 2;
+                game.setCameraView('near');
                 await placeAt(Math.max(10, s - 140));
                 game.worldCamera.reset(v.yawAngle);
                 new Function('game', 'cruise', `return (${pilotSource})(game, cruise)`)(game, 18);
@@ -3783,15 +3885,15 @@ const WORLD = {
         const tag = option('tag') || 'fx';
         const specs = (option('specs') || 'off;high').split(';');
         const stations = option('at') ? option('at').split(',').map(Number) : [150];
-        // --camera N: the view mode (Game.cameraModes; 1 the helmet, 2 the chase view, the default)
-        const camera = Number(option('camera') || 2);
+        // --camera near|far: the chase view (Game.cameraModes by type; near, the default)
+        const camera = viewsOption('camera', ['near'])[0];
         await page.addStyleTag({ content: 'body * { visibility: hidden !important; } body > canvas { visibility: visible !important; }' });
         const files = [];
         for (const s of stations) {
             const at = await page.evaluate(async (placeSource, pilotSource, s, camera) => {
                 const placeAt = new Function('game', `return (${placeSource})`)(game);
                 const v = game.vehicle;
-                game.cameraMode = camera;
+                game.setCameraView(camera);
                 await placeAt(Math.max(10, s - 140));
                 game.worldCamera.reset(v.yawAngle);
                 new Function('game', 'cruise', `return (${pilotSource})(game, cruise)`)(game, 18);
@@ -4168,17 +4270,23 @@ const WORLD = {
         const route = env.route;
         twistyDev.freeze();
         new Function('game', 'cruise', `return (${pilotSource})(game, cruise)`)(game, 20);
-        const ride = (until, limit = 60 * 600) => {
-            for (let tick = 0; tick < limit && !until() && !v.crashed; tick++) twistyDev.step(1);
+        // (yielding now and then, so the streamer's reads come in: a ride that never yields holds the bike where the
+        // land has no data yet, Game.landHeld, for good; on leg 6 it stood in the lane past station 2)
+        const yieldEvery = async tick => { if (tick % 120 === 119) await new Promise(resolve => setTimeout(resolve, 0)); };
+        const ride = async (until, limit = 60 * 600) => {
+            for (let tick = 0; tick < limit && !until() && !v.crashed; tick++) { twistyDev.step(1); await yieldEvery(tick); }
         };
-        ride(() => game.checkpointsPassed >= 2);
-        const station = env.stationGates[2];
-        ride(() => v.routeS >= station.s + 300);
-        const before = { passed: game.checkpointsPassed, elapsed: game.raceElapsed(), s: v.routeS, penaltyMs: game.penaltyMs };
+        // (station 2, or the last before one more that is not the finish: leg 3 has one station between its start and
+        // its finish, and station 2 there was the finish)
+        const k = Math.max(0, Math.min(2, env.stationGates.length - 3));
+        await ride(() => game.checkpointsPassed >= k);
+        const station = env.stationGates[k];
+        await ride(() => v.routeS >= station.s + 300);
+        const before = { passed: game.checkpointsPassed, elapsed: game.raceElapsed(), s: v.routeS, penaltyMs: game.penaltyMs, crashed: v.crashed, cause: v.crashed ? v.crashCause || v.crashWhy || null : null, lateral: Math.round(v.projection.lateral * 100) / 100, speed: Math.round(v.speed * 10) / 10 };
         game.restartFromCheckpoint('key');
         const after = { s: v.projection.s, speed: v.speed, restarts: game.restarts, penaltyMs: game.penaltyMs, elapsedJump: game.raceElapsed() - before.elapsed, passed: game.checkpointsPassed, lastS: game.worldRun.lastS };
         // A crash 150 m on: no dialog, the cause in a call-out, and the game puts the bike back by itself
-        ride(() => v.routeS >= before.s + 150);
+        await ride(() => v.routeS >= before.s + 150);
         const crashAt = { s: v.projection.s, elapsed: game.raceElapsed(), restarts: game.restarts, ticks: twistyDev.ticks };
         v.crashed = true;
         v.crashCause = 'Hit the probe';
@@ -4186,10 +4294,10 @@ const WORLD = {
         const callout = [...document.querySelectorAll('.hud-top *')].map(el => el.textContent).find(text => /Hit the probe/.test(text)) || null;
         const dialogs = () => ['crashNotification', 'worldConfirm', 'world-pause'].filter(id => document.getElementById(id));
         const during = { dialogs: dialogs(), restarts: game.restarts - crashAt.restarts, crashed: v.crashed };
-        for (let tick = 0; tick < 60 * 5 && game.restarts === crashAt.restarts; tick++) twistyDev.step(1);
+        for (let tick = 0; tick < 60 * 5 && game.restarts === crashAt.restarts; tick++) { twistyDev.step(1); await yieldEvery(tick); }
         const crash = { callout, during, dialogs: dialogs(), seconds: (twistyDev.ticks - crashAt.ticks) / 60, mostS: Game.WORLD_CRASH.mostS, backM: crashAt.s - v.projection.s, speed: v.speed, crashed: v.crashed,
             restarts: game.restarts - crashAt.restarts, penaltyMs: game.penaltyMs - after.penaltyMs, lateral: v.projection.lateral, half: v.projection.width / 2 };
-        ride(() => game.checkpointsPassed >= 3);
+        await ride(() => game.checkpointsPassed >= k + 1);
         const next = { passed: game.checkpointsPassed, restarts: game.restarts, crashed: v.crashed };
         // The restart-the-ride box holds the race: real animate() frames run no physics and stop the clock, Escape
         // answers CANCEL and the ride goes on, Enter answers YES. twistyDev.step unpauses each frame, so call animate itself.
@@ -4213,18 +4321,21 @@ const WORLD = {
         key('Enter');
         confirm.entered = { open: !!document.getElementById('worldConfirm'), paused: game.paused, proceeded };
         // One excursion: 60 m off the road for longer than the guide waits
+        // (off every road: 60 m to the side lay on another road in the Schoellenen on leg 3, where the bike is not off
+        // the ride's way, so no guide restarted it; the nearest of 60, 90 and 120 m to either side clear of every road)
         const p = route.sample(v.routeS + 40, {});
-        const at = { x: p.x + 60 * Math.cos(p.heading), z: p.z - 60 * Math.sin(p.heading) };
+        const offRoads = q => Math.abs(route.project(q.x, q.z, null, {}).lateral) > 40 && !(env.ground.sideRoadY && env.ground.sideRoadY(q.x, q.z) !== null);
+        const at = [60, -60, 90, -90, 120, -120].map(d => ({ x: p.x + d * Math.cos(p.heading), z: p.z - d * Math.sin(p.heading) })).find(offRoads) || { x: p.x + 60 * Math.cos(p.heading), z: p.z - 60 * Math.sin(p.heading) };
         const restarts = game.restarts;
         const base = v.update.bind(v);
         v.update = (...args) => {
             base(...args);
             if (game.restarts === restarts) { v.position.x = at.x; v.position.z = at.z; v.speed = 0; v.crashed = false; v.offRoadTime = 0; }
         };
-        for (let tick = 0; tick < 60 * 16 && game.restarts === restarts; tick++) twistyDev.step(1);
+        for (let tick = 0; tick < 60 * 16 && game.restarts === restarts; tick++) { twistyDev.step(1); await yieldEvery(tick); }
         v.update = base;
-        for (let tick = 0; tick < 60 * 12; tick++) twistyDev.step(1);
-        return { station: 2, stationS: station.s, backM: env.physics.restartBackM, before, after, crash, next, confirm, excursion: { restarts: game.restarts - restarts, penaltyMs: game.penaltyMs, guideCause: env.guide.cause, pendingCutMs: game.worldRun.pendingCutMs } };
+        for (let tick = 0; tick < 60 * 12; tick++) { twistyDev.step(1); await yieldEvery(tick); }
+        return { station: k, stationS: station.s, backM: env.physics.restartBackM, before, after, crash, next, confirm, excursion: { restarts: game.restarts - restarts, penaltyMs: game.penaltyMs, guideCause: env.guide.cause, pendingCutMs: game.worldRun.pendingCutMs } };
     }, pilotWorld.toString()),
     // The HUD of a world ride (.agent/system/ui.md), in stage 2 of the mini world (--worldData tests/fixtures/world/mini,
     // --world all), at 1024x640, 1440x900 and 390x844 as a touch device. The checkpoints are shown once: a tick on the
@@ -4359,7 +4470,13 @@ const WORLD = {
             for (let d = -36; d <= 40; d += 4) total += route.headingChange(s + d - 4, s + d);
             return Math.abs(total) * 180 / Math.PI;
         };
-        const starts = [2900, 3900, 4400, 5000, 7400, 8000];
+        // (60 m before each of the stage's first six hairpin frames' bends, as the frames read them: the starts were the
+        // Tremola's, and on another leg none came to a hairpin)
+        const starts = [];
+        for (let s = (env.startS ?? 0) + 100; s < (env.endS ?? route.length) - 200 && starts.length < 6; s += 4) {
+            if (turnAround(s) > 115 && (!starts.length || s - 60 - starts[starts.length - 1] > 200)) starts.push(Math.round(s - 60));
+        }
+        if (!starts.length) return { none: 'no hairpin on the stage' };
         const runs = [];
         const aim = new THREE.Vector3();
         for (const start of starts) {
@@ -4404,7 +4521,7 @@ const WORLD = {
         const route = env.route;
         const cam = game.camera;
         twistyDev.freeze();
-        game.cameraMode = 2;
+        game.setCameraView('near');
         const start = Math.max(20, hairpins[0] - 400);
         await placeAt(start);
         game.worldCamera.reset(v.yawAngle);
@@ -4452,7 +4569,7 @@ const WORLD = {
             const route = game.environment.route;
             const cam = game.camera;
             twistyDev.freeze();
-            game.cameraMode = 2;
+            game.setCameraView('near');
             const start = Math.max(20, hairpins[0] - (onlyApex ? 160 : 400));
             await placeAt(start);
             game.worldCamera.reset(v.yawAngle);
@@ -4518,7 +4635,7 @@ const WORLD = {
         return { hairpins: hairpins.length, frames: rows.length, hairpinFrames: near.filter(Boolean).length, crashed: result.crashed, reached: result.reached, end: result.end, stats };
     },
     // The chase camera's swing over the whole stage: the world pilot rides from the start to the end (--speed, default
-    // 20; --from and --to narrow it) in the standard and the high view (--modes), the shake held at zero. Per view: the
+    // 20; --from and --to narrow it) in the near and the far chase (--modes), the shake held at zero. Per view: the
     // peaks of the view's yaw rate (rad/s), its yaw acceleration (rad/s^2, over 0.1 s) and the bike's sideways rate
     // across the view (half views a second), the bike's least room in the view, the ten worst places by yaw acceleration
     // with the road's shape there, the same peaks over every chicane (tests/helpers/world-chase-ride.js chicanesOf,
@@ -4526,7 +4643,7 @@ const WORLD = {
     // under the roof and to the walls (tubeRoom) and the camera's largest second difference of height a frame within
     // 100 m of one. --dump <file> writes every frame.
     'world-camera-chicane': async (page) => {
-        const modes = (option('modes') || '2,3').split(',').map(Number);
+        const modes = viewsOption('modes', VIEWS);
         const out = { modes: {} };
         const dumps = {};
         for (const mode of modes) {
@@ -4539,7 +4656,9 @@ const WORLD = {
                 const route = env.route;
                 const cam = game.camera;
                 twistyDev.freeze();
-                game.cameraMode = mode;
+                // (ridden alone, as every world probe's pilot not about the group: openPage. A crash it left stood
+                // into the next view's ride)
+                game.setCameraView(mode);
                 const start = from || Math.max(20, (env.startS ?? 0) + 20);
                 const end = to || Math.min(route.length - 30, (env.endS ?? route.length) - 30);
                 await placeAt(start);
@@ -4576,7 +4695,10 @@ const WORLD = {
                 } finally {
                     game.updateCamera = update;
                 }
-                return { start: Math.round(start), end: Math.round(end), reached: Math.round(v.routeS), crashed: v.crashed, rows };
+                return { start: Math.round(start), end: Math.round(end), reached: Math.round(v.routeS), crashed: v.crashed, cause: v.crashed ? v.crashCause || v.crashWhy || null : null, crew: game.traffic ? game.traffic.motorcycles.length : null,
+                    // (what stood near the bike as it crashed: a car's or a rock's place along the ride and across it)
+                    near: v.crashed ? [...(game.traffic ? game.traffic.cars : []).map(c => ({ kind: 'car', g: c.carGroup })), ...(game.rockfalls && game.rockfalls.rocks ? game.rockfalls.rocks.map(r => ({ kind: 'rock', g: r.mesh })) : [])].filter(o => o.g && Math.hypot(o.g.position.x - v.position.x, o.g.position.z - v.position.z) < 25).map(o => { const p = route.project(o.g.position.x, o.g.position.z, null, {}); return { kind: o.kind, s: Math.round(p.s), lateral: Math.round(p.lateral * 10) / 10 }; }) : null,
+                    lateral: Math.round(route.project(v.position.x, v.position.z, null, {}).lateral * 100) / 100, rows };
             }, placeAt.toString(), pilotWorld.toString(), tubeRoom.toString(), mode, Number(option('speed') || 20), Number(option('from') || 0), Number(option('to') || 0));
             // (from 60 m in: the pilot sets off from a stand at the start and the camera settles)
             const rows = swingOf(ride.rows.map(r => ({ s: r[0], yaw: r[1], screen: r[2], room: r[3], speed: r[4], under: r[5] ?? Infinity, ey: r[6], up: r[7], back: r[8] }))).filter(r => r.s >= ride.start + 60);
@@ -4604,7 +4726,7 @@ const WORLD = {
             const round = n => Math.round(n * 100) / 100;
             const peaks = peaksOf(rows);
             out.modes[mode] = {
-                start: ride.start, end: ride.end, reached: ride.reached, crashed: ride.crashed, frames: rows.length,
+                start: ride.start, end: ride.end, reached: ride.reached, crashed: ride.crashed, cause: ride.cause, crew: ride.crew, near: ride.near, lateral: ride.lateral, frames: rows.length,
                 rate: round(peaks.rate), accel: round(peaks.accel), sway: round(peaks.sway), room: round(peaks.room),
                 tube: { under: under === Infinity ? null : round(under), underAt, bounce: Math.round(bounce * 10000) / 10000, bounceAt },
                 boom: { up: centile('up', 0.5), up90: centile('up', 0.9), back: centile('back', 0.5), back90: centile('back', 0.9) },
@@ -4621,8 +4743,8 @@ const WORLD = {
     },
     // A GPU frame sequence through one hairpin: the world pilot rides in from 140 m before the apex nearest --apex
     // (default the first; --at <s> rides to that place of the ride instead), then `--count` pictures (default 8), one
-    // every `--every` frames (default 4), from --from metres before the apex (default 20), in view --mode (default 2,
-    // the standard). The shake is held at zero. Needs --out <dir>; --tag names the files.
+    // every `--every` frames (default 4), from --from metres before the apex (default 20), in the chase view --mode
+    // (near, the default, or far). The shake is held at zero. Needs --out <dir>; --tag names the files.
     'world-camera-frames': async (page) => {
         const out = option('out');
         if (!out) return { error: 'name a folder with --out <dir>' };
@@ -4634,7 +4756,7 @@ const WORLD = {
             const hairpins = new Function(`return (${hairpinSource})`)()(game.environment.route).filter(s => !game.environment.stage || (s >= game.environment.startS && s <= game.environment.endS));
             const apex = at || (onlyApex ? hairpins.reduce((a, b) => (Math.abs(b - onlyApex) < Math.abs(a - onlyApex) ? b : a)) : hairpins[0]);
             const v = game.vehicle;
-            game.cameraMode = mode;
+            game.setCameraView(mode);
             await placeAt(apex - 140);
             game.worldCamera.reset(v.yawAngle);
             new Function('game', 'cruise', `return (${pilotSource})(game, cruise)`)(game, 20);
@@ -4648,7 +4770,7 @@ const WORLD = {
             while (v.routeS < apex - from && !v.crashed && ticks < 3600) { twistyDev.step(1); ticks++; }
             game.environment.streamer.pump(Infinity);
             return Math.round(apex);
-        }, placeAt.toString(), pilotWorld.toString(), worldHairpins.toString(), Number(option('apex') || 0), from, Number(option('at') || 0), Number(option('mode') || 2));
+        }, placeAt.toString(), pilotWorld.toString(), worldHairpins.toString(), Number(option('apex') || 0), from, Number(option('at') || 0), viewsOption('mode', ['near'])[0]);
         const files = [];
         for (let k = 0; k < count; k++) {
             const at = await page.evaluate((every) => {
@@ -4679,6 +4801,8 @@ const WORLD = {
         const v = game.vehicle;
         const input = game.input;
         const tight = 1 / 30;
+        // The widest hairpin (its tightest radius, m) the riders on full lock ride
+        const lockRadius = 20;
         const k = s => route.curvatureAt(s, 4);
         twistyDev.freeze();
         game.worldLinger = false;
@@ -4687,7 +4811,9 @@ const WORLD = {
             while (from > apex - 120 && Math.abs(k(from - 2)) > tight) from -= 2;
             while (to < apex + 120 && Math.abs(k(to + 2)) > tight) to += 2;
             const advice = WorldAssist.advice(route, physics, from, 4);
-            return { apex: Math.round(apex), from, to, advised: advice ? advice.speed : 8 };
+            let radius = Infinity;
+            for (let s = from; s <= to; s += 2) radius = Math.min(radius, 1 / Math.max(1e-6, Math.abs(k(s))));
+            return { apex: Math.round(apex), from, to, advised: advice ? advice.speed : 8, radius };
         }).filter((bend, i, all) => !traceApex || Math.abs(bend.apex - traceApex) === Math.min(...all.map(b => Math.abs(b.apex - traceApex))));
         let rider = { target: 8, from: 0, to: 0 };
         // The approach and the road after the hairpin are the pilot's, so a bend before it cannot spoil the test
@@ -4722,6 +4848,10 @@ const WORLD = {
         for (const [name, level, slow, aim] of runs) {
             const rows = [];
             for (const bend of bends) {
+                // (the riders on full lock only on a hairpin as tight as full lock: through a wider one, 21 m round at
+                // leg 6's s 3 648, full lock turns the bike on an 8 m circle onto the grass inside, as no rider rides it;
+                // the aiming riders ride every hairpin)
+                if (!aim && bend.radius > lockRadius) continue;
                 v.reset();
                 v.assistLevel = level;
                 await placeAt(bend.from - 40);
@@ -4748,8 +4878,8 @@ const WORLD = {
                     if (tick % 240 === 0) await new Promise(resolve => setTimeout(resolve, 0));
                 }
                 row.crashed = v.crashed;
-                // Where and how it went down: metres from the bend's start, the lean, the speed, the bike's colour
-                if (v.crashed) row.at = { ds: Math.round((v.projection.s - bend.from) * 10) / 10, lean: Math.round(v.leanAngle * 573) / 10, speed: Math.round(v.speed * 10) / 10, lateral: Math.round(v.projection.lateral * 100) / 100, cause: v.frame.material.color.getHexString(), radius: Math.round((bend.to - bend.from)), advised: Math.round(bend.advised * 10) / 10 };
+                // Where and how it went down: metres from the bend's start, the lean, the speed, the crash's cause
+                if (v.crashed) row.at = { ds: Math.round((v.projection.s - bend.from) * 10) / 10, lean: Math.round(v.leanAngle * 573) / 10, speed: Math.round(v.speed * 10) / 10, lateral: Math.round(v.projection.lateral * 100) / 100, cause: v.crashCause || v.crashWhy || null, radius: Math.round((bend.to - bend.from)), advised: Math.round(bend.advised * 10) / 10 };
                 row.wide = Math.round(row.wide * 100) / 100;
                 row.cut = Math.round(row.cut * 100) / 100;
                 row.step = Math.round(row.step * 1000) / 1000;
@@ -4812,7 +4942,7 @@ const WORLD = {
             const rooms = await page.evaluate(async (placeSource, pilotSource, apex) => {
                 const placeAt = new Function('game', `return (${placeSource})`)(game);
                 const v = game.vehicle;
-                game.cameraMode = 2;
+                game.setCameraView('near');
                 await placeAt(apex - 140);
                 game.worldCamera.reset(v.yawAngle);
                 new Function('game', 'cruise', `return (${pilotSource})(game, cruise)`)(game, 20);
@@ -4839,7 +4969,7 @@ const WORLD = {
         // The start, with the village round it
         const startView = await page.evaluate(async (placeSource) => {
             const placeAt = new Function('game', `return (${placeSource})`)(game);
-            game.cameraMode = 2;
+            game.setCameraView('near');
             await placeAt(10);
             game.worldCamera.reset(game.vehicle.yawAngle);
             game.vehicle.speed = 0;
@@ -4925,13 +5055,16 @@ const WORLD = {
         const physics = env.physics;
         const pts = route.points;
         let pair = null;
-        for (let i = 100; i < pts.length - 200 && !pair; i++) {
-            for (let j = i + 36; j < Math.min(pts.length - 1, i + 80); j++) {
+        // (within the stage: a world folder holds several legs, and past the stage's end the ride is not this leg's)
+        const first = Math.max(100, route.indexAt((env.startS ?? 0) + 100)), last = Math.min(pts.length - 200, route.indexAt((env.endS ?? route.length) - 200));
+        for (let i = first; i < last && !pair; i++) {
+            for (let j = i + 36; j < Math.min(last + 150, pts.length - 1, i + 80); j++) {
                 const gap = Math.hypot(pts[i].x - pts[j].x, pts[i].z - pts[j].z);
                 if (gap >= 14 && gap <= 28) { pair = { i, j, gap, ds: route.sArray[j] - route.sArray[i] }; break; }
             }
         }
-        if (!pair) return { error: 'no stacked pair of legs on the ride' };
+        // (a leg with no stacked legs has no cut to make: nothing to check there)
+        if (!pair) return { none: 'no stacked pair of legs on the stage' };
         twistyDev.freeze();
         new Function('game', 'cruise', `return (${pilotSource})(game, cruise)`)(game, 12);
         const lower = route.sArray[pair.i];
@@ -4994,7 +5127,7 @@ const WORLD = {
         const shoot = async (name, s, mode) => {
             await page.evaluate(async (placeSource, at, cameraMode) => {
                 const placeAt = new Function('game', `return (${placeSource})`)(game);
-                game.cameraMode = cameraMode;
+                game.setCameraView(cameraMode);
                 await placeAt(at);
                 game.worldCamera.reset(game.vehicle.yawAngle);
                 game.vehicle.speed = 9;
@@ -5008,9 +5141,9 @@ const WORLD = {
             await page.screenshot({ path: file });
             files.push(file);
         };
-        for (let k = 0; k < sites.hairpins.length; k++) await shoot(`hairpin-${k + 1}`, sites.hairpins[k], 2);
-        await shoot('hairpin-high-view', sites.hairpins[0], 3);
-        if (sites.junction) await shoot('junction', sites.junction.s, 2);
+        for (let k = 0; k < sites.hairpins.length; k++) await shoot(`hairpin-${k + 1}`, sites.hairpins[k], 'near');
+        await shoot('hairpin-far-chase', sites.hairpins[0], 'far');
+        if (sites.junction) await shoot('junction', sites.junction.s, 'near');
         const hud = await page.evaluate(() => ({
             guide: !!document.getElementById('world-guide'),
             guideBox: (() => { const b = document.getElementById('world-guide').getBoundingClientRect(); return { x: Math.round(b.x), y: Math.round(b.y), w: Math.round(b.width), h: Math.round(b.height) }; })(),
@@ -5194,14 +5327,14 @@ WORLD_PROBES.push('world-near-ground');
 WORLD['world-near-ground'] = async (page) => {
     const specs = (option('specs') || 'default;off').split(';');
     const stations = option('at') ? option('at').split(',').map(Number) : [1600];
-    const camera = Number(option('camera') || 2);
+    const camera = viewsOption('camera', ['near'])[0];
     await page.addStyleTag({ content: 'body * { visibility: hidden !important; } body > canvas { visibility: visible !important; }' });
     const rows = [];
     for (const s of stations) {
         const at = await page.evaluate(async (placeSource, pilotSource, s, camera) => {
             const placeAt = new Function('game', `return (${placeSource})`)(game);
             const v = game.vehicle;
-            game.cameraMode = camera;
+            game.setCameraView(camera);
             await placeAt(Math.max(10, s - 140));
             game.worldCamera.reset(v.yawAngle);
             new Function('game', 'cruise', `return (${pilotSource})(game, cruise)`)(game, 18);
@@ -5322,7 +5455,7 @@ WORLD['world-cover-off'] = async (page) => {
         await page.evaluate(async (placeSource, pilotSource, s) => {
             const placeAt = new Function('game', `return (${placeSource})`)(game);
             const v = game.vehicle;
-            game.cameraMode = 2;
+            game.setCameraView('near');
             await placeAt(Math.max(10, s - 140));
             game.worldCamera.reset(v.yawAngle);
             new Function('game', 'cruise', `return (${pilotSource})(game, cruise)`)(game, 18);
@@ -5372,7 +5505,7 @@ WORLD['world-cover-off'] = async (page) => {
     return { rows, failures };
 };
 
-// world-toggle-ride: rides from the start to --to (default 7600) in the view --camera (default 3, the high view), and
+// world-toggle-ride: rides from the start to --to (default 7600) in the chase view --camera (default far), and
 // every --every frames (default 240; 0 never) switches --toggle (default landDetail) on or off the way the settings
 // dialog does (EffectSettings.set, then Game.applyGraphicsSettings), the ladder held at its top so Auto caps nothing.
 // Every --check frames (default 20) it draws the frame and checks that every land tile within 300 m of the bike is in
@@ -5392,7 +5525,7 @@ WORLD['world-toggle-ride'] = async (page) => {
     const placeAt = new Function('game', `return (${placeSource})`)(game);
     const env = game.environment, v = game.vehicle, r = game.renderer;
     game.quality.fix(Quality.LEVELS.length - 1);
-    game.cameraMode = camera;
+    game.setCameraView(camera);
     await placeAt(10);
     game.worldCamera.reset(v.yawAngle);
     twistyDev.autopilot({ speed: 22 });
@@ -5521,7 +5654,7 @@ WORLD['world-toggle-ride'] = async (page) => {
         }
     } else game.graphics.render(game.scene, game.camera);
     return { s: Math.round(v.routeS), ...seen, inForce: game.effectLevels ? game.effectLevels[id] : null, drop: dropAfter ? drop : undefined, failures };
-    }, placeAt.toString(), Number(option('to') || 7600), Number(option('every') ?? 240), Number(option('check') || 20), option('toggle') || 'landDetail', Number(option('camera') || 3), flag('levels'), Number(option('skip') || 0), Number(option('drop-after') || 0), Number(option('restore-ms') || 0));
+    }, placeAt.toString(), Number(option('to') || 7600), Number(option('every') ?? 240), Number(option('check') || 20), option('toggle') || 'landDetail', viewsOption('camera', ['far'])[0], flag('levels'), Number(option('skip') || 0), Number(option('drop-after') || 0), Number(option('restore-ms') || 0));
     // --out <dir>: the last frame
     if (option('out')) {
         mkdirSync(option('out'), { recursive: true });
@@ -5603,7 +5736,7 @@ WORLD['world-marmots'] = async (page) => {
         const placeAt = new Function('game', `return (${placeSource})`)(game);
         const env = game.environment, marmots = env.marmots, v = game.vehicle;
         await placeAt(from);
-        game.cameraMode = 2;
+        game.setCameraView('near');
         game.worldCamera.reset(v.yawAngle);
         twistyDev.autopilot({ speed: cruise });
         const rows = [], shots = [];
@@ -5915,7 +6048,7 @@ WORLD['world-fairness'] = async (page) => page.evaluate(async (fairSource, place
 // from the north, and the lookout leg, whose one hairpin is past its finish line at the stop) is not failed for having
 // none. The Tremola has 31; the probes ask for 20 of them, as before.
 // (the tour's legs, js/world/tour.js: the Tremola down has the Tremola's hairpins, the modern road up its few)
-const HAIRPINS_LEAST = { tremola: 20, all: 20, 'gotthard-north': 0, 'summit-airolo': 20, 'lookout-andermatt': 0, 'hospental-summit': 0, 'airolo-lookout': 0 };
+const HAIRPINS_LEAST = { tremola: 20, all: 20, 'gotthard-north': 0, 'lookout-andermatt': 0, 'airolo-lookout': 0 };
 const hairpinsLeast = () => HAIRPINS_LEAST[option('world') || 'tremola'] ?? 1;
 
 function fairnessChecks(results, failures) {
@@ -5975,7 +6108,7 @@ WORLD['world-road-look'] = async (page) => {
         const places = [['finish', env.route.length - 8, null], ['start', env.startS, null], ['side-198', null, [198, 30]]];
         const out = [];
         for (const [name, s, onSide] of places) {
-            game.cameraMode = 2;
+            game.setCameraView('near');
             if (onSide) {
                 await env.data.ensureChunks(env.data.manifest.chunks.map((_, k) => k));
                 const sm = env.graph.samples(onSide[0]);
@@ -6102,7 +6235,7 @@ WORLD['world-ground-shots'] = async (page) => {
                 v.leanAngle = 0;
                 v.speed = 0;
                 v.findNearestRoadSegment();
-                game.cameraMode = 2;
+                game.setCameraView('near');
                 game.worldCamera.reset(v.yawAngle);
                 // No input: the rider stops and puts a foot down (Vehicle.updateWorldSpeed, updateFooting)
                 twistyDev.autopilot({ speed: 0, on: false });
@@ -6157,7 +6290,7 @@ WORLD['world-vertex'] = async (page) => {
         }
         const finite = (...n) => n.every(Number.isFinite);
         const out = [];
-        game.cameraMode = 2;
+        game.setCameraView('near');
         for (const s of at) {
             await placeAt(s);
             game.worldCamera.reset(v.yawAngle);
@@ -6283,7 +6416,7 @@ async function wallEye(placeSource, eye) {
     const [s, lat, up, toS, toLat, toUp] = Array.isArray(eye) ? eye : [eye.s];
     const placeAt = new Function('game', `return (${placeSource})`)(game);
     const v = game.vehicle, route = game.environment.route;
-    game.cameraMode = 2;
+    game.setCameraView('near');
     await placeAt(s);
     document.querySelectorAll('#finishBanner').forEach(el => el.remove());
     game.worldCamera.reset(v.yawAngle);
@@ -6443,8 +6576,8 @@ WORLD['world-tunnels'] = async (page) => {
 };
 
 // world-tube-shots: pictures inside the ride's tunnels and galleries, the frame alone, as a rider sees them: for each
-// run the chase view riding up to its first portal (`entry`, 30 m out), in the middle of the run from the chase view
-// (`chase`) and the helmet (`helmet`), and riding out of it (`exit`, 25 m before its last portal), with each --at
+// run the near chase riding up to its first portal (`entry`, 30 m out), in the middle of the run (`chase`), and riding
+// out of it (`exit`, 25 m before its last portal), with each --at
 // station shot from the chase view too. The bike is ridden in at 18 m/s from 140 m back, so the eye has adapted as a
 // rider's would (Graphics.adaptation). --level N holds that graphics level (js/quality.js) for every picture. The files
 // are <tag>-<run s>-<view>.png and <tag>-s<s>-chase.png in --out, with <tag>-index.json (each view and the window's
@@ -6466,19 +6599,18 @@ WORLD['world-tube-shots'] = async (page) => {
     // (--at-only: the --at stations alone)
     for (const run of flag('at-only') ? [] : runs) {
         const mid = run.s0 + Math.min((run.s1 - run.s0) / 2, 200);
-        views.push({ run, s: Math.max(10, run.s0 - 30), mode: 2, name: `${Math.round(run.s0)}-entry` });
-        views.push({ run, s: mid, mode: 2, name: `${Math.round(run.s0)}-chase` });
-        views.push({ run, s: mid, mode: 1, name: `${Math.round(run.s0)}-helmet` });
-        views.push({ run, s: Math.max(run.s0 + 5, run.s1 - 25), mode: 2, name: `${Math.round(run.s0)}-exit` });
+        views.push({ run, s: Math.max(10, run.s0 - 30), mode: 'near', name: `${Math.round(run.s0)}-entry` });
+        views.push({ run, s: mid, mode: 'near', name: `${Math.round(run.s0)}-chase` });
+        views.push({ run, s: Math.max(run.s0 + 5, run.s1 - 25), mode: 'near', name: `${Math.round(run.s0)}-exit` });
     }
-    for (const s of (option('at') ? option('at').split(',').map(Number) : [])) views.push({ run: null, s, mode: 2, name: `s${s}-chase` });
+    for (const s of (option('at') ? option('at').split(',').map(Number) : [])) views.push({ run: null, s, mode: 'near', name: `s${s}-chase` });
     const index = [];
     for (const view of views) {
         const at = await page.evaluate(async (placeSource, pilotSource, countSource, view, level) => {
             const placeAt = new Function('game', `return (${placeSource})`)(game);
             const v = game.vehicle;
             if (level !== null && game.quality) game.quality.fix(level);
-            game.cameraMode = view.mode;
+            game.setCameraView(view.mode);
             await placeAt(Math.max(10, view.s - 140));
             game.worldCamera.reset(v.yawAngle);
             new Function('game', 'cruise', `return (${pilotSource})(game, cruise)`)(game, 18);
@@ -6665,7 +6797,7 @@ function stoneChecks(results, failures) {
 }
 
 // world-camera-walls: nothing drawn stands between the chase camera and the bike. The world pilot rides every
-// hairpin (from CAMWALL_BEFORE_M before its apex to CAMWALL_AFTER_M past it) in the standard and the high view, and on
+// hairpin (from CAMWALL_BEFORE_M before its apex to CAMWALL_AFTER_M past it) in the near and the far chase, and on
 // every frame a ray is cast from the camera to the bike and back (a face seen from behind counts too) at the meshes
 // drawn: the road works (retaining walls, parapets, decks, aprons), the land's tiles, the houses and the roads'
 // ribbons. It fails when one is met before the bike. It also casts along the four corners of the view's near plane
@@ -6686,7 +6818,7 @@ async function camWallRide(placeSource, pilotSource, apex, mode, setup, beforeM,
     const placeAt = new Function('game', `return (${placeSource})`)(game);
     const env = game.environment, v = game.vehicle, cam = game.camera;
     twistyDev.freeze();
-    game.cameraMode = mode;
+    game.setCameraView(mode);
     const linger = game.worldLinger;
     game.worldLinger = false;
     // (a crash in the ride before is not carried into this one: placeAt leaves `crashed` as it was)
@@ -6782,7 +6914,7 @@ async function camWallRide(placeSource, pilotSource, apex, mode, setup, beforeM,
 }
 WORLD_PROBES.push('world-camera-walls');
 WORLD['world-camera-walls'] = async (page) => {
-    const modes = (option('modes') || '2,3').split(',').map(Number);
+    const modes = viewsOption('modes', VIEWS);
     const setup = { lane: Number(option('lane') || 0), swing: Number(option('swing') || 1), far: Number(option('far') || 1), off: flag('off') };
     let apexes = await page.evaluate(hairpinSource => new Function(`return (${hairpinSource})`)()(game.environment.route).filter(s => !game.environment.stage || (s >= game.environment.startS && s <= game.environment.endS)), worldHairpins.toString());
     const nearest = s => apexes.reduce((a, b) => (Math.abs(b - s) < Math.abs(a - s) ? b : a));
@@ -6832,7 +6964,7 @@ const FALL_SHOTS = {
 async function fallShot(placeSource, at, kind, cls, lean, fall, speed, moments) {
     const placeAt = new Function('game', `return (${placeSource})`)(game);
     const v = game.vehicle;
-    game.cameraMode = 2;
+    game.setCameraView('near');
     game.worldLinger = false;
     if (v.crashed) v.reset();
     // Each fall is a crash of its own: the last one's clock (Game.updateWorldCrash) would restart this one early
@@ -6955,7 +7087,7 @@ async function groupScene(placeSource, kind) {
     };
     const byPlace = () => traffic.motorcycles.slice().sort((a, b) => a.character.place - b.character.place);
     const settle = () => { if (group) { group.halted = group.standing = false; group.stoppedS = 0; } };
-    game.cameraMode = 2;
+    game.setCameraView('near');
     let note = null;
     if (kind === 'start') {
         twistyDev.autopilot({ speed: 0 });
@@ -7073,9 +7205,8 @@ async function roamRun(placeSource) {
     const barriers = [];
     game.scene.traverse(o => { if (/barrier/i.test(o.name || '')) barriers.push(o.name); });
     out.barriers = barriers;
-    // The chase view (Standard): a page starts in the view the rider last chose, Onboard on a fresh one, where the
-    // bike is the bars at the foot of the frame
-    game.cameraMode = Number(window.roamCameraMode ?? 2);
+    // The near chase: a page starts in the view the rider last chose, the far chase on a fresh one
+    game.setCameraView('near');
     for (let i = 0; i < 60; i++) twistyDev.step(1, { render: true });
     out.shots.start = frame();
     // The group on the ride (GROUP.roam): 45 s at 9 m/s on the autopilot. The player leads: no rider ahead of it, and
@@ -7569,7 +7700,7 @@ async function placeScene(placeSource, id) {
     const input = window.placeInput || (window.placeInput = { throttle: game.input.getThrottleInput, brake: game.input.getBrakeInput });
     game.input.getThrottleInput = input.throttle;
     game.input.getBrakeInput = input.brake;
-    game.cameraMode = 2;
+    game.setCameraView('near');
     const byPlace = traffic.motorcycles.slice().sort((a, b) => a.character.place - b.character.place);
     await placeAt(Math.max(10, place.s - 260));
     game.worldCamera.reset(v.yawAngle);
@@ -7628,7 +7759,7 @@ async function junctionEye(placeSource, eye) {
     const [s, lat, up, toS, toLat, toUp] = Array.isArray(eye) ? eye : [eye.s];
     const placeAt = new Function('game', `return (${placeSource})`)(game);
     const v = game.vehicle, route = game.environment.route;
-    game.cameraMode = 2;
+    game.setCameraView('near');
     await placeAt(s);
     game.worldCamera.reset(v.yawAngle);
     twistyDev.autopilot({ speed: 0 });
@@ -7665,7 +7796,7 @@ WORLD_PROBES.push('world-ground-scan');
 WORLD['world-ground-scan'] = async (page) => {
     const specs = (option('specs') || 'default;off').split(';');
     const stations = option('at') ? option('at').split(',').map(Number) : [1600];
-    const camera = Number(option('camera') || 2);
+    const camera = viewsOption('camera', ['near'])[0];
     await page.addStyleTag({ content: 'body * { visibility: hidden !important; } body > canvas { visibility: visible !important; }' });
     const rows = [];
     const straight = flag('straight') ? await page.evaluate(() => {
@@ -7686,7 +7817,7 @@ WORLD['world-ground-scan'] = async (page) => {
         const at = await page.evaluate(async (placeSource, pilotSource, s, camera) => {
             const placeAt = new Function('game', `return (${placeSource})`)(game);
             const v = game.vehicle;
-            game.cameraMode = camera;
+            game.setCameraView(camera);
             await placeAt(Math.max(10, s - 140));
             game.worldCamera.reset(v.yawAngle);
             new Function('game', 'cruise', `return (${pilotSource})(game, cruise)`)(game, 18);
@@ -7805,7 +7936,7 @@ WORLD['world-ground-off'] = async (page) => {
         await page.evaluate(async (placeSource, pilotSource, s) => {
             const placeAt = new Function('game', `return (${placeSource})`)(game);
             const v = game.vehicle;
-            game.cameraMode = 2;
+            game.setCameraView('near');
             await placeAt(Math.max(10, s - 140));
             game.worldCamera.reset(v.yawAngle);
             new Function('game', 'cruise', `return (${pilotSource})(game, cruise)`)(game, 18);
@@ -7863,7 +7994,7 @@ WORLD['world-ground-off'] = async (page) => {
 };
 
 // world-ground-flip: the land is drawn whole while the graphics change under it. The bike rides --metres (default 2200)
-// from --from (default 300) in the view of --camera (default 3, the high view) while, every --every frames (default
+// from --from (default 300) in the chase view --camera (default far) while, every --every frames (default
 // 15), the ground texture is set as the settings dialog sets it (each level in turn) or the ladder is fixed at another
 // level and released as Auto does (Rich, Full, High, Ultra: the shadows, the occlusion and the ground texture all
 // change). Each frame is an update and a draw, and then every land tile (TerrainMesh's material) is read:
@@ -7876,11 +8007,11 @@ WORLD['world-ground-off'] = async (page) => {
 WORLD_PROBES.push('world-ground-flip');
 WORLD['world-ground-flip'] = async (page) => {
     const from = Number(option('from') || 300), metres = Number(option('metres') || 2200);
-    const camera = Number(option('camera') || 3), every = Number(option('every') || 15), reach = Number(option('reach') || 300);
+    const camera = viewsOption('camera', ['far'])[0], every = Number(option('every') || 15), reach = Number(option('reach') || 300);
     const result = await page.evaluate(async (placeSource, from, metres, camera, every, reach) => {
         const placeAt = new Function('game', `return (${placeSource})`)(game);
         const v = game.vehicle, r = game.renderer, gl = r.getContext(), pixel = new Uint8Array(4);
-        game.cameraMode = camera;
+        game.setCameraView(camera);
         await placeAt(from);
         game.worldCamera.reset(v.yawAngle);
         twistyDev.autopilot({ speed: 22 });
@@ -8076,7 +8207,7 @@ async function treeViews(placeSource, countSource, feetSource, s) {
     const count = new Function(`return (${countSource})`)();
     const feetOf = new Function(`return (${feetSource})`)();
     const env = game.environment, route = env.route, v = game.vehicle;
-    game.cameraMode = 2;
+    game.setCameraView('near');
     // (twice: a tile's scenery waits for the side roads round it, which the first put-down only asks for)
     await placeAt(s);
     await placeAt(s);
@@ -8137,7 +8268,7 @@ WORLD['world-quality'] = async (page) => {
         const placeAt = new Function('game', `return (${placeSource})`)(game);
         const s = Number.isFinite(atS) ? atS : Math.round(share * game.environment.route.length);
         await placeAt(s);
-        game.cameraMode = 2;
+        game.setCameraView('near');
         game.worldCamera.reset(game.vehicle.yawAngle);
         twistyDev.autopilot({ speed: 0 });
         for (let i = 0; i < 240; i++) twistyDev.step(1);
@@ -8517,7 +8648,7 @@ async function modelStation(placeSource, countSource, groupRules, s, only) {
 async function modelPictures(placeSource, b, playM, group) {
     const placeAt = new Function('game', `return (${placeSource})`)(game);
     const env = game.environment, route = env.route, v = game.vehicle;
-    game.cameraMode = 2;
+    game.setCameraView('near');
     // (the bike beside the copy, so its level of detail is the one a rider passing it sees)
     await placeAt(b.near.s);
     await placeAt(b.near.s);
@@ -8551,6 +8682,10 @@ async function modelPictures(placeSource, b, playM, group) {
     return pngs;
 }
 
+// The world probes about the group, and world-quality, which times the frame as a ride draws it: the pilot rides with
+// the crew there (every other world probe's pilot rides alone, rideAlone)
+const CREW_PROBES = new Set(['world-finish', 'world-shot', 'world-group-shots', 'world-place-shots', 'world-stop-shots', 'world-roam', 'world-crew-start', 'world-quality']);
+
 async function worldMain() {
     const executablePath = chromePath();
     const gpu = flag('gpu');
@@ -8570,6 +8705,7 @@ async function worldMain() {
                 for (const seed of finishSeeds()) {
                     state.requests = [];
                     const page = await openWorld(browser, port, id, seed);
+                    await page.evaluate(crew => { window.probeCrew = crew; }, CREW_PROBES.has(name));
                     rides.push({ seed, ...(await WORLD[name](page, port)) });
                     await page.close();
                     state.requests = null;
@@ -8583,6 +8719,7 @@ async function worldMain() {
             const page = name.startsWith('hill-') ? await openHill(browser, port) : name === 'world-hud' && !option('worldData')
                 ? await openWorld(browser, port, 'all', 1, WORLD_HUD_DATA)
                 : await openWorld(browser, port, id);
+            await page.evaluate(crew => { window.probeCrew = crew; }, CREW_PROBES.has(name));
             report.results[name] = await WORLD[name](page, port);
             if (name === 'world-net') report.results[name].offHost = state.requests.filter(url => !isAllowedRequest(url, port));
             await page.close();
@@ -8731,12 +8868,22 @@ WORLD['world-stop-shots'] = async (page) => {
 // does (the streamer's own budget a frame), and each step is timed with its parts (the rows, the wall plans, the land's
 // cut, the land, the scenery). A step is what one frame's pump ran of one task: a whole build, or a slice of a build in
 // steps (WorldStreamer). Every build is taken in steps of about 12 ms at the most; it fails on any step over
-// STEPS_MOST_MS.
+// STEPS_MOST_MS. A step is timed by the wall clock, so a busy host times every kind of step long, with the time outside
+// every part timed (the laptop at a load of 9 on 10 CPUs: steps of 68, 31, 26 and 18 ms where the Mac mini, on the
+// same commit, took 12 at the most): the host's load per CPU is read before and after the ride, and over
+// STEPS_LOAD_MOST the run fails as not measured, not as slow steps. Run it on a quiet host (heavy -c browser)
 //   node tools/terrain-check.mjs world-steps --world tremola --gpu [--every 1] [--parts deep]
 const STEPS_M = 1;
 const STEPS_MOST_MS = 16;
+const STEPS_LOAD_MOST = 0.8;
+const hostLoad = () => Math.round(loadavg()[0] / cpus().length * 100) / 100;
 WORLD_PROBES.push('world-steps');
-WORLD['world-steps'] = async (page) => page.evaluate(async (every, deep) => {
+WORLD['world-steps'] = async (page) => {
+    const before = hostLoad();
+    const ride = await stepsRide(page);
+    return { ...ride, hostLoad: Math.max(before, hostLoad()) };
+};
+const stepsRide = async (page) => page.evaluate(async (every, deep) => {
     const env = game.environment, route = env.route;
     const now = () => performance.now();
     const parts = {};
@@ -8866,7 +9013,7 @@ WORLD['world-shot'] = async (page) => {
         game.worldLinger = false;
         await placeAt(env.endS - SHOT_APPROACH_M);
         // (in the chase view, as a ride is: the scene starts from the chase camera's pose)
-        game.cameraMode = 2;
+        game.setCameraView('near');
         game.worldCamera.reset(game.vehicle.yawAngle);
         twistyDev.autopilot({ speed: ride });
         // Ridden to just short of the line with the chase camera (each step updates it), then over the line
@@ -8904,7 +9051,7 @@ WORLD['world-shot'] = async (page) => {
             const enqueue = st.enqueue = streamer.enqueue.bind(streamer);
             streamer.enqueue = (id, priority, run) => enqueue(id, priority, () => { const a = performance.now(); const out = run(); tasks.push({ id, ms: performance.now() - a }); return out; });
         }
-        const renderer = game.graphics.renderer;
+        const renderer = game.graphics.renderer, gl = renderer.getContext(), pixel = new Uint8Array(4);
         let next = st.next;
         // The shadow casters near the player (the sun's box follows it): the ones that came in this frame
         let near = st.near;
@@ -8929,6 +9076,7 @@ WORLD['world-shot'] = async (page) => {
             tasks.length = 0;
             const before = near;
             const programs = renderer.info.programs ? renderer.info.programs.length : 0;
+            const memory0 = { ...renderer.info.memory };
             const states = () => scene.riders.map(r => `${r.stood ? 'S' : ''}${(r.player ? r.bike.group : r.bike.bikeGroup || {}).visible ? 'V' : ''}`).join(',') + ` puffs ${scene.puffs.length} drawRaised ${!!scene.drawRaised}`;
             const was = states();
             const t0 = performance.now();
@@ -8940,6 +9088,10 @@ WORLD['world-shot'] = async (page) => {
             game.updatePerformanceCulling();
             const t3 = performance.now();
             game.graphics.render(game.scene, game.camera);
+            // (each frame waits for the GPU to finish it, so its time is its own: unpaced, the loop queued frames faster
+            // than the GPU drew them, and the queue's stall fell on whichever frame filled it: 45 to 59 ms at
+            // susten-gadmen 13.5 s, where each frame drew in 15 to 18 ms; profileFrame)
+            gl.readPixels(0, 0, 1, 1, gl.RGBA, gl.UNSIGNED_BYTE, pixel);
             const t4 = performance.now();
             frames.push(t4 - t0);
             // (a program compiled in the draw: which objects draw with it)
@@ -8956,7 +9108,7 @@ WORLD['world-shot'] = async (page) => {
             const nowNear = frameMs < Infinity ? casters() : new Map();
             const came = [...nowNear.keys()].filter(k => !before.has(k)).map(k => nowNear.get(k));
             near = new Set(nowNear.keys());
-            if (t4 - t0 > frameMs) slow.push({ scene: was === is ? is : `${was} -> ${is}`, came: [...new Set(came)].slice(0, 8), compiled: compiled.map(pr => `${pr.name} ${String(pr.cacheKey || "").slice(0, 400)}`), users, keyDiff: compiled.map((pr) => {
+            if (t4 - t0 > frameMs) slow.push({ scene: was === is ? is : `${was} -> ${is}`, came: [...new Set(came)].slice(0, 8), compiled: compiled.map(pr => `${pr.name} ${String(pr.cacheKey || "").slice(0, 400)}`), users, keys: compiled.map(pr => [String(pr.cacheKey), ...[...known].filter(o => String(o.cacheKey || '').split(',')[0] === String(pr.cacheKey).split(',')[0]).map(o => String(o.cacheKey))]), keyDiff: compiled.map((pr) => {
                 // (what sets the new program apart from the nearest one made before: the fields of its key that differ)
                 const mine = String(pr.cacheKey || '').split(',');
                 let best = null, bestN = Infinity;
@@ -8967,7 +9119,7 @@ WORLD['world-shot'] = async (page) => {
                     if (n < bestN) { bestN = n; best = theirs; }
                 }
                 return best ? mine.map((v, i) => v !== best[i] ? `${i}:${best[i]}->${v}` : null).filter(Boolean).join(' ') : 'none alike';
-            }), t: Math.round(scene.t * 100) / 100, ms: Math.round(t4 - t0), stepMs: Math.round(t1 - t0), updateMs: Math.round(t2 - t1), cullMs: Math.round(t3 - t2), renderMs: Math.round(t4 - t3), newPrograms: (renderer.info.programs ? renderer.info.programs.length : 0) - programs, tasks: [...tasks].sort((a, b) => b.ms - a.ms).slice(0, 4).map(k => `${k.id} ${Math.round(k.ms)}`) });
+            }), t: Math.round(scene.t * 100) / 100, ms: Math.round(t4 - t0), stepMs: Math.round(t1 - t0), updateMs: Math.round(t2 - t1), cullMs: Math.round(t3 - t2), renderMs: Math.round(t4 - t3), newPrograms: (renderer.info.programs ? renderer.info.programs.length : 0) - programs, newGeometries: renderer.info.memory.geometries - memory0.geometries, newTextures: renderer.info.memory.textures - memory0.textures, drawCalls: renderer.info.render.calls, drawTriangles: renderer.info.render.triangles, tasks: [...tasks].sort((a, b) => b.ms - a.ms).slice(0, 4).map(k => `${k.id} ${Math.round(k.ms)}`) });
             poses.push(pose());
             // (once the camera has passed the bike, the bike is out of the picture: StopScene.OVERTAKE; to the end at a
             // stop held on a view of its own, a photo's (HOLDS), and until the hold is flown to at one that looks back at
@@ -8997,9 +9149,12 @@ WORLD['world-shot'] = async (page) => {
         streamer.enqueue = st.enqueue;
         return { poses, marks, slow, turns, inView: inView.slice(0, 10), inViewFrames: inView.length, flyS: scene.flyS, worstStep: { moveM: worst('moveM'), aimDeg: worst('aimDeg'), lensDeg: worst('lensDeg') }, frameWorstAtS: Math.round((slowest + 1) * 100 / 60) / 100, slowestFrames: top, biggestSteps: big, frameMedianMs: Math.round(sorted[Math.floor(sorted.length / 2)] * 100) / 100, frameWorstMs: Math.round(sorted[sorted.length - 1] * 100) / 100, frames: frames.length };
     };
-    const shots = [];
+    const shots = [], profiles = [];
     for (const t of moments) {
         await page.evaluate(flyRun, moments, SHOT_FRAME_MS, t, false);
+        // (--profile-at <t>: the frame at that moment drawn again with each part of the scene left out, timed to the
+        // GPU's finish, so a slow frame's cost is found by its part)
+        if (option('profile-at') && String(option('profile-at')).split(',').map(Number).some(v => Math.abs(v - t) < 1e-6)) profiles.push({ t, ...(await page.evaluate(profileFrame)) });
         const file = join(out, `${tag}-fly-${String(t).replace('.', '_').padStart(4, '0')}s.png`);
         await page.screenshot({ path: file });
         shots.push({ t, file });
@@ -9080,7 +9235,7 @@ WORLD['world-shot'] = async (page) => {
         }
         await page.evaluate(() => game.quality.release(performance.now()));
     }
-    const result = { ...begun, jump, worstStep: fly.worstStep, flyFrameMedianMs: fly.frameMedianMs, flyFrameWorstMs: fly.frameWorstMs, flyFrameWorstAtS: fly.frameWorstAtS, flySlowest: fly.slowestFrames, flyBiggestSteps: fly.biggestSteps, flySlow: fly.slow, flyS: fly.flyS, flyMarks: fly.marks, flyKinks: fly.turns, bikeInViewAfterPass: fly.inViewFrames, bikeInViewAt: fly.inView, flyFrames: fly.frames, held, shots, levels, phone };
+    const result = { ...begun, jump, worstStep: fly.worstStep, flyFrameMedianMs: fly.frameMedianMs, flyFrameWorstMs: fly.frameWorstMs, flyFrameWorstAtS: fly.frameWorstAtS, flySlowest: fly.slowestFrames, flyBiggestSteps: fly.biggestSteps, flySlow: fly.slow, flyS: fly.flyS, flyMarks: fly.marks, flyKinks: fly.turns, profiles, bikeInViewAfterPass: fly.inViewFrames, bikeInViewAt: fly.inView, flyFrames: fly.frames, held, shots, levels, phone };
     writeFileSync(join(out, `${tag}-shot.json`), JSON.stringify(result, null, 1));
     return result;
 };
@@ -9165,8 +9320,12 @@ function worldChecks(report) {
     clearanceChecks(results, failures);
     fairnessChecks(results, failures);
     shotChecks(results, failures);
+    // No thing of the window's scenery pops in view because the room changed (world-pops)
+    const pops = results['world-pops'];
+    if (pops && pops.summary && pops.summary.inViewByCause.room) failures.push(`world-pops: ${pops.summary.inViewByCause.room.n} pops in view from a change of the window's room, want none`);
     const steps = results['world-steps'];
-    if (steps) for (const list of Object.values(steps.slowestByKind || {})) for (const t of list) if (t.ms > STEPS_MOST_MS) failures.push(`world-steps: ${t.id} took ${t.ms} ms, over ${STEPS_MOST_MS}: ${JSON.stringify(t.parts)}`);
+    if (steps && steps.hostLoad > STEPS_LOAD_MOST) failures.push(`world-steps: the host's load was ${steps.hostLoad} per CPU, over ${STEPS_LOAD_MOST}: the steps are not measured (run it on a quiet host)`);
+    else if (steps) for (const list of Object.values(steps.slowestByKind || {})) for (const t of list) if (t.ms > STEPS_MOST_MS) failures.push(`world-steps: ${t.id} took ${t.ms} ms, over ${STEPS_MOST_MS}: ${JSON.stringify(t.parts)}`);
     camWallChecks(results, failures);
     treeChecks(results, failures);
     roadLookChecks(results, failures);
@@ -9176,6 +9335,7 @@ function worldChecks(report) {
     tunnelChecks(results, failures);
     stoneChecks(results, failures);
     seamChecks(results, failures);
+    farSeamChecks(results, failures);
     stopChecks(results, failures);
     const rows = (results['world-window'] || results['world-budget'] || {}).rows || [];
     rows.forEach(r => {
@@ -9248,7 +9408,7 @@ function worldChecks(report) {
     }
     const restart = results['world-restart'];
     if (restart) {
-        const { before, after, crash, next, confirm, excursion, stationS, backM } = restart;
+        const { before, after, crash, next, confirm, excursion, stationS, backM, station } = restart;
         const { held, cancelled, entered } = confirm;
         if (held.ticks !== 0 || held.moved !== 0 || held.clock !== 0 || !held.open) failures.push(`world-restart: the ride went on while the restart box was open: ${JSON.stringify(held)}`);
         if (cancelled.open || cancelled.paused || cancelled.proceeded !== 0 || cancelled.ticks !== 30) failures.push(`world-restart: Escape must cancel and give the ride back: ${JSON.stringify(cancelled)}`);
@@ -9258,12 +9418,13 @@ function worldChecks(report) {
         if (crash.during.dialogs.length || crash.dialogs.length || crash.during.restarts !== 0 || !crash.during.crashed) failures.push(`world-restart: a crash must open no dialog and play its fall first: ${JSON.stringify(crash)}`);
         if (!crash.callout || !/Hit the probe\s+\+5 s/.test(crash.callout)) failures.push(`world-restart: the call-out must say the cause and the cost: ${JSON.stringify(crash.callout)}`);
         if (crash.restarts !== 1 || crash.penaltyMs !== 5000 || crash.crashed || !(crash.seconds <= crash.mostS + 0.1) || !(crash.backM >= 0 && crash.backM <= backM + 25) || Math.abs(crash.lateral) > crash.half) failures.push(`world-restart: the game must restart a crashed rider in place by itself: ${JSON.stringify(crash)}`);
-        if (next.passed !== 3 || next.restarts !== 2 || next.crashed) failures.push(`world-restart: the ride did not go on to the next station: ${JSON.stringify(next)}`);
+        if (next.passed !== station + 1 || next.restarts !== 2 || next.crashed) failures.push(`world-restart: the ride did not go on to the next station: ${JSON.stringify(next)}`);
         if (excursion.restarts !== 1 || excursion.penaltyMs !== 15000 || excursion.guideCause !== null || excursion.pendingCutMs !== 0) failures.push(`world-restart: an excursion must cost one penalty: ${JSON.stringify(excursion)}`);
     }
     const cut = results['world-cut'];
     if (cut) {
         if (cut.error) failures.push(`world-cut: ${cut.error}`);
+        else if (cut.none) report.notes.push(`world-cut: ${cut.none}`);
         else {
             if (cut.control.restarts || cut.control.crashed) failures.push(`world-cut control: ${JSON.stringify(cut.control)}`);
             if (cut.flicker.restarts) failures.push(`world-cut: a flicker restarted the ride: ${JSON.stringify(cut.flicker)}`);
@@ -9284,7 +9445,8 @@ function worldChecks(report) {
         }
     }
     const camera = results['world-camera'];
-    if (camera) {
+    if (camera && camera.none) report.notes.push(`world-camera: ${camera.none}`);
+    else if (camera) {
         if (camera.boomUnderGround) failures.push(`world-camera: the boom went under the ground on ${camera.boomUnderGround} of ${camera.frames} frames`);
         if (!(camera.hairpinFrames > 0) || !(camera.share >= 0.95)) failures.push(`world-camera: the road 30 m ahead is in view on ${camera.share} of ${camera.hairpinFrames} hairpin frames, want 0.95 or more: ${JSON.stringify(camera.runs)}`);
         camera.runs.forEach(r => { if (r.crashed) failures.push(`world-camera: the ride from s ${r.start} crashed`); });
@@ -9311,13 +9473,13 @@ function worldChecks(report) {
     }
     // The chase camera over the whole stage (world-camera-chicane): before the camera read the road's mean heading the
     // worst chicane gave a yaw acceleration of 10.2 rad/s^2 behind the world pilot (the Gotthard S at km 0.5, the
-    // standard view) and the worst place 9.9 (the Tremola's pair of hairpins at km 10.8, the high view); the high view
+    // near chase) and the worst place 9.9 (the Tremola's pair of hairpins at km 10.8, the far chase); the far chase
     // went 2.7 m through a gallery's roof. Measured with the rule: 3.2, 4.6 and the eye and the near plane 2.0 m or more
     // inside every tube
     const chicane = results['world-camera-chicane'];
     if (chicane) {
         for (const [mode, m] of Object.entries(chicane.modes || {})) {
-            if (m.crashed) failures.push(`world-camera-chicane: the ride in view ${mode} crashed at s ${m.reached}`);
+            if (m.crashed) failures.push(`world-camera-chicane: the ride in view ${mode} crashed at s ${m.reached}${m.cause ? ` (${m.cause})` : ''}`);
             if (m.reached < m.end) failures.push(`world-camera-chicane: the ride in view ${mode} stopped at s ${m.reached}, before ${m.end}`);
             if (!(m.accel <= CHASE_LIMITS.accel)) failures.push(`world-camera-chicane: view ${mode}: a yaw acceleration of ${m.accel} rad/s^2, want ${CHASE_LIMITS.accel} or less: ${JSON.stringify(m.places.slice(0, 3))}`);
             if (!(m.room >= CHASE_LIMITS.room)) failures.push(`world-camera-chicane: view ${mode}: the bike came within ${m.room} of a side of the view, want ${CHASE_LIMITS.room} or more`);
@@ -9394,7 +9556,7 @@ function worldChecks(report) {
 async function bikeShots(placeSource, at, riderId, bikes) {
     const placeAt = new Function('game', `return (${placeSource})`)(game);
     const own = game.vehicle;
-    game.cameraMode = 2;
+    game.setCameraView('near');
     await placeAt(at);
     twistyDev.autopilot({ speed: 0 });
     twistyDev.step(1);
@@ -9590,6 +9752,256 @@ WORLD['hill-look'] = async (page) => {
     return { said: result.said, file, files };
 };
 
+// world-pops: rides a stretch with the world pilot (--from, --to: ride metres, the stage's first 4 km by default;
+// --speed, 18 m/s; --mode, the far chase) with every frame drawn, and logs every change of the window's scenery: each
+// house, boulder, tuft and tree that appears, vanishes or changes its level of detail. A change is a pop when the drawn
+// share of the thing (1 less its fade's cut: Fade) moves by more than POP_STEP in one frame; a fade is one that starts
+// or ends over several frames. Each is logged with its distance from the camera, whether it was in the view frustum,
+// and its cause: `room` when the window's room changed (Game.budgetWindow, Scenery.setWindowRoom; the caps and trees are
+// chosen again at once at the same place, so the change is the room's alone), with what changed the room by kind (land,
+// roads, riders, the player's bike, structures, scenery), else `tiles` when a tile came or went in the last second,
+// else `move`. Fails on a pop in view caused by the room. `--out <dir>` writes frame strips round the first --strips
+// pops and fades in view (the frame before, the frame of the change, then 8, 16 and 32 frames on, cropped round it)
+//   node tools/terrain-check.mjs world-pops --world tremola --gpu [--from s] [--to s] [--speed 18] [--mode far] [--out <dir>] [--strips 24]
+const POP_STEP = 0.5;
+const POP_OUT = join(process.env.HOME || '.', 'Library/Caches/twisty-world/pop-shots');
+function popRide(placeSource, pilotSource, opts) {
+    return (async () => {
+        const placeAt = new Function('game', `return (${placeSource})`)(game);
+        const env = game.environment, sc = env.scenery, v = game.vehicle, cam = game.camera, route = env.route;
+        twistyDev.freeze();
+        game.setCameraView(opts.mode);
+        const start = opts.from || Math.max(20, (env.startS ?? 0) + 20);
+        const end = Math.min(route.length - 30, opts.to || start + 4000, (env.endS ?? route.length) - 30);
+        await placeAt(start);
+        game.worldCamera.reset(v.yawAngle);
+        new Function('game', 'cruise', `return (${pilotSource})(game, cruise)`)(game, opts.speed);
+        const frustum = new THREE.Frustum(), pv = new THREE.Matrix4(), sphere = new THREE.Sphere(), at = new THREE.Vector3();
+        const view = () => {
+            cam.updateMatrixWorld(true);
+            pv.multiplyMatrices(cam.projectionMatrix, cam.matrixWorldInverse);
+            frustum.setFromProjectionMatrix(pv);
+        };
+        const seen = (x, y, z, r) => { sphere.center.set(x, y, z); sphere.radius = r; return frustum.intersectsSphere(sphere); };
+        // What the window draws of each thing: key to { kind, x, y, z, r, levels: { level: drawn share } }
+        const shareOf = (a, o) => 1 - Math.min(1, Math.abs(a[o + 3]));
+        const snap = () => {
+            const out = new Map();
+            const put = (kind, key, level, share, x, y, z, r) => {
+                let e = out.get(key);
+                if (!e) out.set(key, e = { kind, x, y, z, r, levels: {} });
+                e.levels[level] = Math.max(e.levels[level] || 0, share);
+            };
+            for (const [key, mesh] of sc.forestMeshes) {
+                if (!key.endsWith(':0') || !mesh.visible || !mesh.parent) continue;
+                const a = mesh.instanceMatrix.array, level = mesh.userData.treeLevel;
+                for (let i = 0; i < mesh.count; i++) {
+                    const o = i * 16, h = Math.hypot(a[o + 4], a[o + 5], a[o + 6]);
+                    put('tree', `t${a[o + 12].toFixed(1)},${a[o + 14].toFixed(1)}`, level, shareOf(a, o), a[o + 12], a[o + 13] + h * 0.5, a[o + 14], Math.max(2, h * 0.6));
+                }
+            }
+            for (const mesh of sc.houseGroup.children) {
+                if (!mesh.isInstancedMesh || !mesh.visible) continue;
+                const a = mesh.instanceMatrix.array;
+                for (let i = 0; i < mesh.count; i++) {
+                    const o = i * 16;
+                    put('house', `h${a[o + 12].toFixed(1)},${a[o + 14].toFixed(1)}`, 'house', shareOf(a, o), a[o + 12], a[o + 13] + 4, a[o + 14], 9);
+                }
+            }
+            for (const mesh of (sc.boulderMeshes || new Map()).values()) {
+                if (!mesh.visible) continue;
+                const a = mesh.instanceMatrix.array;
+                for (let i = 0; i < mesh.count; i++) {
+                    const o = i * 16;
+                    put('boulder', `b${a[o + 12].toFixed(1)},${a[o + 14].toFixed(1)}`, 'boulder', shareOf(a, o), a[o + 12], a[o + 13], a[o + 14], 2);
+                }
+            }
+            for (const held of sc.perTile.values()) {
+                for (const mesh of held.group.children) {
+                    if (mesh.name !== 'tufts' || !mesh.userData.tufts) continue;
+                    const cut = mesh.geometry.attributes.fadeCut, first = mesh.userData.tuftFirst;
+                    mesh.userData.tufts.forEach((t, i) => put('tuft', `u${t.x.toFixed(1)},${t.z.toFixed(1)}`, 'tuft', cut && first ? 1 - Math.min(1, Math.abs(cut.array[first[i]])) : 1, t.x, t.y, t.z, 0.6));
+                }
+            }
+            return out;
+        };
+        // What all but the scenery's houses, boulders and trees draw, by kind (as Game.budgetWindow counts it)
+        const kindOf = (o, kind) => {
+            if (o === v.group) return 'player';
+            if (game.traffic && (game.traffic.motorcycles || []).some(b => b.bikeGroup === o)) return 'riders';
+            if (game.traffic && (game.traffic.cars || []).some(c => c.carGroup === o)) return 'traffic';
+            const n = o.name || '';
+            if (/^world-(terrain|farland|horizon)/.test(n) || n === 'ground-cover') return 'land';
+            if (/^world-(road-section|side)/.test(n)) return 'roads';
+            if (/^world-scenery/.test(n) || n === 'world-houses') return 'scenery';
+            if (o === env.group && kind === 'other') return 'structures';
+            return kind;
+        };
+        const restByKind = () => {
+            const kinds = {};
+            const skip = new Set([sc.boulderGroup, sc.forest]);
+            const walk = (o, kind) => {
+                if (skip.has(o) || o.name === 'ground-cover' || (!o.visible && !o.isMesh)) return;
+                kind = kindOf(o, kind);
+                if (o.isMesh && o.geometry && o.geometry.attributes.position && !(o.parent === sc.houseGroup && o.name !== 'houses:footing')) {
+                    const g = o.geometry;
+                    kinds[kind] = (kinds[kind] || 0) + (g.index ? g.index.count : g.attributes.position.count) / 3 * (o.isInstancedMesh ? o.count : 1);
+                }
+                for (const child of o.children) walk(child, kind);
+            };
+            walk(game.scene, 'other');
+            for (const k of Object.keys(kinds)) kinds[k] = Math.round(kinds[k]);
+            return kinds;
+        };
+        const events = [], rooms = [], fades = [];
+        let frame = 0, last = snap(), lastRest = restByKind(), cause = null;
+        const tick = (now, why, room) => {
+            for (const [key, e] of now) {
+                const was = last.get(key);
+                for (const [level, share] of Object.entries(e.levels)) {
+                    const before = was ? was.levels[level] || 0 : 0;
+                    const step = share - before;
+                    if (Math.abs(step) > opts.popStep) events.push({ frame, key, kind: e.kind, level, step: Math.round(step * 100) / 100, why, room, x: e.x, y: e.y, z: e.z, r: e.r, d: Math.round(Math.hypot(e.x - cam.position.x, e.y - cam.position.y, e.z - cam.position.z)) });
+                    else if (step && (before === 0 || share === 0 || before === 1 || share === 1) && Math.abs(step) <= opts.popStep) fades.push({ frame, key, kind: e.kind, level, from: before, to: share, x: e.x, y: e.y, z: e.z, r: e.r });
+                }
+            }
+            for (const [key, e] of last) {
+                const is = now.get(key);
+                for (const [level, before] of Object.entries(e.levels)) {
+                    if (is && is.levels[level] !== undefined) continue;
+                    if (before > opts.popStep) events.push({ frame, key, kind: e.kind, level, step: -Math.round(before * 100) / 100, why, room, x: e.x, y: e.y, z: e.z, r: e.r, d: Math.round(Math.hypot(e.x - cam.position.x, e.y - cam.position.y, e.z - cam.position.z)) });
+                }
+            }
+            last = now;
+        };
+        // A room the window takes changes the caps and the trees at once, here, so what changes then is the room's
+        const setRoom = sc.setWindowRoom.bind(sc);
+        sc.setWindowRoom = (value) => {
+            const taken = setRoom(value);
+            if (!taken) return taken;
+            const rest = restByKind();
+            const delta = {};
+            for (const k of new Set([...Object.keys(rest), ...Object.keys(lastRest)])) { const d = (rest[k] || 0) - (lastRest[k] || 0); if (d) delta[k] = d; }
+            lastRest = rest;
+            const room = { frame, s: Math.round(v.routeS), room: value, delta };
+            rooms.push(room);
+            if (!sc.capsBusy) sc.rankCaps(sc.capsBike || v.position, true);
+            sc.rankTrees(sc.treeBike || v.position, true);
+            view();
+            tick(snap(), 'room', rooms.length - 1);
+            return taken;
+        };
+        const tileSig = () => [...sc.perTile.keys()].join('|');
+        let tiles = tileSig(), tilesAt = -1e9;
+        // The frames kept for the strips: the last drawn, and the ones asked for after a change
+        const W = 320, H = 200;
+        const ring = [document.createElement('canvas'), document.createElement('canvas')];
+        ring.forEach(c => { c.width = game.graphics.renderer.domElement.width; c.height = game.graphics.renderer.domElement.height; });
+        const strips = [];
+        const grab = (into) => into.getContext('2d').drawImage(game.graphics.renderer.domElement, 0, 0);
+        let stripAt = -1e9;
+        const wantStrip = (e, kind) => {
+            // (spread over the ride: one in 90 frames at the most)
+            if (strips.length >= opts.strips || frame - stripAt < 90) return;
+            at.set(e.x, e.y, e.z).project(cam);
+            if (at.z < -1 || at.z > 1 || Math.abs(at.x) > 1 || Math.abs(at.y) > 1) return;
+            const c = game.graphics.renderer.domElement;
+            const sx = (at.x + 1) / 2 * c.width, sy = (1 - at.y) / 2 * c.height;
+            const sheet = document.createElement('canvas');
+            sheet.width = W * 5 + 16;
+            sheet.height = H + 18;
+            const ctx = sheet.getContext('2d');
+            ctx.fillStyle = '#000';
+            ctx.fillRect(0, 0, sheet.width, sheet.height);
+            const crop = [Math.max(0, Math.min(c.width - W, sx - W / 2)), Math.max(0, Math.min(c.height - H, sy - H / 2))];
+            const put = (src, k) => {
+                ctx.drawImage(src, crop[0], crop[1], W, H, k * (W + 4), 18, W, H);
+                ctx.strokeStyle = 'rgba(255,220,0,0.7)';
+                ctx.strokeRect(k * (W + 4) + sx - crop[0] - 12, 18 + sy - crop[1] - 12, 24, 24);
+            };
+            put(ring[(frame + 1) % 2], 0);
+            put(c, 1);
+            ctx.fillStyle = '#fff';
+            ctx.font = '12px sans-serif';
+            ctx.fillText(`${kind} ${e.kind} ${e.level} ${e.why || ''} s ${Math.round(v.routeS)} d ${Math.round(Math.hypot(e.x - cam.position.x, e.y - cam.position.y, e.z - cam.position.z))} m: before, the frame, +8, +16, +32`, 4, 13);
+            stripAt = frame;
+            strips.push({ sheet, ctx, put, left: [8, 16, 32].map(n => frame + n), k: 2, name: `${String(strips.length + 1).padStart(2, '0')}-${kind}-${e.kind}-s${Math.round(v.routeS)}` });
+        };
+        let ticks = 0, crashes = 0, checked = 0;
+        const t0 = performance.now();
+        while (v.routeS < end && !game.finished && ticks < 60 * 60 * 30) {
+            twistyDev.step(1, { render: true });
+            ticks++;
+            frame++;
+            if (v.crashed) crashes++;
+            if (ticks % 60 === 0) await new Promise(resolve => setTimeout(resolve, 0));
+            const sig = tileSig();
+            if (sig !== tiles) { tiles = sig; tilesAt = frame; }
+            view();
+            const firstFade = fades.length;
+            tick(snap(), frame - tilesAt < 60 ? 'tiles' : 'move', null);
+            // (the room's own were logged inside the step, from the view of the frame before)
+            for (const e of events.slice(checked)) e.inView = seen(e.x, e.y, e.z, e.r);
+            for (const e of fades.slice(firstFade)) e.inView = seen(e.x, e.y, e.z, e.r);
+            for (const e of events.slice(checked)) if (e.inView) wantStrip(e, 'pop');
+            checked = events.length;
+            for (const e of fades.slice(firstFade)) if (e.inView && (e.from === 0 || e.to === 0 || e.from === 1 || e.to === 1)) wantStrip(e, e.from === 0 ? 'fade-in' : e.to === 0 ? 'fade-out' : 'fade-level');
+            for (const s of strips) while (s.left.length && s.left[0] === frame) { s.left.shift(); s.put(game.graphics.renderer.domElement, s.k++); }
+            grab(ring[frame % 2]);
+        }
+        const ms = performance.now() - t0;
+        sc.setWindowRoom = setRoom;
+        const player = restByKind().player || 0;
+        return {
+            start: Math.round(start), end: Math.round(end), reached: Math.round(v.routeS), frames: frame, crashes, seconds: Math.round(ms / 1000),
+            playerTriangles: player, bike: v.bike || null, riderRoom: game.riderRoom ?? null, rooms, fadeCount: fades.length, fadesInView: fades.filter(f => f.inView).length,
+            events: events.map(e => ({ frame: e.frame, kind: e.kind, level: e.level, step: e.step, why: e.why, room: e.room, inView: e.inView, d: e.d, x: Math.round(e.x), z: Math.round(e.z) })),
+            strips: strips.map(s => ({ name: s.name, png: s.sheet.toDataURL('image/png') }))
+        };
+    })();
+}
+WORLD_PROBES.push('world-pops');
+WORLD['world-pops'] = async (page) => {
+    const opts = { mode: option('mode') || 'far', speed: Number(option('speed') || 18), from: Number(option('from') || 0), to: Number(option('to') || 0), strips: Number(option('strips') || (option('out') ? 24 : 0)), popStep: POP_STEP };
+    const ride = await page.evaluate(popRide, placeAt.toString(), pilotWorld.toString(), opts);
+    const files = [];
+    if (ride.strips.length) {
+        const out = option('out') || POP_OUT;
+        mkdirSync(out, { recursive: true });
+        for (const s of ride.strips) {
+            const file = join(out, `${option('tag') || 'pops'}-${s.name}.png`);
+            writeFileSync(file, Buffer.from(s.png.split(',')[1], 'base64'));
+            files.push(file);
+        }
+    }
+    delete ride.strips;
+    // The shares: of the pops, by cause, by the kind of thing, in view; of the room's, by what changed the room
+    const share = (list, key) => {
+        const out = {};
+        for (const e of list) out[key(e)] = (out[key(e)] || 0) + 1;
+        return Object.fromEntries(Object.entries(out).sort((a, b) => b[1] - a[1]).map(([k, n]) => [k, { n, share: Math.round(n / Math.max(1, list.length) * 1000) / 10 }]));
+    };
+    const events = ride.events;
+    const inView = events.filter(e => e.inView);
+    // What changed the room for a pop of the room's: the kind whose count moved most the way the room moved
+    const roomKind = e => {
+        const r = ride.rooms[e.room];
+        if (!r) return 'none';
+        const list = Object.entries(r.delta).filter(([, d]) => d !== 0).sort((a, b) => Math.abs(b[1]) - Math.abs(a[1]));
+        return list.length ? list[0][0] : 'none';
+    };
+    const roomPops = events.filter(e => e.why === 'room');
+    const summary = {
+        pops: events.length, inView: inView.length, inViewShare: Math.round(inView.length / Math.max(1, events.length) * 1000) / 10,
+        byCause: share(events, e => e.why), inViewByCause: share(inView, e => e.why), byKind: share(events, e => e.kind), inViewByKind: share(inView, e => e.kind),
+        roomByKind: share(roomPops, roomKind), roomInViewByKind: share(roomPops.filter(e => e.inView), roomKind),
+        roomChanges: ride.rooms.length, roomChangesByKind: share(ride.rooms.map((r, k) => ({ room: k })), roomKind),
+        medianInViewM: inView.length ? [...inView].sort((a, b) => a.d - b.d)[Math.floor(inView.length / 2)].d : null,
+        fades: ride.fadeCount, fadesInView: ride.fadesInView
+    };
+    return { ...ride, events: option('dump') ? events : events.filter(e => e.inView).slice(0, 40), summary, files };
+};
+
 // world-look: a script of the caller's in a world page (--script <file>: the body of an async function given `game`,
 // `THREE` and `placeAt`), for looking into a question of the drawn world. What it returns is reported; its
 // `pictures` (name to a PNG data URL) are written into --out <dir>.
@@ -9620,7 +10032,7 @@ WORLD['world-look'] = async (page) => {
 // world-seams: no edge of the drawn land shows as a dark line. A tile's skirt (TerrainMesh.build) is lit as the land
 // above it, so in the frame as drawn a pixel of one is about as light as the land round it, whichever side it is seen
 // from. Every --every metres (SEAM_EVERY_M) of the stage the bike is put down
-// and the frame is read from the helmet and the chase camera (--modes), looking ahead and turned to each side
+// and the frame is read from the near chase (--modes; far too when named), looking ahead and turned to each side
 // (--turns): the whole frame, out to the far land. Read in the light alone (the land's colours white): a pixel of skirt
 // seen from behind (with only land beside it) under SEAM_DARK of the median of the land within SEAM_REACH_PX of it,
 // and of the land straight over it, is dark; a tile
@@ -9629,9 +10041,9 @@ WORLD['world-look'] = async (page) => {
 // along each tile edge with no drawn tile past it, where it is in view, the far land's tone less the tile's, averaged
 // over 5 points along the edge, is more than SEAM_TONE_STEP on the mean of SEAM_TONE_LINE_PX points or more of a
 // view, and one such view fails. --out <dir> saves each view with a seam or a tone line (and --at s,s views, with or without one).
-//   node tools/terrain-check.mjs world-seams --world gotthard-north --gpu [--every 250] [--modes 1,2] [--turns 0,-60,60] [--at s,s] [--out <dir> --tag T]
+//   node tools/terrain-check.mjs world-seams --world gotthard-north --gpu [--every 250] [--modes near] [--turns 0,-60,60] [--at s,s] [--out <dir> --tag T]
 const SEAM_EVERY_M = 250;
-const SEAM_MODES = [1, 2];
+const SEAM_MODES = ['near'];
 const SEAM_TURNS = [0, -60, 60];
 const SEAM_DARK = 0.7;
 const SEAM_REACH_PX = 6;
@@ -9645,7 +10057,7 @@ async function seamView(placeSource, s, mode, turnDeg, keep, rule) {
     const placeAt = new Function('game', `return (${placeSource})`)(game);
     game.worldLinger = false;
     const env = game.environment, v = game.vehicle, renderer = game.graphics.renderer;
-    game.cameraMode = mode;
+    game.setCameraView(mode);
     await placeAt(s);
     document.querySelectorAll('#finishBanner').forEach(el => el.remove());
     game.worldCamera.reset(v.yawAngle);
@@ -9889,7 +10301,7 @@ WORLD['world-seams'] = async (page) => {
     const tag = option('tag') || 'seams';
     const span = await page.evaluate(() => { const e = game.environment; return e.stage ? [e.stage.from, e.stage.to] : [0, e.route.length - 1]; });
     const every = Number(option('every') || SEAM_EVERY_M);
-    const modes = option('modes') ? option('modes').split(',').map(Number) : SEAM_MODES;
+    const modes = viewsOption('modes', SEAM_MODES);
     const turns = option('turns') ? option('turns').split(',').map(Number) : SEAM_TURNS;
     const at = option('at') ? option('at').split(',').map(Number) : [];
     const stations = [];
@@ -9913,7 +10325,7 @@ WORLD['world-seams'] = async (page) => {
                 tonePx += view.tonePx;
                 let file = null;
                 if (out && view.png) {
-                    file = join(out, `${tag}-s${s}-${mode === 1 ? 'helmet' : mode === 2 ? 'chase' : `mode${mode}`}${turn ? `-turn${turn}` : ''}.png`);
+                    file = join(out, `${tag}-s${s}-${mode}${turn ? `-turn${turn}` : ''}.png`);
                     writeFileSync(file, Buffer.from(view.png.split(',')[1], 'base64'));
                 }
                 delete view.png;
@@ -9933,6 +10345,279 @@ function seamChecks(results, failures) {
     if (!(seams.skirtPx > 0)) failures.push('world-seams: no skirt was seen in any view (the pass reads nothing)');
     if (seams.toneLines) failures.push(`world-seams: the window's edge shows as a line of a new tone in ${seams.toneLines} views (the far land's tone less the tile's, averaged over 5 points along the edge, more than ${SEAM_TONE_STEP} of 255 on the mean): ${JSON.stringify(seams.views.filter(v => v.toneLine).slice(0, 6).map(v => ({ s: v.s, mode: v.mode, turn: v.turn, runs: v.toneRuns, mean: v.toneMean })))}`);
     if (seams.seams) failures.push(`world-seams: ${seams.seams} dark lines along the drawn land's tile edges in ${seams.seamViews} views (${seams.darkPx} pixels): ${JSON.stringify(seams.views.filter(v => v.seams.length).slice(0, 6).map(v => ({ s: v.s, mode: v.mode, turn: v.turn, seams: v.seams.slice(0, 3) })))}`);
+}
+
+// world-far-seams: the land is closed out to the farthest land drawn, and no edge of a far grid shows as a line. Past
+// the drawn tiles a world draws far.bin's grid (Horizon) and the levels round it out to 40 km (FarLand). Every --every
+// metres (FAR_SEAM_EVERY_M) of the stage the bike is put down and the whole frame is read from the near and the far
+// chase camera (--modes), looking ahead and turned to each side (--turns), at FAR_SEAM_SIZE:
+//   holes  the frame is drawn again with each kind in its own colour (a tile, the far grid, each level, anything else)
+//          over a black sky. Down each column of pixels, the sky under land (the nearest thing drawn over it is land)
+//          is the sky seen through the land: a land surface is a height field and an upright camera sees it under
+//          the sky in every column. Pixels so found, joined (4 ways) into a patch of FAR_SEAM_HOLE_PX or more (in a
+//          900 px high frame), are a crack and one fails. The owner's white wedge on a far ridge (airolo-lookout,
+//          km 7.6) was one: far.bin's rim standing in the air over the 250 m level
+//   tone   every FAR_SEAM_TONE_EVERY_M along the box of each far grid with a level round it (where it is in view),
+//          the land's tone a quarter of the outer level's cell in from the edge and as far out, (out less in)
+//          averaged over 5 points along the edge, is more than SEAM_TONE_STEP on the mean of SEAM_TONE_LINE_PX
+//          points or more of a view: a straight line of a new tone across the hillsides, and one such view fails
+// --out <dir> saves the frame and the pass of kinds of each view that fails (and of --at s,s views).
+//   node tools/terrain-check.mjs world-far-seams --world <stage> --gpu [--every 100] [--modes near,far] [--turns 0,-60,60] [--at s,s] [--out <dir> --tag T]
+// tests/unit/world-far-land.test.js reads the same rules in the far grids' geometry.
+const FAR_SEAM_EVERY_M = 100;
+const FAR_SEAM_MODES = ['near', 'far'];
+const FAR_SEAM_TURNS = [0, -60, 60];
+const FAR_SEAM_SIZE = [1440, 900];
+const FAR_SEAM_HOLE_PX = 6;
+const FAR_SEAM_TONE_EVERY_M = 20;
+async function farSeamView(placeSource, s, mode, turnDeg, place, keep, rule) {
+    const DIST_CODE = 'floor(clamp(log2(max(vD, 1.0)) * 16.0, 0.0, 255.0) + 0.5) / 255.0';
+    const placeAt = new Function('game', `return (${placeSource})`)(game);
+    game.worldLinger = false;
+    const env = game.environment, v = game.vehicle, renderer = game.graphics.renderer;
+    game.setCameraView(mode);
+    if (place) await placeAt(s);
+    document.querySelectorAll('#finishBanner').forEach(el => el.remove());
+    game.worldCamera.reset(v.yawAngle);
+    twistyDev.autopilot({ speed: 0 });
+    for (let i = 0; i < 60; i++) twistyDev.step(1);
+    env.streamer.pump(Infinity);
+    twistyDev.step(1, { render: true });
+    const cam = game.camera;
+    if (turnDeg) {
+        cam.rotateOnWorldAxis(new THREE.Vector3(0, 1, 0), -turnDeg * Math.PI / 180);
+        cam.updateMatrixWorld(true);
+    }
+    game.graphics.render(game.scene, cam);
+    const size = renderer.getDrawingBufferSize(new THREE.Vector2());
+    const W = size.x, H = size.y;
+    const canvas = renderer.domElement, copy = document.createElement('canvas');
+    copy.width = W; copy.height = H;
+    const ctx = copy.getContext('2d', { willReadFrequently: true });
+    ctx.drawImage(canvas, 0, 0);
+    const frame = ctx.getImageData(0, 0, W, H).data;
+    const png = keep ? copy.toDataURL('image/png') : null;
+    // The pass of kinds: a tile 1, the far grid 2, far level k 3 + k, anything else 9, the sky 0; the distance in blue
+    const grids = [env.horizon, ...(env.farLand || [])].filter(Boolean);
+    const kindOf = o => (o === env.horizon ? 2 : (env.farLand || []).includes(o) ? 3 + env.farLand.indexOf(o) : null);
+    const tileMat = new THREE.ShaderMaterial({
+        side: THREE.DoubleSide,
+        vertexShader: 'varying float vD; void main(){ vec4 mv = modelViewMatrix * vec4(position, 1.0); vD = length(mv.xyz); gl_Position = projectionMatrix * mv; }',
+        fragmentShader: `varying float vD; void main(){ gl_FragColor = vec4(1.0 / 255.0, 0.0, ${DIST_CODE}, 1.0); }`
+    });
+    // (dropped with the Earth's curvature as drawn, LandShade.patch `curvature`)
+    const farMats = new Map();
+    const farMat = k => farMats.get(k) || farMats.set(k, new THREE.ShaderMaterial({
+        side: THREE.DoubleSide,
+        uniforms: { uDrop: LandShade.uniforms.uDrop },
+        vertexShader: 'uniform float uDrop; varying float vD; void main(){ vec4 w = modelMatrix * vec4(position, 1.0); vec2 d = w.xz - cameraPosition.xz; w.y -= dot(d, d) * uDrop; vec4 mv = viewMatrix * w; vD = length(mv.xyz); gl_Position = projectionMatrix * mv; }',
+        fragmentShader: `varying float vD; void main(){ gl_FragColor = vec4(${k}.0 / 255.0, 0.0, ${DIST_CODE}, 1.0); }`
+    })).get(k);
+    const other = new THREE.MeshBasicMaterial({ color: new THREE.Color(9 / 255, 0, 0), side: THREE.DoubleSide, fog: false });
+    const offsets = new Map();
+    const saved = new Map(), hidden = [];
+    const bike = v.group;
+    game.scene.children.forEach(c => { if (c !== env.group && c !== bike && c.visible && !c.isLight) { hidden.push(c); c.visible = false; } });
+    const toneMapping = renderer.toneMapping, encoding = renderer.outputEncoding;
+    renderer.toneMapping = THREE.NoToneMapping;
+    renderer.outputEncoding = THREE.LinearEncoding;
+    const inside = (o, group) => { for (let n = o; n; n = n.parent) if (n === group) return true; return false; };
+    const quiet = [];
+    game.scene.traverse(o => {
+        // (points, lines and sprites take no mesh material: left out, as the sky's own things are)
+        if ((o.isPoints || o.isLine || o.isSprite) && o.visible) { quiet.push(o); o.visible = false; return; }
+        if (!o.isMesh) return;
+        saved.set(o, o.material);
+        const k = kindOf(o);
+        if (k) o.material = farMat(k);
+        else if (inside(o, env.tileGroup) && o.userData.world === 'terrain') o.material = tileMat;
+        else {
+            const own = Array.isArray(o.material) ? o.material[0] : o.material;
+            if (own && own.polygonOffset) {
+                const key = `${own.polygonOffsetFactor},${own.polygonOffsetUnits}`;
+                if (!offsets.has(key)) offsets.set(key, Object.assign(other.clone(), { polygonOffset: true, polygonOffsetFactor: own.polygonOffsetFactor, polygonOffsetUnits: own.polygonOffsetUnits }));
+                o.material = offsets.get(key);
+            } else o.material = other;
+        }
+    });
+    const background = game.scene.background, fog = game.scene.fog;
+    game.scene.background = new THREE.Color(0x000000);
+    game.scene.fog = null;
+    const target = new THREE.WebGLRenderTarget(W, H);
+    renderer.setRenderTarget(target);
+    renderer.render(game.scene, cam);
+    const ids = new Uint8Array(W * H * 4);
+    renderer.readRenderTargetPixels(target, 0, 0, W, H, ids);
+    renderer.setRenderTarget(null);
+    let kindsPng = null;
+    for (const [o, m] of saved) o.material = m;
+    hidden.forEach(c => { c.visible = true; });
+    quiet.forEach(o => { o.visible = true; });
+    game.scene.background = background;
+    game.scene.fog = fog;
+    renderer.toneMapping = toneMapping;
+    renderer.outputEncoding = encoding;
+    target.dispose();
+    tileMat.dispose(); other.dispose();
+    farMats.forEach(m => m.dispose());
+    offsets.forEach(m => m.dispose());
+    // (the pass's rows run bottom up, the frame's top down)
+    const kind = (x, y) => ids[((H - 1 - y) * W + x) * 4];
+    const distAt = (x, y) => ids[((H - 1 - y) * W + x) * 4 + 2];
+    const land = k => k >= 1 && k <= 8;
+    // Holes: down each column, the sky whose nearest drawn pixel above is land
+    const hole = new Uint8Array(W * H);
+    for (let x = 0; x < W; x++) {
+        let over = 0;
+        for (let y = 0; y < H; y++) {
+            const k = kind(x, y);
+            if (k) { over = k; continue; }
+            if (land(over)) hole[y * W + x] = 1;
+        }
+    }
+    const minPx = Math.max(2, Math.round(rule.holePx * (H / 900) * (H / 900)));
+    const patches = [];
+    const stack = [];
+    for (let p0 = 0; p0 < W * H; p0++) {
+        if (hole[p0] !== 1) continue;
+        let px = 0, x0 = W, y0 = H, x1 = 0, y1 = 0;
+        const above = {}, below = {};
+        let far = 0, farN = 0;
+        hole[p0] = 2;
+        stack.push(p0);
+        while (stack.length) {
+            const p = stack.pop(), x = p % W, y = (p - x) / W;
+            px++;
+            x0 = Math.min(x0, x); x1 = Math.max(x1, x); y0 = Math.min(y0, y); y1 = Math.max(y1, y);
+            if (y > 0 && !hole[p - W]) { const k = kind(x, y - 1); above[k] = (above[k] || 0) + 1; if (land(k)) { far += distAt(x, y - 1); farN++; } }
+            if (y + 1 < H && !hole[p + W]) { const k = kind(x, y + 1); below[k] = (below[k] || 0) + 1; }
+            for (const q of [x > 0 ? p - 1 : -1, x + 1 < W ? p + 1 : -1, y > 0 ? p - W : -1, y + 1 < H ? p + W : -1]) if (q >= 0 && hole[q] === 1) { hole[q] = 2; stack.push(q); }
+        }
+        if (px >= minPx) patches.push({ px, box: [x0, y0, x1, y1], above, below, farM: farN ? Math.round(Math.pow(2, far / farN / 16)) : null });
+    }
+    patches.sort((a, b) => b.px - a.px);
+    const holePx = patches.reduce((n, p) => n + p.px, 0);
+    // The tone at each far grid's box: the drawn land of a grid at (x, z) on its own triangles, from its lattice
+    const uDrop = LandShade.uniforms.uDrop.value;
+    const lattices = grids.map((mesh, k) => {
+        if (k === 0) {
+            const far = env.data.far, stride = Horizon.strideFor(far);
+            return { mesh, x0: far.x0, z0: far.z0, cell: far.cell * stride, nx: Math.floor((far.nx - 1) / stride) + 1, nz: Math.floor((far.nz - 1) / stride) + 1, pos: env.horizonWhole ? env.horizonWhole.positions : mesh.geometry.attributes.position.array };
+        }
+        const level = env.data.farLevels[k - 1];
+        return { mesh, x0: level.x0, z0: level.z0, cell: level.cell, nx: level.nx, nz: level.nz, pos: mesh.geometry.attributes.position.array };
+    });
+    const drawnY = (g, x, z) => {
+        const fx = (x - g.x0) / g.cell, fz = (z - g.z0) / g.cell;
+        if (fx < 0 || fz < 0 || fx > g.nx - 1 || fz > g.nz - 1) return null;
+        const i = Math.min(g.nx - 2, Math.floor(fx)), j = Math.min(g.nz - 2, Math.floor(fz)), u = fx - i, w = fz - j;
+        const Y = (a, b) => g.pos[((j + b) * g.nx + i + a) * 3 + 1];
+        return u + w <= 1 ? Y(0, 0) + u * (Y(1, 0) - Y(0, 0)) + w * (Y(0, 1) - Y(0, 0)) : Y(1, 1) + (1 - u) * (Y(0, 1) - Y(1, 1)) + (1 - w) * (Y(1, 0) - Y(1, 1));
+    };
+    const lum = (x, y) => { const at = (y * W + x) * 4; return 0.2126 * frame[at] + 0.7152 * frame[at + 1] + 0.0722 * frame[at + 2]; };
+    const eye = cam.position;
+    const project = (x, y, z) => { const d2 = (x - eye.x) ** 2 + (z - eye.z) ** 2; const p = new THREE.Vector3(x, y - d2 * uDrop, z); const dist = p.distanceTo(eye); p.project(cam); return p.z < 1 && p.z > -1 ? [(p.x + 1) / 2 * W, (1 - p.y) / 2 * H, dist] : null; };
+    const toneAt = (x, z, g, want) => {
+        const y = drawnY(g, x, z);
+        if (y === null) return null;
+        const q = project(x, y, z);
+        if (!q || q[0] < 2 || q[1] < 2 || q[0] >= W - 2 || q[1] >= H - 2) return null;
+        const u = Math.round(q[0]), w = Math.round(q[1]);
+        if (Math.abs(distAt(u, w) - Math.round(Math.log2(Math.max(1, q[2])) * 16)) > 2) return null;
+        let sum = 0;
+        for (let dy = -1; dy <= 1; dy++) for (let dx = -1; dx <= 1; dx++) { if (kind(u + dx, w + dy) !== want) return null; sum += lum(u + dx, w + dy); }
+        return sum / 9;
+    };
+    const tones = [];
+    for (let k = 0; k + 1 < lattices.length; k++) {
+        const g = lattices[k], outer = lattices[k + 1];
+        const x0 = g.x0, z0 = g.z0, x1 = g.x0 + (g.nx - 1) * g.cell, z1 = g.z0 + (g.nz - 1) * g.cell;
+        const side = outer.cell / 4;
+        let sum = 0, runs = 0;
+        for (const [ax, az, bx, bz, ix, iz] of [[x0, z0, x1, z0, 0, 1], [x0, z1, x1, z1, 0, -1], [x0, z0, x0, z1, 1, 0], [x1, z0, x1, z1, -1, 0]]) {
+            const steps = Math.ceil(Math.hypot(bx - ax, bz - az) / rule.toneEveryM);
+            const run = [];
+            const flush = () => { for (let i = 2; i + 2 < run.length; i++) { sum += Math.abs((run[i - 2] + run[i - 1] + run[i] + run[i + 1] + run[i + 2]) / 5); runs++; } run.length = 0; };
+            for (let s2 = 1; s2 < steps; s2++) {
+                const x = ax + (bx - ax) * s2 / steps, z = az + (bz - az) * s2 / steps;
+                const a = toneAt(x + ix * side, z + iz * side, g, 2 + k), b = a === null ? null : toneAt(x - ix * side, z - iz * side, outer, 3 + k);
+                if (a === null || b === null) { flush(); continue; }
+                run.push(b - a);
+            }
+            flush();
+        }
+        const mean = runs ? Math.round(sum / runs * 10) / 10 : 0;
+        tones.push({ grid: k, runs, mean, line: runs >= rule.toneLinePx && mean > rule.toneStep });
+    }
+    const toneLine = tones.some(t => t.line);
+    const failed = patches.length > 0 || toneLine;
+    if (keep || failed) {
+        // The pass of kinds as a picture: the sky black, a tile red, the far grid green, the levels blue and yellow,
+        // anything else grey, and each hole magenta
+        const colours = { 0: [0, 0, 0], 1: [200, 40, 40], 2: [40, 200, 40], 3: [40, 40, 220], 4: [220, 220, 40], 9: [110, 110, 110] };
+        const pic = ctx.createImageData(W, H);
+        for (let y = 0; y < H; y++) for (let x = 0; x < W; x++) {
+            const c = hole[y * W + x] ? [255, 0, 255] : colours[kind(x, y)] || [255, 255, 255];
+            const at = (y * W + x) * 4;
+            pic.data[at] = c[0]; pic.data[at + 1] = c[1]; pic.data[at + 2] = c[2]; pic.data[at + 3] = 255;
+        }
+        ctx.putImageData(pic, 0, 0);
+        kindsPng = copy.toDataURL('image/png');
+    }
+    return { s, mode, turn: turnDeg, w: W, h: H, holes: patches.length, holePx, patches: patches.slice(0, 4), tones, toneLine, png: failed || keep ? (png || null) : null, kindsPng, frameKept: !!png };
+}
+WORLD_PROBES.push('world-far-seams');
+WORLD['world-far-seams'] = async (page) => {
+    const out = option('out');
+    if (out) mkdirSync(out, { recursive: true });
+    const tag = option('tag') || 'far-seams';
+    await page.setViewport({ width: FAR_SEAM_SIZE[0], height: FAR_SEAM_SIZE[1], deviceScaleFactor: 1 });
+    await page.evaluate(() => game.onWindowResize());
+    const span = await page.evaluate(() => { const e = game.environment; return e.stage ? [e.stage.from, e.stage.to] : [0, e.route.length - 1]; });
+    const every = Number(option('every') || FAR_SEAM_EVERY_M);
+    const modes = viewsOption('modes', FAR_SEAM_MODES);
+    const turns = option('turns') ? option('turns').split(',').map(Number) : FAR_SEAM_TURNS;
+    const at = option('at') ? option('at').split(',').map(Number) : [];
+    const stations = [];
+    if (!(option('at') && flag('at-only'))) for (let s = span[0] + 50; s <= span[1]; s += every) stations.push(Math.round(s));
+    for (const s of at) if (!stations.includes(s)) stations.push(s);
+    stations.sort((a, b) => a - b);
+    const tunnels = await page.evaluate(list => list.filter(s => { const p = game.environment.route.sample(s, {}); return p.flags.tunnel || p.flags.gallery; }), stations);
+    await page.evaluate(`window.farSeamView = ${farSeamView.toString()}`);
+    const rule = { holePx: FAR_SEAM_HOLE_PX, toneEveryM: FAR_SEAM_TONE_EVERY_M, toneStep: SEAM_TONE_STEP, toneLinePx: SEAM_TONE_LINE_PX };
+    const views = [];
+    let read = 0, holePx = 0, toneRuns = 0;
+    for (const s of stations) {
+        if (tunnels.includes(s)) continue;
+        let place = true;
+        for (const mode of modes) {
+            for (const turn of turns) {
+                const keep = !!out && at.includes(s);
+                const view = await page.evaluate((placeSource, s, mode, turn, place, keep, rule) => window.farSeamView(placeSource, s, mode, turn, place, keep, rule), placeAt.toString(), s, mode, turn, place, keep, rule);
+                place = false;
+                read++;
+                holePx += view.holePx;
+                toneRuns += view.tones.reduce((n, t) => n + t.runs, 0);
+                const files = [];
+                const name = `${tag}-s${s}-${mode}${turn ? `-turn${turn}` : ''}`;
+                if (out && view.png) { const file = join(out, `${name}.png`); writeFileSync(file, Buffer.from(view.png.split(',')[1], 'base64')); files.push(file); }
+                if (out && view.kindsPng) { const file = join(out, `${name}-kinds.png`); writeFileSync(file, Buffer.from(view.kindsPng.split(',')[1], 'base64')); files.push(file); }
+                delete view.png; delete view.kindsPng;
+                if (view.holes || view.toneLine || files.length) views.push({ ...view, files });
+            }
+        }
+    }
+    const holeViews = views.filter(v => v.holes).length, toneLines = views.filter(v => v.toneLine).length;
+    return { stations: stations.length, read, modes, turns, holes: views.reduce((n, v) => n + v.holes, 0), holeViews, holePx, toneRuns, toneLines, views };
+};
+
+function farSeamChecks(results, failures) {
+    const far = results['world-far-seams'];
+    if (!far) return;
+    if (!(far.read > 0)) failures.push('world-far-seams: no view was read');
+    if (!(far.toneRuns > 0) && !option('at')) failures.push('world-far-seams: no far grid\'s edge was seen in any view (the tone pass reads nothing)');
+    if (far.holes) failures.push(`world-far-seams: the sky shows through the land in ${far.holes} patches (${far.holePx} pixels) in ${far.holeViews} views: ${JSON.stringify(far.views.filter(v => v.holes).slice(0, 6).map(v => ({ s: v.s, mode: v.mode, turn: v.turn, patches: v.patches.slice(0, 2) })))}`);
+    if (far.toneLines) failures.push(`world-far-seams: a far grid's edge shows as a line of a new tone in ${far.toneLines} views (the outer level's tone less the inner's, averaged over 5 points along the edge, more than ${SEAM_TONE_STEP} of 255 on the mean): ${JSON.stringify(far.views.filter(v => v.toneLine).slice(0, 6).map(v => ({ s: v.s, mode: v.mode, turn: v.turn, tones: v.tones })))}`);
 }
 
 // hill-overlay: the opening shot (HillRide.SHOTS.opening, from HillLane.RULE.opening) beside the reference frame it was

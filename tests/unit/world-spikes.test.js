@@ -296,20 +296,26 @@ describe('the Tremola slice: no spike of land beside the ride, no open wall end'
 // The Gotthard leg and the tour's legs (js/world/tour.js): the same rules over each leg as it is ridden. A leg's land
 // is its folder's, so a leg ridden against a stage shares that stage's land. The counts each may have were measured when
 // this test first rode them (2026-11-26), and may only fall. The Gotthard leg had never been read here: its own 20
-// overhangs and 1 low top are its folder's. A leg ridden against its stage reads more than the stage does where the
-// same road is laid the other way: 7 more overhangs and 2 more flaps on the Tremola down (summit-airolo against
-// tremola), 9 and 1 on leg 2 against the Gotthard leg (.agent/system/world.md, "A stage ridden either way")
+// overhangs and 1 low top are its folder's (13 and 20 overhangs went to 1 and 3 when a junction's paving came down
+// to the land at its far edge and a slope's side beside a bridge's end to the land under it, 2026-11-27). A leg ridden against its stage reads more than the stage does where the
+// same road is laid the other way: 9 more overhangs and 1 more flap on leg 2 against the Gotthard leg
+// (.agent/system/world.md, "A stage ridden either way")
 const TOUR_LIMITS = {
-    'gotthard-north': { beside: 44, setback: 201, overhangs: 20, flaps: 2, low: 1 },
-    'airolo-lookout': { beside: 111, setback: 578, overhangs: 14, flaps: 3 },
-    'lookout-andermatt': { beside: 41, setback: 201, overhangs: 29, flaps: 3, low: 1 },
-    'hospental-summit': { beside: 25, setback: 174, overhangs: 10, flaps: 1, low: 1 },
-    'summit-airolo': { beside: 115, setback: 355, overhangs: 13, flaps: 4 },
-    // (worlds/susten, measured 2026-11-26: land stretched beside the ride as on the other legs; its overhangs, flaps,
-    // thin copings, jogs and bare faces are open faults, held at the Tremola's limits until they are fixed)
+    'gotthard-north': { beside: 44, setback: 201, overhangs: 1, flaps: 2, low: 1 },
+    'airolo-lookout': { beside: 111, setback: 578, overhangs: 1, flaps: 3 },
+    'lookout-andermatt': { beside: 41, setback: 201, overhangs: 3, flaps: 3, low: 1 }
+};
+// worlds/susten's land stretched beside the ride (`beside`, `setback`): exact counts, as a table that may only shrink.
+// A count that rises fails, and a count that falls fails until the table is brought down to it. Every other kind of
+// fault on these legs is held at the Tremola's limits
+const KNOWN = {
     'andermatt-goeschenen': { beside: 100, setback: 130 },
-    'goeschenen-susten': { beside: 152, setback: 1480 },
-    'susten-gadmen': { beside: 337, setback: 1082 }
+    'goeschenen-susten': { beside: 149, setback: 1479 },
+    'susten-gadmen': { beside: 333, setback: 1082 },
+    // worlds/haslital (legs 6 to 8, 2026-11-27): each kind over the Tremola's limits, as an exact count
+    'gadmen-innertkirchen': { setback: 656, ends: 1, flaps: 3, proud: 1, thin: 1, low: 1 },
+    'innertkirchen-guttannen': { bare: 4 },
+    'guttannen-grimsel': { flaps: 3, low: 3 }
 };
 const KINDS = ['beside', 'setback', 'bare', 'ends', 'overhangs', 'flaps', 'proud', 'fins', 'unfaced', 'thin', 'folds', 'low', 'jogs', 'strays', 'piers', 'soffits'];
 
@@ -321,8 +327,11 @@ describe.each(stagesFor(['gotthard-north', ...TOUR_STAGES]))('the %s leg: no spi
     }, 3600000);
 
     test('every kind of fault is within the leg\'s measured count (the Tremola\'s limits where none is measured)', () => {
-        const limits = { ...SPIKE_LIMITS, ...(TOUR_LIMITS[stage] || {}) };
+        const known = KNOWN[stage] || {};
+        const limits = { ...SPIKE_LIMITS, ...(TOUR_LIMITS[stage] || {}), ...known };
         const over = KINDS.filter(k => report[k].length > limits[k]).map(k => `${k}: ${report[k].length} (at most ${limits[k]})\n${list(report[k])}`);
+        // (a known count that fell: the table is brought down to it)
+        for (const k of Object.keys(known)) if (report[k].length < known[k]) over.push(`${k}: ${report[k].length}, under the table's ${known[k]}: bring KNOWN down to it`);
         if (over.length) throw new Error(over.join('\n'));
         expect(report.tapers).toBe(0);
     });

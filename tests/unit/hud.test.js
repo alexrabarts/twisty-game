@@ -283,16 +283,31 @@ describe('Hud', () => {
         expect(document.getElementById('hudStageText').textContent).toBe('Stage 2/3 · Mini 2  0:03.3');
     });
 
-    // The rides as their data has them: the shipped world of one stage, and the fixture of three
-    const ride = path => JSON.parse(readFileSync(new URL(`../../${path}`, import.meta.url), 'utf8'));
-    const gatesOf = (data, stage) => data.stations.filter(station => station.kind === 'gate' && station.stage === stage.id);
+    // The rides as their data has them: the shipped world (the Tremola, and leg 12 ridden against it), and the fixture of
+    // three. A stage's stations are its own list in the manifest, turned round for a stage ridden against the ride, as
+    // WorldData.useStage gives the game them: the folder's file holds every stage's, and a stage reads only its own
+    const json = path => JSON.parse(readFileSync(new URL(`../../${path}`, import.meta.url), 'utf8'));
+    const stagesOf = folder => {
+        const ride = json(`${folder}/ride.json`), manifest = json(`${folder}/manifest.json`);
+        return manifest.stages.map(stage => {
+            const dir = stage.dir === -1 ? -1 : 1;
+            const at = s => (dir === 1 ? s : Math.round((ride.length - s) * 1000) / 1000);
+            const [from, to] = dir === 1 ? [stage.from, stage.to] : [at(stage.to), at(stage.from)];
+            const own = Array.isArray(stage.stations) ? stage.stations.map(i => ride.stations[i]) : ride.stations.filter(st => st.stage === stage.id);
+            const stations = own.map(st => ({ s: at(st.s) })).sort((a, b) => a.s - b.s);
+            stations.forEach((st, i) => { st.kind = i === 0 ? 'start' : i === stations.length - 1 ? 'end' : 'gate'; });
+            return { id: stage.id, from, to, stations, gates: stations.slice(1, -1) };
+        });
+    };
 
     test('the count and the ticks are the data\'s checkpoints of the stage, whatever their number', () => {
-        for (const path of ['world/ride.json', 'tests/fixtures/world/mini/ride.json']) {
-            const data = ride(path);
-            for (const stage of data.stages) {
-                const gates = gatesOf(data, stage);
-                const marks = HudRules.progressMarks(data.stations, stage.from, stage.to);
+        for (const path of ['world', 'tests/fixtures/world/mini']) {
+            const stages = stagesOf(path);
+            expect(stages.length).toBeGreaterThan(0);
+            for (const stage of stages) {
+                const gates = stage.gates;
+                expect(gates.length).toBeGreaterThan(0);
+                const marks = HudRules.progressMarks(stage.stations, stage.from, stage.to);
                 expect({ path, stage: stage.id, marks: marks.length }).toEqual({ path, stage: stage.id, marks: gates.length });
                 marks.forEach((share, i) => expect(share).toBeCloseTo((gates[i].s - stage.from) / (stage.to - stage.from), 6));
                 // The start, the end and a stage boundary are no checkpoint: no tick at either end of the bar
@@ -306,8 +321,8 @@ describe('Hud', () => {
     });
 
     test('the stage text is absent with one stage and present with three', () => {
-        const one = ride('world/ride.json');
-        const three = ride('tests/fixtures/world/mini/ride.json');
+        const one = json('world/ride.json');
+        const three = json('tests/fixtures/world/mini/ride.json');
         expect(one.stages).toHaveLength(1);
         expect(three.stages).toHaveLength(3);
         hud.showProgress([]);

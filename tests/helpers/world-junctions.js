@@ -60,17 +60,20 @@ export const JUNCTION_LIMITS = { steps: 0, holes: 0, sunk: 0, decks: 0, open: 0,
 //   other junction, land 9 cm over a side road at km 3.3 and the summit's hole of 0.5 m)
 export const JUNCTION_OPEN = Object.freeze({
     'gotthard-north': { steps: 1, open: 1, strips: 1, pits: 1, physics: 2 },
-    // The tour's legs (js/world/tour.js), measured when first ridden (2026-11-26). Leg 11 rides the Gotthard leg's
-    // junctions its way and has the Hospental debt alone. Leg 2 rides them the other way and reads Hospental from two of
+    // The tour's legs (js/world/tour.js), measured when first ridden (2026-11-26). Leg 2 rides the Gotthard leg's
+    // junctions the other way and reads Hospental from two of
     // its junctions (j21, j22: a step, a strip of 2 cm and a pit each), and two faults the Gotthard leg does not show: a
     // step of 0.23 m at j90 by the lookout and a narrow gap of 2.1 m open to the land at j13 (s 12 661). Leg 1, its own
     // import: a strip of laid ground 2 cm over the mouth at j48 (s 6 444) and a narrow gap of 1.5 m at j34 (s 5 103)
     'lookout-andermatt': { steps: 2, open: 1, strips: 2, pits: 2, clefts: 1, physics: 2 },
-    'hospental-summit': { steps: 1, open: 1, strips: 1, pits: 1, physics: 2 },
     'airolo-lookout': { strips: 1, clefts: 1 },
-    // Leg 12, the Tremola down: a narrow gap of 2.2 m open to the land at j15 (s 10 898, km 2.3 of the Tremola up),
-    // which the Tremola up does not show
-    'summit-airolo': { clefts: 1 }
+    // Legs 6 to 8 (worlds/haslital), measured when first ridden (2026-11-27), under the builders' rules of that day:
+    // exact counts, held so they may only fall
+    // (2026-11-27: j35's open edge and pit and j12's cleft closed by the turned paving and the cleft fill brought
+    // down to the side road in a mouth; the land over j35 read 0 by then)
+    'gadmen-innertkirchen': { steps: 1, decks: 2, open: 4, strips: 3, pits: 4, clefts: 3 },
+    'innertkirchen-guttannen': { physics: 1 },
+    'guttannen-grimsel': { decks: 1, open: 1, strips: 2, pits: 1, clefts: 1, physics: 1 }
 });
 export const junctionLimits = stage => ({ ...JUNCTION_LIMITS, physics: 0, ...(JUNCTION_OPEN[stage] || {}) });
 
@@ -252,6 +255,9 @@ export function junctionWindow(game, env, store, at, { nearM = 350, reachM = 40,
                 const h = Math.atan2(q.x - p.x, q.z - p.z);
                 return { x: p.x + (q.x - p.x) * t + lat * Math.cos(h), z: p.z + (q.z - p.z) * t - lat * Math.sin(h), y: p.y + (q.y - p.y) * t, roofed: !!((t < 0.5 ? p.bits : q.bits) & 5) };
             };
+            // Whether the road is in its tube `d` metres along, or its portal is within the portal's mouth ahead
+            const mouthOf = game.RoadMesh ? game.RoadMesh.TUBE_MOUTH_M : 12;
+            const tubeAt = d => { for (let a = d; a <= Math.min(road.lengthM, d + mouthOf); a += 1) if (place(a, 0).roofed) return true; return false; };
             // Where the side road's centre line leaves the ride's carriageway
             let edgeD = 0;
             for (let d = 0; d <= Math.min(reachM, road.lengthM); d += stepM) {
@@ -308,9 +314,9 @@ export function junctionWindow(game, env, store, at, { nearM = 350, reachM = 40,
                     // Metres along the side road: the nearest of its places
                     let best = Infinity, bestD = 0;
                     for (let d = 0; d <= Math.min(reachM, road.lengthM); d += 1) { const p = place(d, 0); const far = Math.hypot(p.x - cx, p.z - cz); if (far < best) { best = far; bestD = d; } }
-                    // (a side road that leaves the ride in its own tube has the tube's lining and portal in its mouth, not a
-                    // deck: world-tunnels checks those)
-                    if (bestD <= edgeD + mouthM && best <= width / 2 + 2 && !place(bestD, 0).roofed) road.decks.push({ d: bestD, x: r2(cx), y: r2(cy), z: r2(cz) });
+                    // (a side road that leaves the ride in its own tube, or goes into one within a portal's mouth of it, has
+                    // the tube's lining, portal and wing walls in its mouth, not a deck: world-tunnels checks those)
+                    if (bestD <= edgeD + mouthM && best <= width / 2 + 2 && !tubeAt(bestD)) road.decks.push({ d: bestD, x: r2(cx), y: r2(cy), z: r2(cz) });
                 }
             }
             // The side road's two drawn edges in the mouth: from the carriageway out to the last place its ribbon is
