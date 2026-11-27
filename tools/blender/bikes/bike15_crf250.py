@@ -240,7 +240,7 @@ def chassis(k):
     if ENGINE_PARTS:
         engine_parts(k)
     # Skid plate under the cradle, black
-    k.loft([(0.34, 0.33, 0.41, 0.07, 4, 3), (0.24, 0.265, 0.33, 0.115, 4, 3), (0.0, 0.255, 0.3, 0.12, 4, 3), (-0.14, 0.27, 0.3, 0.09)], "trim", ring=10, steps=2)
+    k.loft([SKID[0] + (4, 3), SKID[1] + (4, 3), SKID[2] + (4, 3), SKID[3]], "trim", ring=10, steps=2)
 
     # Silver aluminium swingarm, a guide for the chain on its left arm
     parts.swingarm(k, pivot=PIVOT, axle=(REAR[1], REAR[2]), x=ARM_X, size=(0.034, 0.072), mat="alu", brace=True)
@@ -296,6 +296,20 @@ def engine_parts(k):
     k.cylinder(0.012, 0.045, (0, 0.785, 0.205), "rubber", rot=(-0.3, 0, 0), seg=8)
 
 
+# The skid plate's sections (z, lowest y, highest y, half width): chassis lofts them, scuffs follows its underside
+SKID = [(0.34, 0.33, 0.41, 0.07), (0.24, 0.265, 0.33, 0.115), (0.0, 0.255, 0.3, 0.12), (-0.14, 0.27, 0.3, 0.09)]
+# TWISTY_SCRAPE=0 draws the old scrape, a card under the plate, for a comparison
+SCRAPE_ON_PLATE = os.environ.get("TWISTY_SCRAPE", "1") != "0"
+
+
+def skid_low(z):
+    """The skid plate's lowest y at `z`, between its sections."""
+    for (z0, y0, _, _), (z1, y1, _, _) in zip(SKID, SKID[1:]):
+        if z1 <= z <= z0:
+            return y1 + (y0 - y1) * (z - z1) / (z0 - z1)
+    return SKID[-1][1] if z < SKID[-1][0] else SKID[0][1]
+
+
 def scuffs(k):
     """The marks of many falls, on both sides. Each lies just proud of the part it is on; the big
     ones stay in the distant model."""
@@ -338,9 +352,20 @@ def scuffs(k):
     k.box((0.004, 0.07, 0.05), E.along((a[0] + 0.057, a[1], a[2]), (b[0] + 0.057, b[1], b[2]), 0.86), "scuff_metal", rot=lean, bevel=0)
     k.box((0.004, 0.035, 0.03), E.along((a[0] + 0.059, a[1] + 0.015, a[2]), (b[0] + 0.059, b[1] + 0.015, b[2]), 0.87), "block", rot=lean, bevel=0)
     # The skid plate's underside and flanks, the swingarm's ends and the pegs' ends
-    k.box((0.15, 0.004, 0.3), (0, 0.253, 0.1), "scuff_grey", bevel=0)
+    if SCRAPE_ON_PLATE:
+        # The scrape follows the plate's underside, inside its outline (the plate's lowest line, `skid_low`); a flat
+        # card under it stood a centimetre clear of the plate's front and read as a loose part
+        def under(u, v):
+            z = -0.06 + 0.26 * u
+            return ((v - 0.5) * 0.11, skid_low(z) - 0.002, z)
+        k.sheet(under, "scuff_grey", nu=6, nv=2, thick=0.002)
+        for side in (-1, 1):
+            k.box((0.004, 0.03, 0.14), (side * 0.122, 0.285, 0.06), "scuff_grey", bevel=0)
+    else:
+        k.box((0.15, 0.004, 0.3), (0, 0.253, 0.1), "scuff_grey", bevel=0)
+        for side in (-1, 1):
+            k.box((0.004, 0.03, 0.22), (side * 0.121, 0.285, 0.1), "scuff_grey", bevel=0)
     for side in (-1, 1):
-        k.box((0.004, 0.03, 0.22), (side * 0.121, 0.285, 0.1), "scuff_grey", bevel=0)
         k.box((0.004, 0.05, 0.1), (side * (ARM_X + 0.019), REAR[1], REAR[2] + 0.02), "scuff_grey", bevel=0)
         k.cylinder(0.014, 0.006, (side * (PEG[0] + 0.072), PEG[1] - 0.012, PEG[2]), "scuff_grey", axis="x", seg=8)
     # The seat's rear right corner, torn and taped over
@@ -371,7 +396,8 @@ def draw(k):
 
 def build():
     # The surface layers baked into maps (all seven steps, maps.py), with room for wear to lighten an edge
-    k = E.EKit(seed=115, colours=COLOURS, extra=EXTRA, maps=surface.config(surface.STEPS), headroom=1.15)
+    # (TWISTY_MAPS_SURFACE sets steps and settings for a variant build, as TWISTY_SURFACE does for the vertex colours)
+    k = E.EKit(seed=115, colours=COLOURS, extra=EXTRA, maps=surface.config(surface.STEPS, env=os.environ.get("TWISTY_MAPS_SURFACE", "")), headroom=1.15)
     for lod in E.LODS:
         k.level(lod)
         draw(k)

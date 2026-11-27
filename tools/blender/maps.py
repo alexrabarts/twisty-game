@@ -331,6 +331,9 @@ def bake(objects, cfg, colours, seed=0, headroom=1.15, size=SIZE, blocks=None):
             n = plan["nodes"]
             value = make(plan)
             plan["emit"].inputs["Strength"].default_value = 1.0
+            # (the last pass's link would win over a constant)
+            for link in list(plan["emit"].inputs["Color"].links):
+                n.tree.links.remove(link)
             if isinstance(value, tuple):
                 n.tree.links.new(n.rgb(*value), plan["emit"].inputs["Color"])
             elif isinstance(value, (int, float)):

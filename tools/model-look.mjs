@@ -22,7 +22,7 @@
 //   node tools/model-look.mjs --sheet <dir>=<label>,<dir>=<label>[,...] --out <dir> [--views close] [--crop x,y,w,h --crop-name wheel]
 //
 // --set names a value of the scene: `<material>.<color|roughness|metalness|envMapIntensity|emissiveIntensity>=<value>`
-// on the subject's materials of that name, `exposure=<v>` (tone mapping), `sun=<v>` (the sun's intensity). --file and
+// on the subject's materials of that name (`*` for all of them; `<map>=none` takes a map away), `exposure=<v>` (tone mapping), `sun=<v>` (the sun's intensity). --file and
 // --far draw a candidate file in place of the bike's own (served from where it lies; the repo is not touched).
 // --sheet lays the same views of several runs side by side, each column labelled, one sheet per view and one of all.
 // Never lets a page reach production. Exit: 0 pictures saved, 1 a step failed, 2 no Chrome.
@@ -170,10 +170,12 @@ async function stage(spec) {
         if (key === 'exposure') { g.renderer.toneMappingExposure = value; continue; }
         if (key === 'sun') { g.directionalLight.intensity = value; continue; }
         const [name, prop] = key.split('.');
-        const hits = [...materials.values()].filter(m => m.name === name && prop in m);
+        // (`*` names every material; `none` takes a map away, to find which map a fault comes from)
+        const hits = [...materials.values()].filter(m => (name === '*' || m.name === name) && prop in m);
         if (!hits.length) { unknown.push(key); continue; }
         hits.forEach(m => {
-            if (prop === 'color' || prop === 'emissive') m[prop].set(typeof value === 'string' ? value.replace(/^0x/i, '#') : value);
+            if (value === 'none') m[prop] = null;
+            else if (prop === 'color' || prop === 'emissive') m[prop].set(typeof value === 'string' ? value.replace(/^0x/i, '#') : value);
             else m[prop] = value;
             m.needsUpdate = true;
         });
