@@ -183,7 +183,8 @@ def wing(masonry, dressed):
             m = (n + 1) % 4
             faces.append(bm.faces.new((a[m], a[n], b[n], b[m])))
         chamfer(bm, faces, 0.04)
-    end = prism(bm, [Vector((inner - 0.25, 0, -1.5)), Vector((outer + 0.2, 0, -1.5)), Vector((outer + 0.2, 0, fall + 0.9)), Vector((inner - 0.25, 0, fall + 0.9))], -reach - 0.6, -reach + 0.6)
+    # (its foot below the wall's, out of the wall's foot's plane)
+    end = prism(bm, [Vector((inner - 0.25, 0, -1.5 - SINK)), Vector((outer + 0.2, 0, -1.5 - SINK)), Vector((outer + 0.2, 0, fall + 0.9)), Vector((inner - 0.25, 0, fall + 0.9))], -reach - 0.6, -reach + 0.6)
     chamfer(bm, end, 0.05)
     coping = mesh_object("portal_wing_dressed", bm, dressed, DRESSED[1])
     return body, coping

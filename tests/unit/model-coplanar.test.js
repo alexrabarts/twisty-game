@@ -71,8 +71,6 @@ const KNOWN = {
     'bikes/naked.glb:all': 2,
     'bikes/sport.glb:all': 1,
     'cars/hatchback.glb:all': 1,
-    'gorge/portal.glb:portal_arch': 19,
-    'gorge/portal.glb:portal_wing': 1,
     'hill/bicycle.glb:lod0': 4,
     'hill/bicycle.glb:lod1': 2,
     'hill/horse.glb:lod0': 1,
