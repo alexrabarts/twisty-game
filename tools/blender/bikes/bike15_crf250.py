@@ -58,8 +58,12 @@ PIVOT = (0.43, -0.17)
 KNOBS = float(os.environ.get("TWISTY_KNOBS") or 0.012)
 # The engine's small parts (engine_parts). TWISTY_ENGINE=0 leaves them out, for a comparison
 ENGINE_PARTS = os.environ.get("TWISTY_ENGINE", "1") != "0"
+# The barrel's finish under its ribs (TWISTY_BARREL for a variant build)
+BARREL = os.environ.get("TWISTY_BARREL") or "casing"
 # The cast ribs round the barrel (engine_parts); TWISTY_RIBS sets the count for a variant build
 RIBS = int(os.environ.get("TWISTY_RIBS") or 4)
+# How far each rib stands out of the barrel (m; TWISTY_RIB_OUT for a variant build)
+RIB_OUT = float(os.environ.get("TWISTY_RIB_OUT") or 0.0015)
 # The spokes' finish. TWISTY_SPOKE sets it for a variant build
 SPOKE = os.environ.get("TWISTY_SPOKE") or "steel"
 
@@ -74,7 +78,8 @@ EXTRA = {
     "block": (0x101012, 0.6, 0.1),
     # Fall marks: red plastic bent pale, black plastic scratched grey, scraped metal, and cloth tape
     "scuff_plastic": (0xEFC4BE, 0.9, 0.0),
-    "scuff_grey": (0x8B8D90, 0.9, 0.0),
+    # (a mid grey: lighter, on the black plate and guards it read as a white card stuck on)
+    "scuff_grey": (0x6A6C70, 0.9, 0.0),
     "scuff_metal": (0xC9CCD0, 0.45, 0.9),
     "tape": (0x9A9C9E, 0.8, 0.1),
     # The discs a darker, rougher steel: a bright mirror steel read as a flat white ring in the sun
@@ -233,7 +238,7 @@ def chassis(k):
     # The single: crankcases, the barrel leaning forward, the head under the
     # tank, a round clutch cover on the right and the generator on the left
     k.loft([(0.24, 0.32, 0.46, 0.09, 3, 3), (0.16, 0.3, 0.52, 0.125, 3, 3), (-0.06, 0.3, 0.52, 0.125, 3, 3), (-0.14, 0.34, 0.5, 0.09)], "casing", ring=14, steps=2)
-    k.box((0.12, 0.17, 0.13), (0, 0.6, 0.15), "casing", rot=(0.24, 0, 0), bevel=0.012)
+    k.box((0.12, 0.17, 0.13), (0, 0.6, 0.15), BARREL, rot=(0.24, 0, 0), bevel=0.012)
     k.box((0.14, 0.09, 0.16), (0, 0.72, 0.18), "dark_metal", rot=(0.24, 0, 0), bevel=0.014)
     k.lathe([(0, 0), (0.085, 0), (0.085, 0.018), (0.062, 0.034), (0, 0.036)], (0.122, 0.42, 0.02), "casing", axis="x", seg=20)
     k.lathe([(0, 0), (0.07, 0), (0.07, 0.016), (0.05, 0.03), (0, 0.032)], (-0.122, 0.42, 0.08), "casing", axis="x", rot=(0, 0, math.pi), seg=18)
@@ -279,7 +284,7 @@ def engine_parts(k):
     for i in range(RIBS):
         t = (i + 0.5) / RIBS
         y = 0.53 + 0.13 * t
-        k.box((0.132, 0.006, 0.142), (0, y, 0.15 + (y - 0.6) * math.tan(0.24)), "casing", rot=(0.24, 0, 0), bevel=0.0015)
+        k.box((0.12 + 2 * RIB_OUT, 0.006, 0.13 + 2 * RIB_OUT), (0, y, 0.15 + (y - 0.6) * math.tan(0.24)), "casing", rot=(0.24, 0, 0), bevel=0.0015)
     if RIBS:
         k.loft([(0.25, 0.75, 0.775, 0.05, 2.6, 2.6), (0.18, 0.75, 0.79, 0.065, 2.6, 2.6), (0.11, 0.75, 0.775, 0.05, 2.6, 2.6)], "dark_metal", ring=12, steps=2)
     for i in range(8):
