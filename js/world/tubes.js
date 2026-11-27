@@ -154,6 +154,14 @@ class TubeLining {
             const rx = fa.rx + (fb.rx - fa.rx) * t, rz = fa.rz + (fb.rz - fa.rz) * t;
             return [cx + rx * lat, cy + h, cz + rz * lat];
         };
+        // (the same with the floor's fall across the tube: at a wall it is that wall's foot's height, as the walls
+        // stand; a rounded tube's roof and curves meet the walls' tops so)
+        const across = (k, t, lat, h) => {
+            const p = point(k, t, lat, h), a = rows[k], b = rows[k + 1] || a, fa = frames[k], fb = frames[k + 1] || fa;
+            const fall = ((a.r[1] - a.l[1]) / 2) * (1 - t) + ((b.r[1] - b.l[1]) / 2) * t, half = fa.half + (fb.half - fa.half) * t;
+            p[1] += (lat / (half || 1)) * fall;
+            return p;
+        };
         const roofOf = (k, t) => rows[k].roof + ((rows[k + 1] || rows[k]).roof - rows[k].roof) * t;
         const { lining, fittings } = parts;
         const openMemo = new Map();
@@ -161,12 +169,22 @@ class TubeLining {
             const a = rows[k], b = rows[k + 1], fa = frames[k], fb = frames[k + 1];
             const ra = a.roof, rb = b.roof;
             const seg = { ...opts, openMemo, gallery: a.gallery ?? opts.gallery, rock: a.rock ?? opts.rock, open: a.open ?? opts.open, shotcrete: a.shotcrete ?? opts.shotcrete };
-            // The roof: from wall top to wall top, lit from under
-            {
+            // A rounded tube (StructureStyles.ROUND): its walls stop riseM under the roof and curve in to it over the
+            // walkways; the roof is flat over the carriageway as a box's
+            const round = (a.profile ?? opts.profile) === 'round' && !seg.gallery && Math.min(ra, rb) >= StructureStyles.ROUND.minRoofM;
+            const R = StructureStyles.ROUND, cut = round ? R.inM : 0;
+            seg.wallCap = round ? R.riseM : 0;
+            // The roof: from wall top to wall top (from curve to curve in a rounded tube), lit from under
+            if (round) {
+                const corners = [[-fa.half + cut, ra, 0], [-fb.half + cut, rb, 1], [fb.half - cut, rb, 1], [fa.half - cut, ra, 0]];
+                const ps = corners.map(([lat, roof, t]) => across(k, t, lat, roof));
+                TubeLining.quad(lining, ps[0], ps[1], ps[2], ps[3], [0, -1, 0], K.roof, C.roof, (p, j) => attr(k, corners[j][2], corners[j][0], corners[j][1]), share);
+            } else {
                 const corners = [[a.l, -fa.half, ra, 0], [b.l, -fb.half, rb, 1], [b.r, fb.half, rb, 1], [a.r, fa.half, ra, 0]];
                 const ps = corners.map(([p, , roof]) => [p[0], p[1] + roof, p[2]]);
                 TubeLining.quad(lining, ps[0], ps[1], ps[2], ps[3], [0, -1, 0], K.roof, C.roof, (p, j) => attr(k, corners[j][3], corners[j][1], corners[j][2]), share);
             }
+            if (round) TubeLining.haunches(lining, k, frames, attr, across, ra, rb, share, near);
             // The walls
             for (const sign of [-1, 1]) {
                 const key = sign < 0 ? 'l' : 'r';
@@ -174,10 +192,10 @@ class TubeLining {
                 const nl = Math.hypot(n[0], n[2]) || 1;
                 n[0] /= nl; n[2] /= nl;
                 if (seg.open === sign && seg.groundAt) TubeLining.openWall(lining, k, sign, rows, frames, attr, point, roofOf, n, share, { ...seg, thin: !near });
-                else if (seg.rock === sign) TubeLining.rockWall(lining, k, sign, rows, frames, attr, n, share, near, seg.shotcrete ? K.shotcrete : K.rock, seg.shotcrete ? C.shotcrete : C.rock);
+                else if (seg.rock === sign) TubeLining.rockWall(lining, k, sign, rows, frames, attr, n, share, near, seg.shotcrete ? K.shotcrete : K.rock, seg.shotcrete ? C.shotcrete : C.rock, seg.wallCap);
                 else {
-                    const pa = a[key], pb = b[key];
-                    TubeLining.quad(lining, pa, pb, [pb[0], pb[1] + rb, pb[2]], [pa[0], pa[1] + ra, pa[2]], n, K.concrete, C.concrete, (p, j) => attr(k, j === 1 || j === 2 ? 1 : 0, sign * (j === 1 || j === 2 ? fb.half : fa.half), j >= 2 ? (j === 2 ? rb : ra) : 0), share);
+                    const pa = a[key], pb = b[key], ta = ra - seg.wallCap, tb = rb - seg.wallCap;
+                    TubeLining.quad(lining, pa, pb, [pb[0], pb[1] + tb, pb[2]], [pa[0], pa[1] + ta, pa[2]], n, K.concrete, C.concrete, (p, j) => attr(k, j === 1 || j === 2 ? 1 : 0, sign * (j === 1 || j === 2 ? fb.half : fa.half), j >= 2 ? (j === 2 ? tb : ta) : 0), share);
                 }
                 // The walkway from where it starts out to the wall's foot (u: metres out from its inner edge)
                 if (a.floor && b.floor && a.floor[key] && b.floor[key]) {
@@ -196,16 +214,17 @@ class TubeLining {
     // A wall of rough rock over a concrete plinth (or sprayed concrete): the plinth one quad, the rock in rows of
     // rockLevels, its face set in by up to rockInM at LOD0 (the same at each row for both segments it bounds, so no
     // step), none at the plinth's top and at the roof
-    static rockWall(buf, k, sign, rows, frames, attr, n, share, near, kind, color) {
+    static rockWall(buf, k, sign, rows, frames, attr, n, share, near, kind, color, cap = 0) {
         const T = TubeLining.TUBE, K = TubeLining.KIND, C = TubeLining.COLORS;
         const key = sign < 0 ? 'l' : 'r';
         const a = rows[k], b = rows[k + 1], fa = frames[k], fb = frames[k + 1];
-        // (flat at LOD1: the plinth and one face of rock, the relief in the shader)
-        const levels = near ? [0, ...T.rockLevels.filter(h => h < Math.min(a.roof, b.roof) - 0.3)] : [0, T.plinthM];
-        const top = (row) => row.roof;
+        // (flat at LOD1: the plinth and one face of rock, the relief in the shader; in a rounded tube up to where the
+        // wall curves in, `cap` under the roof)
+        const levels = near ? [0, ...T.rockLevels.filter(h => h < Math.min(a.roof, b.roof) - cap - 0.3)] : [0, T.plinthM];
+        const top = (row) => row.roof - cap;
         // How far in the face stands at (s, h): a smooth relief of a few metres, 0 at the plinth's top and the roof
         const inset = (row, h) => {
-            const s = row.s, roof = row.roof;
+            const s = row.s, roof = row.roof - cap;
             if (!near || row.pin || h <= T.plinthM + 1e-6 || h >= roof - 1e-6) return 0;
             const edge = Math.min(1, (h - T.plinthM) / 0.9, (roof - h) / 0.9);
             const n1 = LandShade.noise(s, h, 3.1, 41 + (sign > 0 ? 1 : 0)), n2 = LandShade.noise(s, h, 1.3, 43 + (sign > 0 ? 1 : 0));
@@ -336,6 +355,30 @@ class TubeLining {
         }
     }
 
+    // A rounded tube's curves (StructureStyles.ROUND), each side of segment k: from the wall's top, riseM under the
+    // roof, in to the roof inM in from the wall, a quarter ellipse in `pieces` (farPieces at LOD1), concrete lit from
+    // inside the tube
+    static haunches(buf, k, frames, attr, point, ra, rb, share, near) {
+        const R = StructureStyles.ROUND, K = TubeLining.KIND, C = TubeLining.COLORS;
+        const fa = frames[k], fb = frames[k + 1];
+        const n = near ? R.pieces : R.farPieces;
+        for (const sign of [-1, 1]) {
+            const at = (t, half, roof, i) => {
+                const th = (i / n) * Math.PI / 2;
+                const lat = sign * (half - R.inM + R.inM * Math.cos(th)), h = roof - R.riseM + R.riseM * Math.sin(th);
+                return { p: point(k, t, lat, h), lat, h };
+            };
+            for (let i = 0; i < n; i++) {
+                const th = ((i + 0.5) / n) * Math.PI / 2;
+                const gx = Math.cos(th) / R.inM, gy = Math.sin(th) / R.riseM, gl = Math.hypot(gx, gy);
+                const rx = (fa.rx + fb.rx) / 2, rz = (fa.rz + fb.rz) / 2;
+                const nrm = [-sign * rx * gx / gl, -gy / gl, -sign * rz * gx / gl];
+                const c = [at(0, fa.half, ra, i), at(1, fb.half, rb, i), at(1, fb.half, rb, i + 1), at(0, fa.half, ra, i + 1)];
+                TubeLining.quad(buf, c[0].p, c[1].p, c[2].p, c[3].p, nrm, K.concrete, C.concrete, (p, j) => attr(k, j === 1 || j === 2 ? 1 : 0, c[j].lat, c[j].h), share);
+            }
+        }
+    }
+
     // The fittings of segment k: lamps on the crown, a conduit beside them, the cable tray, the jet fans and the niches
     static fit(buf, k, rows, frames, attr, point, roofOf, share, opts) {
         const T = TubeLining.TUBE, K = TubeLining.KIND, C = TubeLining.COLORS;
@@ -380,7 +423,9 @@ class TubeLining {
         {
             const Tr = T.tray;
             const wall = t => side * (fa.half + (fb.half - fa.half) * t - (rocky ? T.rockInM : 0));
-            const h0 = roofOf(k, 0) - Tr.down, h1 = roofOf(k, 1) - Tr.down;
+            // (in a rounded tube under the curve, on the upright wall)
+            const drop = Tr.down + (opts.wallCap || 0);
+            const h0 = roofOf(k, 0) - drop, h1 = roofOf(k, 1) - drop;
             const inner = t => wall(t) - side * Tr.out;
             const right = [(fa.rx + fb.rx) / 2, 0, (fa.rz + fb.rz) / 2];
             TubeLining.quad(buf, point(k, 0, wall(0), h0), point(k, 1, wall(1), h1), point(k, 1, inner(1), h1), point(k, 0, inner(0), h0), down, K.metal, C.metal, (q, j) => attr(k, [0, 1, 1, 0][j], [wall(0), wall(1), inner(1), inner(0)][j], [h0, h1, h1, h0][j]), share);
@@ -388,7 +433,8 @@ class TubeLining {
         }
         // Jet fans in pairs, in a long tube, where it is a tunnel (a gallery's openings air it)
         const F = T.fan;
-        if (runLength >= F.minRunM && !opts.gallery) {
+        // (none in a rounded tube: its roof over the walkways is the curve, with no corner to hang them in)
+        if (runLength >= F.minRunM && !opts.gallery && !opts.wallCap) {
             for (let s = run[0] + F.firstM; s <= run[1] - F.firstM + 1e-6; s += F.everyM) {
                 if (!(s >= a.s && s < b.s)) continue;
                 for (const sign of [-1, 1]) {
