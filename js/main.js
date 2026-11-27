@@ -4017,6 +4017,8 @@ class Game {
         // regardless of variable frame timing
         // The simulated time this frame steps, which the world's streamer measures its disposal grace on
         let simulatedThisFrame = 0;
+        // (traffic is drawn between its steps, as the bike is: each step reads the steps' poses, Traffic.drawn)
+        if (this.traffic && this.traffic.stepped) this.traffic.stepped();
         while (this.accumulatedTime >= this.fixedTimeStep) {
             const deltaTime = this.fixedTimeStep; // Always 16.67ms
             simulatedThisFrame += deltaTime;
@@ -4207,6 +4209,7 @@ class Game {
         // Place the bike mesh between physics states for smooth motion at any
         // frame rate (frames otherwise alternate 1/2 physics steps and judder)
         this.vehicle.applyRenderInterpolation(this.accumulatedTime / this.fixedTimeStep);
+        if (this.traffic && this.traffic.drawn) this.traffic.drawn(this.accumulatedTime / this.fixedTimeStep);
 
         // The gearbox of the sound and the HUD, then the sound of this frame
         this.updateGearbox(rawDeltaTime, throttleInput, brakeInput);

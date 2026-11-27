@@ -1391,3 +1391,10 @@ The owner: "give overpasses realistic textures like we did with the tunnels. let
 
 - The owner read "Hit the wall +5 s" over a bike at 0 mph in the middle of its lane (Tremola km 5.5) as a crash at a standstill. It was the in-place restart after a hit: the call-out stayed 4.4 s, past the restart.
 - Now the restart takes the crash's call-out down (`Hud.dismiss`) and says "Crashed, back on the road" in the 'info' tone, with no second cost. `tests/unit/restart.test.js` holds it (41 of 41). world-physics passes whole on a host with git (94 of 94), with the stop rule of 3bdd7a3.
+
+## Riders alongside drawn smoothly
+
+- The ask (the owner, 2026-11-27): riders alongside the player jump back and forth along the road.
+- Cause: the game steps the ride at 60 a second and draws the player's bike between its last two steps, but drew every rider and car at its last step. A frame holds 0, 1 or 2 steps, so a rider beside the player was off by a share of a step that changed every frame (up to 0.18 m at 11 m/s). The riders' own place-keeping does not hunt.
+- Change: `Traffic.drawn(alpha)` draws traffic between its steps as the bike is; `Traffic.stepped()` gives back the steps' poses before each step, so no rule or contact reads a drawn pose (`js/main.js` calls both).
+- Check: `tests/unit/world-group-smooth.test.js` (new) at 60, 120 and 144 Hz: before 11 to 23 sign changes a second of a rider's speed against the player and up to 1 761 m/s^2; after none and at most 11.5 m/s^2. Frame time (`world-quality`, Tremola): the mean over the levels 6.06 ms before, 6.01 ms after.

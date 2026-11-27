@@ -1637,10 +1637,98 @@ class Traffic {
         });
     }
 
+    // The game steps traffic at its fixed physics rate and draws at the display's: it draws the player's bike between
+    // its last two steps (Vehicle.applyRenderInterpolation), so each vehicle here is drawn the same way. Drawn at its
+    // last step, a rider was ahead of the drawn player by a share of a step that changed every frame (a frame of 0, 1
+    // or 2 steps): one alongside jerked back and forth by up to its speed over 60 a second. `drawn(alpha)` puts each
+    // model between its last two steps; `stepped()` (the start of every step, Traffic.update, and the game before its
+    // steps) gives each model back its step's pose, so every rule and contact reads the steps' poses only. A model
+    // moved away from the pose it was drawn at (a restart in place, a new model) is drawn where it was put
+    static get DRAW_SNAP_M() { return 5; }
+
+    drawList() {
+        const list = this.drawing || (this.drawing = []);
+        list.length = 0;
+        for (const car of this.cars) if (car.carGroup) list.push(car);
+        for (const bike of this.motorcycles) if (bike.bikeGroup) list.push(bike);
+        return list;
+    }
+
+    stepped() {
+        for (const v of this.drawList()) {
+            const g = v.carGroup || v.bikeGroup, d = v.draw;
+            if (!d || !d.shown || d.group !== g) continue;
+            d.shown = false;
+            const p = g.position;
+            // (moved since it was drawn: that is its pose now)
+            if (p.x !== d.at.x || p.y !== d.at.y || p.z !== d.at.z || g.rotation.y !== d.at.yaw) continue;
+            p.set(d.sim.x, d.sim.y, d.sim.z);
+            g.rotation.y = d.sim.yaw;
+        }
+    }
+
+    // Each vehicle's pose before this step (Traffic.update), the one it is drawn from, and after it
+    beginDraw() {
+        for (const v of this.drawList()) {
+            const g = v.carGroup || v.bikeGroup;
+            const d = v.draw || (v.draw = { group: g, shown: false, live: false, prev: {}, sim: {}, at: {} });
+            if (d.group !== g) { d.group = g; d.live = false; }
+            const p = g.position;
+            d.prev.x = p.x; d.prev.y = p.y; d.prev.z = p.z; d.prev.yaw = g.rotation.y;
+        }
+    }
+
+    endDraw() {
+        for (const v of this.drawList()) {
+            const g = v.carGroup || v.bikeGroup, d = v.draw;
+            if (!d || d.group !== g) continue;
+            const p = g.position;
+            d.sim.x = p.x; d.sim.y = p.y; d.sim.z = p.z; d.sim.yaw = g.rotation.y;
+            d.live = true;
+        }
+    }
+
+    drawn(alpha) {
+        const t = Math.min(1, Math.max(0, Number.isFinite(alpha) ? alpha : 1));
+        for (const v of this.drawList()) {
+            const g = v.carGroup || v.bikeGroup, d = v.draw;
+            if (!d || !d.live || d.group !== g) continue;
+            const p = g.position;
+            if (d.shown) {
+                if (p.x === d.at.x && p.y === d.at.y && p.z === d.at.z && g.rotation.y === d.at.yaw) {
+                    p.set(d.sim.x, d.sim.y, d.sim.z);
+                    g.rotation.y = d.sim.yaw;
+                } else d.live = false;
+            } else if (p.x !== d.sim.x || p.y !== d.sim.y || p.z !== d.sim.z || g.rotation.y !== d.sim.yaw) d.live = false;
+            d.shown = false;
+            // (put somewhere since its step, or a teleport: drawn where it is)
+            if (!d.live) continue;
+            const dx = d.sim.x - d.prev.x, dy = d.sim.y - d.prev.y, dz = d.sim.z - d.prev.z;
+            if (dx * dx + dy * dy + dz * dz > Traffic.DRAW_SNAP_M * Traffic.DRAW_SNAP_M) continue;
+            let yaw = d.sim.yaw - d.prev.yaw;
+            if (yaw > Math.PI) yaw -= 2 * Math.PI;
+            else if (yaw < -Math.PI) yaw += 2 * Math.PI;
+            p.set(d.prev.x + dx * t, d.prev.y + dy * t, d.prev.z + dz * t);
+            g.rotation.y = d.prev.yaw + yaw * t;
+            d.at.x = p.x; d.at.y = p.y; d.at.z = p.z; d.at.yaw = g.rotation.y;
+            d.shown = true;
+        }
+    }
+
     // `player` is the player's bike (Vehicle: position, yawAngle, speed, crashed, worldCrash). With it a world's
     // traffic keeps off the player's back and the crew can be touched (contact); without it, and on a leg, nothing of
     // either
     update(deltaTime, playerPosition, playerSegment = null, player = null) {
+        this.stepped();
+        this.beginDraw();
+        try {
+            return this.stepAll(deltaTime, playerPosition, playerSegment, player);
+        } finally {
+            this.endDraw();
+        }
+    }
+
+    stepAll(deltaTime, playerPosition, playerSegment = null, player = null) {
         let collisionResult = null;
         const world = !!this.environment.route.laneCurve;
         const mine = world && player ? Traffic.playerBox(player, this.playerSample || (this.playerSample = {})) : null;
