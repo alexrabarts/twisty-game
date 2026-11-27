@@ -18,7 +18,7 @@ const callouts = [];
 // How long each call-out was asked to stay up (ms), in the order of `callouts`
 const shown = [];
 const Game = new Function('showCallout', 'TourSystem', 'Course', `${classSource}\nreturn Game;`)(
-    (text, tone, ms) => { callouts.push([text, tone]); shown.push(ms); },
+    (text, tone, ms) => { const item = [text, tone]; callouts.push(item); shown.push(ms); return item; },
     { boardId: leg => `${leg.id}-v${leg.trackVersion || 2}` },
     { boardTable: () => ({ 'long-v3': { gates: 14, segments: 700 } }) }
 );
@@ -427,9 +427,9 @@ describe('a world crash restarts in place by itself', () => {
             const game = worldGame();
             crash(game, cause);
             expect(callouts).toEqual([[`${cause}  +5 s`, 'bad']]);
-            // The restart itself says nothing more
+            // The restart says only that the rider is back on the road, with no second cost
             run(game, Game.WORLD_CRASH.mostS + 0.1);
-            expect(callouts).toHaveLength(1);
+            expect(callouts.slice(1)).toEqual([[Game.WORLD_RESTART_TEXT.crash, 'info']]);
         }
         callouts.length = 0;
         const game = worldGame();
@@ -455,6 +455,21 @@ describe('a world crash restarts in place by itself', () => {
         game.vehicle.crashCause = 'Hit the wall';
         run(game, Game.WORLD_CRASH.mostS + 0.1);
         expect(callouts[0]).toEqual(['Hit the wall  +5 s', 'bad']);
+        expect([game.penaltyMs, game.restarts]).toEqual([5000, 1]);
+    });
+
+    test('the crash\'s call-out comes down when the bike is put back, and the restart says it is back on the road', () => {
+        // (the owner read "Hit the wall +5 s" over a bike at 0 mph in the middle of its lane as a crash at a standstill)
+        const game = worldGame();
+        const dismissed = [];
+        game.hud = { dismiss: item => dismissed.push(item) };
+        crash(game, 'Hit the wall');
+        const said = callouts[0];
+        expect(said).toEqual(['Hit the wall  +5 s', 'bad']);
+        run(game, Game.WORLD_CRASH.mostS + 0.1);
+        expect(dismissed).toEqual([said]);
+        // (the cost was said once, with the cause)
+        expect(callouts.slice(1)).toEqual([[Game.WORLD_RESTART_TEXT.crash, 'info']]);
         expect([game.penaltyMs, game.restarts]).toEqual([5000, 1]);
     });
 

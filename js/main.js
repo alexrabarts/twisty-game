@@ -3077,7 +3077,7 @@ class Game {
         const rule = Game.WORLD_CRASH;
         this.worldCrashStreak = this.worldSinceRestartS < rule.quickS ? (this.worldCrashStreak || 0) + 1 : 0;
         this.worldCrash = { s: 0, stillS: 0 };
-        showCallout(`${cause || 'Crashed'}  +${Game.RESTART_PENALTY_MS / 1000} s`, 'bad', Game.CALLOUT_MS.crash);
+        this.crashCallout = showCallout(`${cause || 'Crashed'}  +${Game.RESTART_PENALTY_MS / 1000} s`, 'bad', Game.CALLOUT_MS.crash);
     }
 
     // One step of a world ride's crash: the restart once the fall has been seen (mostS, or leastS when the bike has
@@ -5054,8 +5054,14 @@ class Game {
             environment,
             weatherSystem: this.weatherSystem
         });
-        // (a crash has said its cause and its cost during the fall)
-        if (reason !== 'crash') showCallout(`${Game.WORLD_RESTART_TEXT[reason] || Game.WORLD_RESTART_TEXT.key} +${Game.RESTART_PENALTY_MS / 1000} s`, 'warn', Game.CALLOUT_MS.restart);
+        // A crash has said its cause and its cost during the fall. That call-out goes when the bike is put down, so a
+        // bike standing on the road does not read as one that crashed there (the owner read "Hit the wall" over a bike
+        // at 0 mph in the middle of its lane as a crash at a standstill): the restart says it is back on the road
+        if (reason === 'crash') {
+            if (this.crashCallout && this.hud && typeof this.hud.dismiss === 'function') this.hud.dismiss(this.crashCallout);
+            this.crashCallout = null;
+            showCallout(Game.WORLD_RESTART_TEXT.crash, 'info', Game.CALLOUT_MS.restart);
+        } else showCallout(`${Game.WORLD_RESTART_TEXT[reason] || Game.WORLD_RESTART_TEXT.key} +${Game.RESTART_PENALTY_MS / 1000} s`, 'warn', Game.CALLOUT_MS.restart);
     }
 
     // Fast travel (js/world/travel.js): from the pause panel, or with its key while riding (the ride pauses under it).
@@ -5642,9 +5648,9 @@ function showCallout(text, tone = 'info', durationMs = 1000) {
     const hud = window.game && window.game.hud;
     if (!hud) {
         console.warn('Call-out before the HUD exists:', text);
-        return;
+        return null;
     }
-    hud.callout(text, tone, durationMs);
+    return hud.callout(text, tone, durationMs);
 }
 
 // Debug key events
