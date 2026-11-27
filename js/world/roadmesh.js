@@ -846,8 +846,11 @@ class RoadMesh {
                 return Math.max(0, top - y);
             });
         }
-        RoadMesh.placePiers(out, [pts], { groundAt, guard, width: Math.min(3, rows[from].width / 2), depth: 2, styles: [style] });
-        if (groundAt) RoadMesh.lowDeck(out, rows, from, to, groundAt, guard, ends, style, girderIn);
+        // (where the deck is low and closed by walls, no pier stands in the box: RoadMesh.lowDeck gives the segments it
+        // walled on both sides, by their metres along the run)
+        const boxed = groundAt ? RoadMesh.lowDeck(out, rows, from, to, groundAt, guard, ends, style, girderIn) : new Set();
+        const open = d => { let k = 0; while (k + 2 < pts.length && pts[k + 1].d < d) k++; return !boxed.has(from + k); };
+        RoadMesh.placePiers(out, [pts], { groundAt, guard, width: Math.min(3, rows[from].width / 2), depth: 2, styles: [style], open });
         return out;
     }
 
@@ -855,7 +858,7 @@ class RoadMesh {
     // to 8336, a grey slab hanging over the hillside seen from the leg below), but solid side walls from the slab's
     // underside down into the land, under its edge beams, and at an end of the run where both sides are low, an
     // abutment face across: a box. Each face only where the land is known at both its corners, under LOW_DECK_M at
-    // both, and clear of every other carriageway (`guard`)
+    // both, and clear of every other carriageway (`guard`). Returns the segments walled on both sides (no pier there)
     static get LOW_DECK_M() { return 5; }
     static get LOW_DECK_SINK_M() { return 0.8; }
     static lowDeck(out, rows, from, to, groundAt, guard, ends, style, girderIn = null) {
@@ -880,11 +883,12 @@ class RoadMesh {
             RoadMesh.quad(out, a.p, b.p, [b.p[0], b.foot, b.p[2]], [a.p[0], a.foot, a.p[2]], color);
             StructureShade.end(out, start, 'pier', look, (x, y) => Math.max(0, Math.max(a.p[1], b.p[1]) - y));
         };
+        const walled = { [-1]: new Set(), [1]: new Set() };
         for (const sign of [-1, 1]) {
             for (let i = from; i < to; i++) {
                 const m = inset(rows[i], rows[i + 1]);
                 const a = under(rows[i], sign, m), b = under(rows[i + 1], sign, m);
-                if (a && b && clear(a, b)) face(a, b);
+                if (a && b && clear(a, b)) { face(a, b); walled[sign].add(i); }
             }
         }
         for (const [on, i, j] of [[ends[0], from, from + 1], [ends[1], to, to - 1]]) {
@@ -893,6 +897,8 @@ class RoadMesh {
             const l = under(rows[i], -1, m), r = under(rows[i], 1, m);
             if (l && r && clear(l, r)) face(l, r);
         }
+        // (the segments walled on both sides)
+        return new Set([...walled[-1]].filter(i => walled[1].has(i)));
     }
 
     // Where the ride is walled on both edges an arched stone viaduct stands in place of the two retaining walls
@@ -2673,7 +2679,8 @@ class RoadMesh {
     // PIER_EVERY_M from the first span's middle, `width` across and `depth` along the deck. A pier whose place stands in
     // a road or its verge (RoadSurface.VERGE_M and PIER_CLEAR_M past it, `guard`) moves along the run, a metre at a
     // time, to the nearest clear place, so a deck crosses a road in one span. Adds the boxes to `out`; returns the piers
-    static placePiers(out, runs, { groundAt = null, footAt = null, guard = null, width = RoadMesh.PIER_W_M, depth = RoadMesh.PIER_D_M, styles = [] } = {}) {
+    // `open(d)`: whether a pier may stand d metres along the (first) run (none in a low deck's box, RoadMesh.lowDeck)
+    static placePiers(out, runs, { groundAt = null, footAt = null, guard = null, width = RoadMesh.PIER_W_M, depth = RoadMesh.PIER_D_M, styles = [], open = null } = {}) {
         const piers = [];
         const D = RoadMesh.DECK_M, every = RoadMesh.PIER_EVERY_M;
         const verge = typeof RoadSurface !== 'undefined' ? RoadSurface.VERGE_M : 1.1;
@@ -2693,7 +2700,7 @@ class RoadMesh {
                 let placed = null;
                 for (let shift = 0; shift <= every / 2 && !placed; shift += 1) {
                     for (const d of shift ? [want - shift, want + shift] : [want]) {
-                        if (d < 0 || d > length) continue;
+                        if (d < 0 || d > length || (open && !open(d))) continue;
                         const q = along(pts, d);
                         const pier = RoadMesh.pierAt(q.x, q.z, q.y - D, q.heading, groundAt, footAt, width, depth);
                         if (pier && clear(pier) && !piers.some(o => Math.hypot(o.x - pier.x, o.z - pier.z) < every / 3)) { placed = pier; break; }
