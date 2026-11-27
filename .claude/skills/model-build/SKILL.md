@@ -37,6 +37,8 @@ The game cannot run Blender's shader nodes, so every surface layer is **baked in
 
 Vertex colours follow the mesh. A panel of a few large triangles takes a gradient, not a grain, so on a sparse mesh the layers change nothing a picture shows: measure that first (build with the layers on and off and compare the numbers) before you spend rounds on them. On such a model, the finish values (colour, roughness, metalness per material) and the geometry move the picture; the layers need a dense mesh or a map. `tools/blender/surface.py` holds the steps for the bike kits (`TWISTY_SURFACE` switches them for a variant build).
 
+With baked maps (`tools/blender/maps.py`), check the bake before you judge it: build once with every layer off but one, decode the maps and look at each channel's numbers. A link left from one bake pass into the next made every finish metal, and only the crushed-black share of model-stats showed it.
+
 A surface that still looks plastic after one fix needs research: find how material artists build that surface, write what you learned in the progress log, and rebuild it their way. Do not try the same fix twice.
 
 ## 3. Look in the game, not in Blender
