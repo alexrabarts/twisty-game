@@ -31,8 +31,95 @@ class TerrainMesh {
     static get SNOW() { return LandShade.PALETTE.snow; }
 
     static material() {
-        if (!TerrainMesh.sharedMaterial) TerrainMesh.sharedMaterial = LandShade.patch(new THREE.MeshLambertMaterial({ vertexColors: true, side: THREE.DoubleSide }), { detail: true, edge: true });
+        if (!TerrainMesh.sharedMaterial) TerrainMesh.sharedMaterial = TerrainMesh.clumpFade(LandShade.patch(new THREE.MeshLambertMaterial({ vertexColors: true, side: THREE.DoubleSide }), { detail: true, edge: true }));
         return TerrainMesh.sharedMaterial;
+    }
+
+    // The crown clumps of a middle tile (TerrainMesh.clumps) came and went with their tile's level of detail, at once:
+    // 7 077 pops in view on the Tremola's first 4 km in the far chase (world-pops, which read the modelled trees only
+    // before). Now a clump is drawn by a screen-door dither (as Scenery.fadeable) at the share its tile's distance from
+    // the bike gives (clumpShare): none at the distance the tile turns from the full level to the middle one
+    // (WorldStreamer.TILE_LOD_M), all of it CLUMP_FADE_M further, and none again at the distance it turns coarse. So
+    // the tile changes its level where its clumps are not drawn, and they come in and go out over CLUMP_FADE_M of the
+    // ride. The bike and the distances are uniforms (setClumpView, each frame from Game)
+    static get CLUMP_FADE_M() { return 120; }
+
+    static get clumpUniforms() {
+        if (!TerrainMesh.clumpShared) TerrainMesh.clumpShared = { uLodBike: { value: new THREE.Vector2(0, 0) }, uLodLimits: { value: new THREE.Vector2(WorldStreamer.TILE_LOD_M[0], WorldStreamer.TILE_LOD_M[1]) } };
+        return TerrainMesh.clumpShared;
+    }
+
+    // The bike the tiles' levels are read from, and the distances in force (WorldStreamer.tileLodM, or TILE_LOD_M)
+    static setClumpView(bike, limits = WorldStreamer.TILE_LOD_M) {
+        const u = TerrainMesh.clumpUniforms;
+        u.uLodBike.value.set(bike.x, bike.z);
+        u.uLodLimits.value.set(limits[0], limits[1]);
+    }
+
+    // How long a tile's clumps take to come in when the tile comes into the window (stepClumps), and the mark a clump
+    // starts from (more than 0: a mark of 0 is the land's)
+    static get CLUMP_IN_S() { return 0.5; }
+    static get CLUMP_MARK() { return 1e-3; }
+
+    // The drawn middle tiles with clumps: key to {mesh, share}
+    static drawnClumps() {
+        if (!TerrainMesh.clumpTiles) TerrainMesh.clumpTiles = new Map();
+        return TerrainMesh.clumpTiles;
+    }
+
+    // Each frame: the clumps of each tile that came lately step in by dt / CLUMP_IN_S, and those of a tile the window
+    // is letting go (`going(key)`: its grace, WorldStreamer.DISPOSE_AFTER_MS, which is longer) step out, so a tile
+    // let go of 2 km off takes no clump with it at once (world-pops: 544 pops in view on the Tremola's first 4 km)
+    static stepClumps(dt, going = null) {
+        const tiles = TerrainMesh.clumpTiles;
+        if (!tiles || !tiles.size) return;
+        for (const [key, held] of tiles) {
+            // (built and not yet put in the scene: a mesh made in steps is drawn once its last step is done)
+            if (!held.mesh.parent) continue;
+            const out = !!going && going(key);
+            if (out ? held.share <= TerrainMesh.CLUMP_MARK : held.share >= 1) continue;
+            const step = Math.max(0, dt) / TerrainMesh.CLUMP_IN_S;
+            held.share = out ? Math.max(TerrainMesh.CLUMP_MARK, held.share - step) : Math.min(1, held.share + step);
+            const marks = held.mesh.geometry.attributes.clump, array = marks.array;
+            for (let i = 2; i < array.length; i += 3) if (array[i] > 0) array[i] = held.share;
+            marks.needsUpdate = true;
+        }
+    }
+
+    // The share of a clump drawn, at (x, z), the bike at (bike.x, bike.z), by its tile's distance (and by time: its
+    // mark, stepClumps): as the land's shader reads it
+    static clumpShare(x, z, bike, limits = WorldStreamer.TILE_LOD_M) {
+        const m = WorldData.TILE_M, x0 = Math.floor(x / m) * m, z0 = Math.floor(z / m) * m;
+        const d = Math.hypot(Math.max(x0 - bike.x, bike.x - (x0 + m), 0), Math.max(z0 - bike.z, bike.z - (z0 + m), 0));
+        const step = (a, b, v) => { const t = Math.min(1, Math.max(0, (v - a) / (b - a))); return t * t * (3 - 2 * t); };
+        return step(limits[0], limits[0] + TerrainMesh.CLUMP_FADE_M, d) * (1 - step(limits[1] - TerrainMesh.CLUMP_FADE_M, limits[1], d));
+    }
+
+    // The land's material, patched so that a clump's vertices fade by clumpShare
+    static clumpFade(material) {
+        const before = material.onBeforeCompile;
+        const key = `${material.customProgramCacheKey()}|clump`;
+        const m = WorldData.TILE_M.toFixed(1), band = TerrainMesh.CLUMP_FADE_M.toFixed(1);
+        material.onBeforeCompile = (shader, renderer) => {
+            if (before) before.call(material, shader, renderer);
+            Object.assign(shader.uniforms, TerrainMesh.clumpUniforms);
+            shader.vertexShader = shader.vertexShader
+                .replace('#include <common>', '#include <common>\nattribute vec3 clump;\nuniform vec2 uLodBike;\nuniform vec2 uLodLimits;\nvarying float vClump;')
+                .replace('#include <begin_vertex>', `#include <begin_vertex>
+vClump = 1.0;
+if (clump.z > 0.5) {
+	vec2 clumpTile = floor(clump.xy / ${m}) * ${m};
+	float clumpD = length(max(max(clumpTile - uLodBike, uLodBike - (clumpTile + ${m})), 0.0));
+	vClump = min(clump.z, 1.0) * smoothstep(uLodLimits.x, uLodLimits.x + ${band}, clumpD) * (1.0 - smoothstep(uLodLimits.y - ${band}, uLodLimits.y, clumpD));
+}`);
+            shader.fragmentShader = shader.fragmentShader
+                .replace('#include <common>', '#include <common>\nvarying float vClump;')
+                .replace('#include <clipping_planes_fragment>', `#include <clipping_planes_fragment>
+if ( vClump < 1.0 && fract( 52.9829189 * fract( dot( gl_FragCoord.xy, vec2( 0.06711056, 0.00583715 ) ) ) ) >= vClump ) discard;`);
+        };
+        material.customProgramCacheKey = () => key;
+        material.needsUpdate = true;
+        return material;
     }
 
     // A node the importer carved for a road (road, bench), or a drop node that took a lower road's height under the
@@ -1562,6 +1649,20 @@ class TerrainMesh {
         const geometry = new THREE.BufferGeometry();
         geometry.setAttribute('position', new THREE.BufferAttribute(positionsAll, 3));
         geometry.setAttribute('color', new THREE.BufferAttribute(shadesAll, 3));
+        // Each crown clump's vertices carry its middle and a mark (TerrainMesh.clumpShare: the clumps fade in and out
+        // by their tile's distance from the bike); the land's vertices none
+        // The mark is also the clumps' share by time (CLUMP_IN_S): a tile that comes into the window with its clumps where
+        // they are drawn whole (its distance well inside the middle level) fades them in, one built again in place of a
+        // drawn tile of the same level keeps its share (stepClumps)
+        if (crowns.length) {
+            const marks = new Float32Array(positionsAll.length);
+            const was = TerrainMesh.drawnClumps().get(tile.key);
+            const start = was && was.mesh.parent ? was.share : TerrainMesh.CLUMP_MARK;
+            crowns.forEach((c, k) => {
+                for (let v = ground + k * (sides + 1); v < ground + (k + 1) * (sides + 1); v++) marks.set([c.x, c.z, start], v * 3);
+            });
+            geometry.setAttribute('clump', new THREE.BufferAttribute(marks, 3));
+        }
         // Already linear (TerrainMesh.colours): Graphics.fixColorSpaces leaves it alone
         geometry.userData.linearColors = true;
         // Lit from the land's own triangles only, and each skirt vertex as the edge vertex it hangs from: a skirt is
@@ -1648,6 +1749,13 @@ class TerrainMesh {
         // What a check needs to read the mesh on its own triangles (TerrainMesh.drawnAt): its cuts, and the vertices
         // of what closes a step (the cuts' faces and skirts), which are no land seen from above
         mesh.userData.lod = lod;
+        if (crowns.length) {
+            const marks = geometry.attributes.clump;
+            const held = { mesh, share: marks.getZ(ground) };
+            TerrainMesh.drawnClumps().set(tile.key, held);
+            // (let go with the mesh: a tile's land is freed by its geometry's dispose)
+            geometry.addEventListener('dispose', () => { if (TerrainMesh.clumpTiles.get(tile.key) === held) TerrainMesh.clumpTiles.delete(tile.key); });
+        }
         mesh.userData.cuts = cuts;
         mesh.userData.closing = extra.flat;
         // Where each kind of triangle lies in the index: the land's own (from 0), then the tile's skirts, then the

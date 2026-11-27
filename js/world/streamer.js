@@ -87,6 +87,8 @@ class WorldStreamer {
         // The build under way in steps: {id, iter}
         this.active = null;
         this.loading = new Set();
+        // The loads under way, as promises that never reject (settle waits on them)
+        this.loads = new Set();
         // key -> {tries, nextAt, lost}: the tiles whose data did not come; key -> when the land near the bike first
         // missed it (landState)
         this.failed = new Map();
@@ -223,13 +225,20 @@ class WorldStreamer {
         const tag = `t${key}`;
         this.loading.add(tag);
         // The heights are what the land needs: a tile whose heights came is here, whatever its cover did
-        Promise.all([this.data.ensureTile(key), this.data.ensureCover(key)])
+        this.track(Promise.all([this.data.ensureTile(key), this.data.ensureCover(key)])
             .catch(error => console.warn(`world tile ${key}: ${error.message}`))
             .then(() => {
                 if (this.data.tile(key)) this.failed.delete(key);
                 else this.fetchFailed(key);
             })
-            .finally(() => this.loading.delete(tag));
+            .finally(() => this.loading.delete(tag)));
+    }
+
+    // Keeps a load under way in `loads` until it ends
+    track(load) {
+        const done = load.catch(() => null).finally(() => this.loads.delete(done));
+        this.loads.add(done);
+        return done;
     }
 
     // A fetch of the tile's data failed: the next try after the next wait of FETCH_RETRY_MS, or lost after the last
@@ -360,7 +369,7 @@ class WorldStreamer {
                 });
             } else if (!this.loading.has(`c${k}`)) {
                 this.loading.add(`c${k}`);
-                this.data.ensureChunks([k]).catch(error => console.warn(`world chunk ${k}: ${error.message}`)).finally(() => this.loading.delete(`c${k}`));
+                this.track(this.data.ensureChunks([k]).catch(error => console.warn(`world chunk ${k}: ${error.message}`)).finally(() => this.loading.delete(`c${k}`)));
             }
         }
         for (const [k, held] of this.sides) {
@@ -471,6 +480,11 @@ class WorldStreamer {
 
     // Drains the queue and the loads, for tests and for a first frame that must be complete.
     // Its steps are not counted in the streaming stats.
+    // A round waits for the loads under way to end (at most SETTLE_WAIT_MS), not for a turn of the event loop: counted in
+    // turns, on a busy host the data came after the last round on one ride and not on another, and a settled window
+    // held what the other had not built (tests/unit/world-build-steps.test.js)
+    static get SETTLE_WAIT_MS() { return 30000; }
+
     async settle(bike, s, maxRounds = 200) {
         for (let round = 0; round < maxRounds; round++) {
             this.update(bike, s);
@@ -482,7 +496,11 @@ class WorldStreamer {
                     return round;
                 }
             }
-            await new Promise(resolve => setTimeout(resolve, 0));
+            if (this.loads.size) {
+                let timer = null;
+                await Promise.race([Promise.all([...this.loads]), new Promise(resolve => { timer = setTimeout(resolve, WorldStreamer.SETTLE_WAIT_MS); })]);
+                clearTimeout(timer);
+            } else await new Promise(resolve => setTimeout(resolve, 0));
         }
         return maxRounds;
     }

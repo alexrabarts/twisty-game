@@ -19,10 +19,12 @@ const { THREE, WorldEnvironment, WorldStreamer } = game;
 // Stations (ride metres from the stage's start) and the trees drawn there before the detail pass
 // (but the Tremola's km 5 and the Gotthard leg's km 3: there the window drew 900 trees and no house, as the houses
 // within reach stood on tiles built while the bike was out of reach of them. Now that the window chooses its houses
-// whatever the order its tiles came in (Scenery.rankCaps), it draws them, and about 600 trees with them: these are a little under what it draws)
+// whatever the order its tiles came in (Scenery.rankCaps), it draws them, and about 600 trees with them: these are a little under what it draws.
+// The Gotthard leg's km 3 drew 609 trees, 591 since every house within reach is drawn, the far ones at their far level
+// (Scenery.houseLevels): the houses there had not filled their share, and the far ones take 18 far trees' room)
 const TREES_BEFORE = {
     tremola: { 0: 521, 1000: 527, 2000: 521, 3000: 508, 4000: 508, 5000: 560 },
-    'gotthard-north': { 0: 448, 1000: 438, 2000: 435, 3000: 595 }
+    'gotthard-north': { 0: 448, 1000: 438, 2000: 435, 3000: 585 }
 };
 
 // The real models, read by SceneAssets in a scope of their own (the game's own scope has no image decoder)

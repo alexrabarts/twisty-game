@@ -984,16 +984,21 @@ describe('Scenery', () => {
         for (const cut of treeShares(scenery).values()) expect(cut).toBeCloseTo(-0.5, 6);
         scenery.stepFades(Scenery.FADE_S);
         for (const cut of treeShares(scenery).values()) expect(cut).toBe(0);
-        // The quality level's share takes half of them away: in view they fade out and are drawn until they have gone
+        // The quality level's share takes half of them away once the bike moves on (standing, the view holds:
+        // Scenery.holdsStill): in view they fade out and are drawn until they have gone
         const places = () => new Set([...treeShares(scenery).keys()].map(key => key.split(':')[0]));
         const all = places().size;
         expect(all).toBe(scenery.treeCount);
+        // (out of view they go at once; in view, standing, none does)
         scenery.setTrees(0.5, Scenery.TREE_NEAR_CAP);
-        expect(scenery.treeCount).toBeLessThan(all);
-        expect(places().size).toBe(all);
+        const standing = places().size;
+        expect(standing).toBeGreaterThan(all / 2);
+        scenery.rankTrees({ x: 100 + Scenery.TREE_RANK_M, z: 100 });
+        expect(scenery.treeCount).toBeLessThan(standing);
+        expect(places().size).toBe(standing);
         expect([...treeShares(scenery).values()].filter(cut => cut !== 0).length).toBeGreaterThan(5);
         scenery.stepFades(Scenery.FADE_S * 2);
-        scenery.rankTrees({ x: 100, z: 100 });
+        scenery.rankTrees({ x: 100 + Scenery.TREE_RANK_M, z: 100 });
         expect(places().size).toBe(scenery.treeCount);
         for (const cut of treeShares(scenery).values()) expect(cut).toBe(0);
     });
@@ -1370,7 +1375,7 @@ describe('FarLand', () => {
     test('far meshes drop with the curvature of the Earth in their shader, the tiles do not', () => {
         expect(LandShade.DROP_PER_M2 * 40000 * 40000).toBeCloseTo(109, 0);
         expect(Horizon.material().customProgramCacheKey()).toBe('land-110');
-        expect(TerrainMesh.material().customProgramCacheKey()).toBe('land-010e');
+        expect(TerrainMesh.material().customProgramCacheKey()).toBe('land-010e|clump');
         // Retaining walls: the land's lighting and the stone courses, flat (no curvature, no ground noise)
         expect(RoadMesh.stoneMaterial().customProgramCacheKey()).toBe('land-001');
     });

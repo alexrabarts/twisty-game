@@ -3430,6 +3430,12 @@ class Game {
         // Everything a world draws takes the haze of this frame's air, also what a build step added since the last
         // frame, before it is first drawn (js/world/landshade.js)
         LandShade.update(this.scene, this.graphics, this.weatherSystem, this.environment.group);
+        // (the crown clumps fade by their tile's distance from the bike, as the streamer reads it: TerrainMesh.clumpFade)
+        if (this.vehicle) {
+            const streamer = this.environment.streamer;
+            TerrainMesh.setClumpView(this.vehicle.position, (streamer && streamer.tileLodM) || WorldStreamer.TILE_LOD_M);
+            TerrainMesh.stepClumps(rawDeltaTime, streamer ? key => { const tile = streamer.tiles.get(key); return !tile || tile.zeroSince !== null; } : null);
+        }
         this.budgetWindow();
         this.watchWindow(rawDeltaTime);
         if (this.effectLevels) Effects.frame(this);
