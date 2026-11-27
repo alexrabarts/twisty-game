@@ -466,7 +466,9 @@ class StructureBuild {
     // BEAM_IN_M, the slab's face down to D and the soffit between; 'girder': a thin cantilever, its underside sloping
     // in to the box's webs, the box's bottom at D
     static get BEAM_IN_M() { return 0.3; }
-    static deck(out, la, lb, ra, rb, style, D, color) {
+    // `girderIn`: the metres in from each edge a girder's webs stand, the same along a run (a ride bridge's, so the
+    // walls under a low deck meet them, RoadMesh.lowDeck); by default each segment's own share of its span
+    static deck(out, la, lb, ra, rb, style, D, color, girderIn = null) {
         const look = style.look, beam = StructureStyles.LOOKS[look].beamM, top = 0.02;
         const at = (p, q, m, depth) => {
             const dx = q[0] - p[0], dz = q[2] - p[2], len = Math.hypot(dx, dz) || 1;
@@ -475,7 +477,9 @@ class StructureBuild {
         const span = Math.min(Math.hypot(ra[0] - la[0], ra[2] - la[2]), Math.hypot(rb[0] - lb[0], rb[2] - lb[2]));
         // The section's steps from the edge in: [metres in, depth] down the outside and across the underside
         const girder = style.deck === 'girder' && span > 4;
-        const steps = girder ? [[0, top], [0, beam], [span * 0.26, 0.5], [span * 0.26 + 0.6, D]] : [[0, top], [0, beam], [StructureBuild.BEAM_IN_M, beam], [StructureBuild.BEAM_IN_M, D]];
+        // (a girder's underside slopes from its edge beam in to its web, `web` in from the edge, at the box's foot)
+        const web = girderIn ?? span * 0.26 + 0.6;
+        const steps = girder ? [[0, top], [0, beam], [web - 0.6, 0.5], [web, D]] : [[0, top], [0, beam], [StructureBuild.BEAM_IN_M, beam], [StructureBuild.BEAM_IN_M, D]];
         const Q = StructureShade.quad;
         for (const [pa, pb, qa, qb, left] of [[la, lb, ra, rb, true], [ra, rb, la, lb, false]]) {
             for (let k = 0; k + 1 < steps.length; k++) {

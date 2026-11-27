@@ -828,10 +828,12 @@ class RoadMesh {
         // (its style by the block of ride metres its first drawn row is in, not by its length or the land under it:
         // the same from every section that draws a piece of it, at every level of detail)
         const style = StructureStyles.overpass({ x: Math.floor((rows[from].s || 0) / 500) * 64, z: 0, length: 30, height: 8, ride: true });
+        // (a girder's webs the same metres in along the whole run, from its narrowest row)
+        const girderIn = Math.min(...span.map(row => row.width + 2 * RoadMesh.BRIDGE_DECK_M)) * 0.26 + 0.6;
         for (let i = from; i < to; i++) {
             const a = rows[i], b = rows[i + 1];
             const ha = a.width / 2 + RoadMesh.BRIDGE_DECK_M, hb = b.width / 2 + RoadMesh.BRIDGE_DECK_M;
-            StructureBuild.deck(out, at(a, -ha, 0), at(b, -hb, 0), at(a, ha, 0), at(b, hb, 0), style, deep, colors.deck);
+            StructureBuild.deck(out, at(a, -ha, 0), at(b, -hb, 0), at(a, ha, 0), at(b, hb, 0), style, deep, colors.deck, girderIn);
         }
         for (const sign of [-1, 1]) {
             const points = span.map(row => at(row, sign * (row.width / 2 + RoadMesh.BRIDGE_DECK_M), 0));
@@ -845,7 +847,7 @@ class RoadMesh {
             });
         }
         RoadMesh.placePiers(out, [pts], { groundAt, guard, width: Math.min(3, rows[from].width / 2), depth: 2, styles: [style] });
-        if (groundAt) RoadMesh.lowDeck(out, rows, from, to, groundAt, guard, ends, style);
+        if (groundAt) RoadMesh.lowDeck(out, rows, from, to, groundAt, guard, ends, style, girderIn);
         return out;
     }
 
@@ -856,14 +858,14 @@ class RoadMesh {
     // both, and clear of every other carriageway (`guard`)
     static get LOW_DECK_M() { return 5; }
     static get LOW_DECK_SINK_M() { return 0.8; }
-    static lowDeck(out, rows, from, to, groundAt, guard, ends, style) {
+    static lowDeck(out, rows, from, to, groundAt, guard, ends, style, girderIn = null) {
         const D = RoadMesh.DECK_M, I = StructureBuild.BEAM_IN_M, L = RoadMesh.LOW_DECK_M, sink = RoadMesh.LOW_DECK_SINK_M;
         // (each wall's top on the deck's own corner under its edge beam, or under a girder its box's web, as
         // StructureBuild.deck steps the segment in: its edge point moved in toward the other edge, DECK_M down)
         const edge = (row, sign) => { const q = RoadMesh.place(row, sign * (row.width / 2 + RoadMesh.BRIDGE_DECK_M)); return [q.x, row.y, q.z]; };
         const inset = (a, b) => {
             const span = Math.min(Math.hypot(edge(a, 1)[0] - edge(a, -1)[0], edge(a, 1)[2] - edge(a, -1)[2]), Math.hypot(edge(b, 1)[0] - edge(b, -1)[0], edge(b, 1)[2] - edge(b, -1)[2]));
-            return style.deck === 'girder' && span > 4 ? span * 0.26 + 0.6 : I;
+            return style.deck === 'girder' && span > 4 ? girderIn ?? span * 0.26 + 0.6 : I;
         };
         const under = (row, sign, m) => {
             const e = edge(row, sign), o = edge(row, -sign), len = Math.hypot(o[0] - e[0], o[2] - e[2]) || 1;
