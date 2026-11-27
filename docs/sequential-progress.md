@@ -1364,3 +1364,11 @@ One job at a time, in the order A to H. Each entry: the job, the commit, what th
 - Tests: new `tests/unit/world-stop-foot.test.js`; `world-physics.test.js` held the old fall (full lock, brake 0.4, to a stop): it now stops with a foot down, and the fall is the roll to a stop with no brake. world-low-speed, rider-foot, rider-fall, world-rider-fall(-variety), world-braking, restart, hairpin-assist, world-ground-contact, world-wall-brush and tuning-defaults pass.
 - Group riders are Vehicles too: the rule holds for them.
 - The "Hit the wall" at Tremola km 5.5 (the bike at 0 mph mid-lane on the bridge deck): that is the restart in place after a hit, `WorldRun.restartPlace`, 6 m back from the last place on the carriageway, in the middle of the rider's half; the call-out stays up after it. world-fairness passes on the Tremola, so no wall zone stands where nothing is drawn.
+
+## The test rider holds the carriageway
+
+- The ask: tuning-defaults "well over the link's floor" red since d181ba6. On the Tremola's link 4 (the most daring rider, the sharpest mode, the 0.8 pace) both lanes crashed at s 7 892 to 7 894, 0.35 m past the edge, on the coping of a wall drawn there. The world is right; the scripted rider's line was not.
+- Cause (`tests/helpers/world-rider.js`): out of the 6 m hairpin at s 7 875 the rider held the bike at its lean limit (51 degrees) and opened the throttle, from 7.5 to 15 m/s, and ran wide. In the inside lane pure pursuit also cut the chord of a 10 m hairpin (s 8 425) 0.05 m past the inside edge.
+- Rule, for the careful rider (lane 0 or `inside`, not `wide`, not a lane function): the throttle stays shut from 0.9 of the planned lean limit; past 0.6 m inside an edge the aim moves back across by twice the excess; the inside lane's aim is held off the inside by the chord's sag over the reach. On link 4 the rider now keeps 0.25 m (lane 0) and 0.89 m (inside) inside the edges; every link is 1.99 to 2.58 of its floor.
+- The crash now names its cause: `rideSpan` reported "crash" for any crash with no log; it reads `Vehicle.crashCause` ("Hit the wall" there) and `crashWhy`.
+- Check: tuning-defaults, world-fairness, world-edge-lean, world-checkpoints, world-restart, world-roadworks, world-wall-brush (146 of 146, on a host with git); the world-fairness probe passes on the Tremola.
