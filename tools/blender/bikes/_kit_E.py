@@ -24,8 +24,10 @@
 import json
 import math
 import os
+import shutil
 import struct
 import sys
+import tempfile
 
 HERE = os.path.dirname(os.path.abspath(__file__))
 sys.path.insert(0, os.path.dirname(HERE))
@@ -37,6 +39,7 @@ import common  # noqa: E402
 from bike_kit import Kit, B, render, pack_colours  # noqa: E402
 import far  # noqa: E402
 import surface  # noqa: E402
+import maps  # noqa: E402
 
 # TWISTY_BIKE_DIR builds a variant elsewhere (a model-build round), its far file in a `far` folder beside it
 OUT_DIR = os.environ.get("TWISTY_BIKE_DIR") or os.path.join(common.ASSETS, "bikes", "detail")
@@ -62,8 +65,11 @@ def along(a, b, t):
 class EKit(Kit):
     """The shared kit, building one bike at two levels of detail into one scene."""
 
-    def __init__(self, seed, colours, cull=0.09, extra=None, layers=None, headroom=1.0):
+    def __init__(self, seed, colours, cull=0.09, extra=None, layers=None, headroom=1.0, maps=None):
         super().__init__(seed=seed, colours=colours)
+        # The surface layers baked into texture maps (maps.py; a surface.config with the steps to bake), or None for
+        # a file with no maps. TWISTY_MAPS=0 builds without them, for a comparison
+        self.maps = maps if os.environ.get("TWISTY_MAPS", "1") != "0" else None
         # The surface layers worked over the occlusion (surface.config), or None for the occlusion alone; `headroom`
         # is how far a finish may be raised so wear can lighten it (surface.py)
         # (TWISTY_SURFACE and TWISTY_HEADROOM set them for a variant build of any bike of this kit)
@@ -167,6 +173,10 @@ class EKit(Kit):
             self.occlude_level(mine, joined)
             if self.layers:
                 surface.apply(list(mine.values()), self.layers, self.colours, seed=self.seed, headroom=self.headroom)
+        baked = None
+        if self.maps:
+            blocks = maps.unwrap(list(joined.values()), [obj for key, obj in joined.items() if key.startswith("lod1_")])
+            baked = maps.bake(list(joined.values()), self.maps, self.colours, seed=self.seed, headroom=self.headroom, blocks=blocks)
         groups = {}
         marks = []
         for lod in LODS:
@@ -182,9 +192,18 @@ class EKit(Kit):
                 self.scene.collection.objects.link(mark)
                 mark.parent = group
                 marks.append(mark)
-        common.export_glb(path, list(joined.values()) + marks + list(groups.values()), colours=True, texcoords=False)
+        common.export_glb(path, list(joined.values()) + marks + list(groups.values()), colours=True, texcoords=bool(baked))
         pack_colours(path, unit=UNIT)
         size = rename_nodes(path)
+        if baked:
+            arrays, extras = baked
+            # (each map is written out once to be encoded, outside the repository: TWISTY_MAPS_DIR keeps them to look at)
+            folder = os.environ.get("TWISTY_MAPS_DIR") or tempfile.mkdtemp(prefix="twisty-maps-")
+            files = {key: maps.webp(arrays[key], os.path.join(folder, f"{os.path.splitext(os.path.basename(path))[0]}-{key}.webp"), maps.QUALITY[key]) for key in arrays}
+            if not os.environ.get("TWISTY_MAPS_DIR"):
+                shutil.rmtree(folder)
+            size = maps.attach(path, files, extras)
+            print(f"{os.path.basename(path)}: maps " + ", ".join(f"{key} {len(blob)} bytes" for key, blob in files.items()))
         counts = {lod: {} for lod in LODS}
         for key, obj in joined.items():
             lod, name = key.split("_", 1)

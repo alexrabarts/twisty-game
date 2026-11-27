@@ -30,6 +30,7 @@ import sys
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 import _kit_E as E  # noqa: E402
 import bike_parts as parts  # noqa: E402
+import surface  # noqa: E402
 
 NAME = "bike15_crf250"
 OUT = os.path.join(E.OUT_DIR, NAME + ".glb")
@@ -369,7 +370,8 @@ def draw(k):
 
 
 def build():
-    k = E.EKit(seed=115, colours=COLOURS, extra=EXTRA)
+    # The surface layers baked into maps (all seven steps, maps.py), with room for wear to lighten an edge
+    k = E.EKit(seed=115, colours=COLOURS, extra=EXTRA, maps=surface.config(surface.STEPS), headroom=1.15)
     for lod in E.LODS:
         k.level(lod)
         draw(k)

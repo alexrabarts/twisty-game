@@ -168,3 +168,9 @@ global.localStorage = {
 global.performance = {
   now: jest.fn(() => Date.now())
 };
+// The tests read the model files with js/sceneassets.js, which decodes a file's maps (a detailed bike's baked maps)
+// with the browser's createImageBitmap. Node has none: a stand-in gives each image its byte count, as
+// tests/unit/sceneassets.test.js does for the rocks
+if (typeof globalThis.createImageBitmap !== 'function') {
+  globalThis.createImageBitmap = async blob => ({ width: 1, height: 1, bytes: blob.size, close() {} });
+}

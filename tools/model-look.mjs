@@ -19,7 +19,7 @@
 //        [--set paint.roughness=0.6] [--set exposure=1.1] [--views front3q,side] [--close handlebar | --close-at x,y,z,r]
 //        [--size 1440x900] [--gpu] [--chrome <path>] --out <dir>
 //   node tools/model-look.mjs --model assets/cars/hatchback.glb --out <dir>
-//   node tools/model-look.mjs --sheet <dir>=<label>,<dir>=<label>[,...] --out <dir>
+//   node tools/model-look.mjs --sheet <dir>=<label>,<dir>=<label>[,...] --out <dir> [--views close] [--crop x,y,w,h --crop-name wheel]
 //
 // --set names a value of the scene: `<material>.<color|roughness|metalness|envMapIntensity|emissiveIntensity>=<value>`
 // on the subject's materials of that name, `exposure=<v>` (tone mapping), `sun=<v>` (the sun's intensity). --file and
@@ -303,9 +303,17 @@ async function cropImage(url, box, scale) {
 }
 
 // In the page: a sheet of pictures in columns with a label over each, as a data URL
-async function sheetImage(columns, width) {
+async function sheetImage(columns, width, crop) {
     const load = src => new Promise(done => { const i = new Image(); i.onload = () => done(i); i.onerror = () => done(null); i.src = src; });
-    const images = await Promise.all(columns.map(c => (c.src ? load(c.src) : null)));
+    const cut = (image) => {
+        if (!image || !crop) return image;
+        const c = document.createElement('canvas');
+        c.width = Math.round(crop[2] * image.width);
+        c.height = Math.round(crop[3] * image.height);
+        c.getContext('2d').drawImage(image, crop[0] * image.width, crop[1] * image.height, c.width, c.height, 0, 0, c.width, c.height);
+        return c;
+    };
+    const images = (await Promise.all(columns.map(c => (c.src ? load(c.src) : null)))).map(cut);
     const head = 34, gap = 8;
     const heights = images.map(i => (i ? Math.round(i.height * width / i.width) : 0));
     const canvas = document.createElement('canvas');
@@ -352,14 +360,17 @@ async function sheets() {
         .sort((a, b) => (VIEWS.indexOf(a) + 1 || 99) - (VIEWS.indexOf(b) + 1 || 99) || a.localeCompare(b));
     const { browser, page } = await browserPage(false);
     const width = Number(option('width') || 720);
+    // --crop x,y,w,h (shares of each picture): the same part of every run, for a part a whole picture shows too small
+    const crop = option('crop') ? option('crop').split(',').map(Number) : null;
+    const only = option('views') ? option('views').split(',') : null;
     const made = [];
-    for (const view of views) {
+    for (const view of views.filter(v => !only || only.includes(v))) {
         const columns = runs.map(r => {
             const file = join(r.dir, `${view}.png`);
             return { label: `${r.label} · ${view}`, src: existsSync(file) ? `data:image/png;base64,${readFileSync(file).toString('base64')}` : null };
         });
-        const file = join(out, `sheet-${view}.png`);
-        save(file, await page.evaluate(sheetImage, columns, width));
+        const file = join(out, `sheet-${view}${crop ? `-${option('crop-name') || 'crop'}` : ''}.png`);
+        save(file, await page.evaluate(sheetImage, columns, width, crop));
         made.push(file);
     }
     await browser.close();

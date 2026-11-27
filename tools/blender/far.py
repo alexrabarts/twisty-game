@@ -35,6 +35,7 @@ from mathutils import Vector, kdtree
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 import common  # noqa: E402
+import maps  # noqa: E402
 
 DETAIL = os.path.join(common.ASSETS, "bikes", "detail")
 FAR = os.path.join(common.ASSETS, "bikes", "far")
@@ -386,7 +387,8 @@ def bike(path):
     group = next(node for node in doc["nodes"] if node["name"] == "lod1")
     at = group.get("translation", (0.0, 0.0, 0.0))
     children = {doc["nodes"][i]["name"]: doc["nodes"][i] for i in group["children"]}
-    materials = {m["name"]: m for m in doc["materials"]}
+    # (a detail file with baked maps: each material as its plain finish, maps.plain; a far file keeps no maps)
+    materials = {m["name"]: maps.plain(m) for m in doc["materials"]}
     colours = {n: tuple(m.get("pbrMetallicRoughness", {}).get("baseColorFactor", (1, 1, 1, 1))[:3]) + (m.get("pbrMetallicRoughness", {}).get("metallicFactor", 1.0),)
                for n, m in materials.items()}
     marks = {n: [a + b for a, b in zip(at, node.get("translation", (0, 0, 0)))] for n, node in children.items() if "mesh" not in node}
@@ -466,7 +468,8 @@ def lifted(shape, lift=MARK_LIFT_M):
 def rider(path=RIDER, out=RIDER_FAR):
     scene()
     doc, binary = read(path)
-    materials = {m["name"]: m for m in doc["materials"]}
+    # (a detail file with baked maps: each material as its plain finish, maps.plain; a far file keeps no maps)
+    materials = {m["name"]: maps.plain(m) for m in doc["materials"]}
     nodes, marks, counts = {}, {}, {}
     for node in doc["nodes"]:
         if "mesh" not in node:

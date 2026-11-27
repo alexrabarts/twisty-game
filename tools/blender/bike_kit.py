@@ -590,6 +590,8 @@ def pack_colours(path, unit=None):
     formats = {5120: "b", 5121: "B", 5122: "h", 5123: "H", 5125: "I", 5126: "f"}
     colours = {p["attributes"]["COLOR_0"] for m in doc["meshes"] for p in m["primitives"] if "COLOR_0" in p["attributes"]}
     normals = {p["attributes"]["NORMAL"] for m in doc["meshes"] for p in m["primitives"] if "NORMAL" in p["attributes"]}
+    # (a file with baked maps, maps.py: its texture coordinates as normalised unsigned shorts, as glTF allows)
+    texcoords = {p["attributes"]["TEXCOORD_0"] for m in doc["meshes"] for p in m["primitives"] if "TEXCOORD_0" in p["attributes"]}
     positions = {p["attributes"]["POSITION"] for m in doc["meshes"] for p in m["primitives"]} if unit else set()
     chunks = []
     offset = 0
@@ -628,6 +630,12 @@ def pack_colours(path, unit=None):
                 out += struct.pack("<3hxx", *whole[i * 3:i * 3 + 3])
             accessor.update(componentType=5122, min=[min(whole[c::3]) for c in range(3)], max=[max(whole[c::3]) for c in range(3)])
             blob = bytes(out)
+        elif index in texcoords and accessor["componentType"] == 5126:
+            out = struct.pack(f"<{count}H", *(max(0, min(65535, round(v * 65535))) for v in values))
+            accessor.update(componentType=5123, normalized=True)
+            accessor.pop("min", None)
+            accessor.pop("max", None)
+            blob = out
         elif index in normals and accessor["componentType"] == 5126:
             out = bytearray()
             for i in range(accessor["count"]):

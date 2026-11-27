@@ -104,7 +104,9 @@ describe('model files', () => {
         expect(stats.levels.lod1.triangles).toBeLessThanOrEqual(10000);
         expect(stats.levels.lod0.drawCalls).toBeGreaterThanOrEqual(stats.levels.lod0.nodes);
         expect(stats.bytes).toBeLessThanOrEqual(1.2 * 1024 * 1024);
-        expect(stats.textureBytes).toBe(0);
+        // (its baked maps: tests/unit/bike-maps.test.js holds their budget)
+        expect(stats.textureBytes).toBeGreaterThan(0);
+        expect(stats.textureBytes).toBeLessThan(stats.bytes);
     });
 
     test('a file with no levels is counted whole, its textures too', () => {
