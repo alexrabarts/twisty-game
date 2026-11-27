@@ -484,6 +484,7 @@ class TubeShade {
                 uTubeLamp: { value: new THREE.Color().setRGB(L.color[0], L.color[1], L.color[2], THREE.LinearSRGBColorSpace) },
                 uTubeLight: { value: new THREE.Vector4(T.lampM, T.entranceM, L.strength, L.lampH) },
                 uTubeFill: { value: L.fill },
+                uTubeTime: { value: 0 },
                 uTubeDetail: { value: 1 },
                 // The vehicles and riders near the camera (TubeShade.movers): x, z, the tube's light share and the
                 // lamps' light where each stands
@@ -531,9 +532,10 @@ class TubeShade {
         };
         const k = Math.floor(s / T.lampM);
         let e = 0;
-        for (let i = -1; i <= 2; i++) e += at((k + i) * T.lampM);
+        const time = TubeShade.shared ? TubeShade.shared.uTubeTime.value : 0;
+        for (let i = -1; i <= 2; i++) e += at((k + i) * T.lampM) * TubeShade.lampState(2 * (k + i), inM, time);
         const entrance = 1 - Math.min(1, Math.max(0, (inM - (T.entranceM - 4)) / 8));
-        if (entrance > 0) for (let i = -1; i <= 1; i++) e += at((k + i + 0.5) * T.lampM) * entrance;
+        if (entrance > 0) for (let i = -1; i <= 1; i++) e += at((k + i + 0.5) * T.lampM) * entrance * TubeShade.lampState(2 * (k + i) + 1, inM, time);
         return e * L.strength + L.fill * (1 + entrance);
     }
 
@@ -597,6 +599,54 @@ reflectedLight.indirectDiffuse = reflectedLight.indirectDiffuse * (1.0 - vTubeMo
 reflectedLight.indirectSpecular *= 1.0 - 0.8 * vTubeMover.x;`);
     }
 
+    // A few lamps have failed (TubeShade.lampState): `dead` the share that are dark (never two in a row), `flicker`
+    // the share that flicker, never within `calmM` of a portal (the eye adapts there). A flickering lamp is a failing
+    // tube: on, with a short dropout now and then (`dropRate` a second, at most) and a stutter in it at `stutterHz`,
+    // dimmed to `low`; no change of light comes faster than 3 a second
+    static get FAIL() { return { dead: 0.025, flicker: 0.01, calmM: 58, dropRate: 0.9, stutterHz: 1.4, low: 0.3 }; }
+
+    // The light a lamp gives, 0 to 1: lamp `id` is the one at id * lampM / 2 metres along (the ride's, or its road's),
+    // `inM` metres in from the nearest portal, `time` seconds. As LAMP_STATE_GLSL
+    static lampState(id, inM, time = 0) {
+        const F = TubeShade.FAIL, h = i => LandShade.glslHash(i, 53);
+        const v = h(id);
+        if (v < F.dead && h(id - 1) >= F.dead && h(id - 2) >= F.dead) return 0;
+        if (v > 1 - F.flicker && inM > F.calmM) {
+            const n = LandShade.glslNoise(time * F.dropRate + id * 7.31, id * 0.37);
+            const drop = Math.min(1, Math.max(0, (n - 0.72) / 0.06));
+            const stutter = 0.6 + 0.4 * ((time * F.stutterHz + LandShade.glslHash(id, 59)) % 1 < 0.5 ? 1 : 0);
+            return 1 - (1 - F.low) * drop * stutter;
+        }
+        return 1;
+    }
+
+    static get LAMP_STATE_GLSL() {
+        const F = TubeShade.FAIL, f = v => (Number.isInteger(v) ? `${v}.0` : `${v}`);
+        return `
+float tubeLampHash(vec2 p) { vec3 q = fract(vec3(p.xyx) * 0.1031); q += dot(q, q.yzx + 33.33); return fract((q.x + q.y) * q.z); }
+float tubeLampNoise(vec2 p) {
+    vec2 i = floor(p), f = fract(p);
+    vec2 u = f * f * (3.0 - 2.0 * f);
+    return mix(mix(tubeLampHash(i), tubeLampHash(i + vec2(1.0, 0.0)), u.x), mix(tubeLampHash(i + vec2(0.0, 1.0)), tubeLampHash(i + vec2(1.0, 1.0)), u.x), u.y);
+}
+float tubeLampState(float id, float inM) {
+    float v = tubeLampHash(vec2(id, 53.0));
+    if (v < ${f(F.dead)} && tubeLampHash(vec2(id - 1.0, 53.0)) >= ${f(F.dead)} && tubeLampHash(vec2(id - 2.0, 53.0)) >= ${f(F.dead)}) return 0.0;
+    if (v > ${f(1 - F.flicker)} && inM > ${f(F.calmM)}) {
+        float n = tubeLampNoise(vec2(uTubeTime * ${f(F.dropRate)} + id * 7.31, id * 0.37));
+        float drop = clamp((n - 0.72) / 0.06, 0.0, 1.0);
+        float stutter = 0.6 + 0.4 * step(fract(uTubeTime * ${f(F.stutterHz)} + tubeLampHash(vec2(id, 59.0))), 0.5);
+        return 1.0 - ${f(1 - F.low)} * drop * stutter;
+    }
+    return 1.0;
+}`;
+    }
+
+    // Simulated time for the failing lamps (Game.updateTubeAdaptation)
+    static tick(dt) {
+        if (dt > 0) TubeShade.uniforms.uTubeTime.value = (TubeShade.uniforms.uTubeTime.value + dt) % 3600;
+    }
+
     static setDetail(on) {
         TubeShade.uniforms.uTubeDetail.value = on ? 1 : 0;
     }
@@ -610,6 +660,8 @@ reflectedLight.indirectSpecular *= 1.0 - 0.8 * vTubeMover.x;`);
 uniform vec3 uTubeLamp;
 uniform vec4 uTubeLight;
 uniform float uTubeFill;
+uniform float uTubeTime;
+${TubeShade.LAMP_STATE_GLSL}
 float tubeLampAt(float ls, float s, float lat, float h, vec3 n) {
     vec3 d = vec3(ls - s, -lat, uTubeLight.w - h);
     float r2 = dot(d, d) + 0.25;
@@ -623,11 +675,11 @@ vec3 tubeLamps(float s, float lat, float h, vec3 n, float inM) {
     float L = uTubeLight.x;
     float k = floor(s / L);
     float e = 0.0;
-    for (int i = -1; i <= 2; i++) e += tubeLampAt((k + float(i)) * L, s, lat, h, n);
+    for (int i = -1; i <= 2; i++) e += tubeLampAt((k + float(i)) * L, s, lat, h, n) * tubeLampState(2.0 * (k + float(i)), inM);
     float entrance = 1.0 - smoothstep(uTubeLight.y - 4.0, uTubeLight.y + 4.0, inM);
     if (entrance > 0.0) {
         float e2 = 0.0;
-        for (int i = -1; i <= 1; i++) e2 += tubeLampAt((k + float(i) + 0.5) * L, s, lat, h, n);
+        for (int i = -1; i <= 1; i++) e2 += tubeLampAt((k + float(i) + 0.5) * L, s, lat, h, n) * tubeLampState(2.0 * (k + float(i)) + 1.0, inM);
         e += e2 * entrance;
     }
     // (the fill: what the lamps' light gives a face after the walls have thrown it back, more where the lamps are dense)
@@ -790,7 +842,7 @@ vec3 tubeEmit = vec3(0.0);
         // A lamp's diffuser: bright, a darker frame round it
         vec2 uv = vTubeLocal;
         float frame = smoothstep(0.0, 0.06, min(min(uv.x, 1.0 - uv.x) * 6.0, min(uv.y, 1.0 - uv.y)));
-        tubeEmit = uTubeLamp * 4.5 * frame;
+        tubeEmit = uTubeLamp * 4.5 * frame * tubeLampState(floor(tubeS / (0.5 * uTubeLight.x) + 0.5), vTubeAux.w);
         c *= mix(0.35, 1.0, frame);
     } else if (tubeKind == ${f(K.metal)} || tubeKind == ${f(K.fan)}) {
         c *= 0.85 + 0.25 * tubeNoise(vec2(tubeS * 3.0, tubeH * 3.0));

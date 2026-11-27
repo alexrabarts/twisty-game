@@ -2149,6 +2149,7 @@ class Game {
         const now = Number.isFinite(graphics.adaptation) ? graphics.adaptation : 1;
         const tau = goal > now ? L.inS : L.outS;
         graphics.adaptation = !(dt > 0) ? now : now + (goal - now) * (1 - Math.exp(-dt / tau));
+        TubeShade.tick(dt);
         this.updateTubeMovers();
     }
 
