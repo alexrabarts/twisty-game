@@ -842,7 +842,42 @@ class RoadMesh {
             });
         }
         RoadMesh.placePiers(out, [pts], { groundAt, guard, width: Math.min(3, rows[from].width / 2), depth: 2, styles: [style] });
+        if (groundAt) RoadMesh.lowDeck(out, rows, from, to, groundAt, guard, ends, style);
         return out;
+    }
+
+    // Under a deck the land comes within LOW_DECK_M of: no open slot between a thin slab and the slope (Tremola s 8313
+    // to 8336, a grey slab hanging over the hillside seen from the leg below), but solid side walls from the slab's
+    // underside down into the land, under its edge beams, and at an end of the run where both sides are low, an
+    // abutment face across: a box. Each face only where the land is known at both its corners, under LOW_DECK_M at
+    // both, and clear of every other carriageway (`guard`)
+    static get LOW_DECK_M() { return 5; }
+    static get LOW_DECK_SINK_M() { return 0.8; }
+    static lowDeck(out, rows, from, to, groundAt, guard, ends, style) {
+        const D = RoadMesh.DECK_M, I = StructureBuild.BEAM_IN_M, L = RoadMesh.LOW_DECK_M, sink = RoadMesh.LOW_DECK_SINK_M;
+        const under = (row, sign) => {
+            const p = RoadMesh.place(row, sign * (row.width / 2 + RoadMesh.BRIDGE_DECK_M - I));
+            const land = groundAt(p.x, p.z), top = row.y - D;
+            return Number.isFinite(land) && top - land < L ? { p: [p.x, top, p.z], foot: land - sink } : null;
+        };
+        const clear = (a, b) => !guard || [a, b].every(q => guard.clear(q.p[0], q.p[2], q.foot, q.p[1], 0.1));
+        const color = RoadMesh.COLORS.deck, look = style.look;
+        const face = (a, b) => {
+            const start = StructureShade.begin(out);
+            RoadMesh.quad(out, a.p, b.p, [b.p[0], b.foot, b.p[2]], [a.p[0], a.foot, a.p[2]], color);
+            StructureShade.end(out, start, 'pier', look, (x, y) => Math.max(0, Math.max(a.p[1], b.p[1]) - y));
+        };
+        for (const sign of [-1, 1]) {
+            for (let i = from; i < to; i++) {
+                const a = under(rows[i], sign), b = under(rows[i + 1], sign);
+                if (a && b && clear(a, b)) face(a, b);
+            }
+        }
+        for (const [on, i] of [[ends[0], from], [ends[1], to]]) {
+            if (!on) continue;
+            const l = under(rows[i], -1), r = under(rows[i], 1);
+            if (l && r && clear(l, r)) face(l, r);
+        }
     }
 
     // Where the ride is walled on both edges an arched stone viaduct stands in place of the two retaining walls
