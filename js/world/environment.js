@@ -51,6 +51,7 @@ class WorldEnvironment {
     static get SIDE_MEET_MIN_M() { return 12; }
     static get SIDE_MEET_MAX_M() { return 45; }
     static get SIDE_FILL_M() { return 16; }
+    static get SIDE_RAMP_GRADE() { return 0.12; }
     static get SIDE_ROW_MIN_M() { return 1.5; }
     // A side road's wall that ends this near the end of one of the ride's is joined to it (wallJoins)
     static get WALL_JOIN_M() { return 8; }
@@ -1744,6 +1745,25 @@ class WorldEnvironment {
         return WorldStreamer.drain(this.holdSideSteps(rows, before, after));
     }
 
+    // Whether a ramp from row `e` of `rows` (toward `away`, `delta` metres off its own height over `length`) lies
+    // under the land past SIDE_FILL_M: the land drawn there (a resident tile, at full detail) over the ramp's edge
+    // lines. A tile not here reads as no land
+    rampUnderLand(rows, e, away, along, delta, length) {
+        for (let i = e + away; i >= 0 && i < rows.length && !rows[i].held; i += away) {
+            const d = Math.abs(along[i] - along[e]);
+            if (d >= length) break;
+            if (d <= WorldEnvironment.SIDE_FILL_M) continue;
+            const row = rows[i], t = d / length, share = 1 - t * t * (3 - 2 * t);
+            const own = row.own === undefined ? row.y : row.own, y = own + delta * share;
+            for (const lat of [-0.5, 0.5]) {
+                const o = lat * row.width, x = row.x + o * Math.cos(row.heading), z = row.z - o * Math.sin(row.heading);
+                const land = this.ground.tileHeight(x, z, false);
+                if (land !== null && land > y + 0.05) return true;
+            }
+        }
+        return false;
+    }
+
     // The same in steps, HOLD_SIDE_STEP rows at a time (a long side road's rows read whole took up to 38 ms)
     static get HOLD_SIDE_STEP() { return 24; }
 
@@ -1804,7 +1824,15 @@ class WorldEnvironment {
         out.forEach((from, e) => {
             if (!from.away) return;
             const delta = from.y - from.own;
-            const length = Math.min(WorldEnvironment.SIDE_MEET_MAX_M, Math.max(WorldEnvironment.SIDE_MEET_MIN_M, (1.5 * Math.abs(delta)) / WorldEnvironment.SIDE_MEET_GRADE));
+            let length = Math.min(WorldEnvironment.SIDE_MEET_MAX_M, Math.max(WorldEnvironment.SIDE_MEET_MIN_M, (1.5 * Math.abs(delta)) / WorldEnvironment.SIDE_MEET_GRADE));
+            // (a ramp that holds the road under its own height, where the land past the junction's fill stands over
+            // the road as the ramp lays it, ends within SIDE_FILL_M of the band: the land is shaped to the road's own
+            // height, and stood 0.32 m over the ramp 30 m out at leg 5's j208. Where the land lies under the ramp it
+            // keeps its length: shortened there too, the Gotthard leg's j29 and j76 grew too steep to ride up)
+            if (delta < 0 && length > WorldEnvironment.SIDE_FILL_M) {
+                const short = Math.max(WorldEnvironment.SIDE_FILL_M, (1.5 * -delta) / WorldEnvironment.SIDE_RAMP_GRADE);
+                if (short < length && this.rampUnderLand(out, e, from.away, along, delta, length)) length = short;
+            }
             for (let i = e + from.away; i >= 0 && i < out.length && !out[i].held; i += from.away) {
                 const d = Math.abs(along[i] - along[e]);
                 // The first row past the ramp is kept too: where the road is at its own height again
