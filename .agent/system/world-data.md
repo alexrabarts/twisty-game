@@ -200,6 +200,19 @@ One ride, Andermatt over the Schöllenen to Göschenen, down to Wassen, up the M
 - **A stage with fewer checkpoints.** Leg 3's first target lies among the Schöllenen's tunnels and galleries. Where a dropped target would leave a gap over twice the spacing, a stage now takes one checkpoint fewer, placed evenly again; one with no place at all, up to four times the spacing long, is timed in one link (`placeStations`). Leg 3 has 1 checkpoint where its length gives 2; legs 4 and 5 have 10 and 6 (leg 5's target at s 40 113 is within 80 m of a structure and dropped).
 - **Landmarks with no model.** The old Devil's Bridge and the Urnerloch are listed (`tools/world/landmarks.json`) with no model; the importer leaves such a landmark out and says so, instead of stopping.
 
+### The stops of `worlds/haslital`
+
+One ride, Gadmen down to Innertkirchen, up the Haslital to Guttannen and up to the Grimsel pass, 37.9 km in three stages (legs 6 to 8 of the tour): `node tools/world/import.mjs --stages gadmen-innertkirchen,innertkirchen-guttannen,guttannen-grimsel --out worlds/haslital`, then `node tools/world/tour.mjs`. 267 height tiles, 31 structures, 2 places from the map and 64 found, 4.57 MB. The placeholder box of the Grimsel dam wall (`tools/world/landmarks.json`) is left out.
+
+| Stop | Kind | Area | Way in |
+| --- | --- | --- | --- |
+| Start of `gadmen-innertkirchen` | `carpark` | the public car park at the west edge of Gadmen (leg 5's end stop in worlds/susten) | by road |
+| End of `gadmen-innertkirchen`, start of `innertkirchen-guttannen` (line s 12 415.7) | `carpark` | the public car park on the Grimsel road at Innertkirchen, past the village's junction (`legStart`) | by road, turn-in at s 12 475.7 |
+| End of `innertkirchen-guttannen`, start of `guttannen-grimsel` (line s 20 468.9) | `carpark` | the public car park at Guttannen (`legStart`) | direct, turn-in at s 20 528.9 |
+| End of `guttannen-grimsel` (line s 37 946.7) | `carpark` | the public car park at the Grimsel pass, where leg 9 will start | direct, turn-in at s 38 006.7 |
+
+- Legs 6 to 8 have 5, 3 and 8 checkpoints; no target was dropped.
+
 ### The stops of `worlds/gotthard`
 
 | Stop | Kind | Area | Way in |

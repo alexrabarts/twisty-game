@@ -423,6 +423,83 @@
      }
     }
    }
+  },
+  "gadmen-innertkirchen": {
+   "name": "Gadmen to Innertkirchen",
+   "waypoints": [
+    33,
+    23
+   ],
+   "stops": {
+    "start": {
+     "kind": "carpark",
+     "e": 2669643,
+     "n": 1176582,
+     "raise": {
+      "tileLodM": [
+       1000,
+       2500
+      ],
+      "triangleScale": 1
+     }
+    },
+    "end": {
+     "kind": "carpark",
+     "e": 2660830,
+     "n": 1172559,
+     "legStart": true,
+     "raise": {
+      "tileLodM": [
+       700,
+       2000
+      ],
+      "triangleScale": 0.85
+     }
+    }
+   }
+  },
+  "innertkirchen-guttannen": {
+   "name": "Innertkirchen to Guttannen",
+   "waypoints": [
+    23,
+    24
+   ],
+   "stops": {
+    "end": {
+     "kind": "carpark",
+     "e": 2665189,
+     "n": 1167348,
+     "legStart": true,
+     "raise": {
+      "tileLodM": [
+       700,
+       2000
+      ],
+      "triangleScale": 0.85
+     }
+    }
+   }
+  },
+  "guttannen-grimsel": {
+   "name": "Guttannen up to the Grimsel pass",
+   "waypoints": [
+    24,
+    25
+   ],
+   "stops": {
+    "end": {
+     "kind": "carpark",
+     "e": 2668887,
+     "n": 1157043,
+     "raise": {
+      "tileLodM": [
+       1000,
+       2500
+      ],
+      "triangleScale": 1
+     }
+    }
+   }
   }
  },
  "points": [
