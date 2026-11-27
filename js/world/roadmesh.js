@@ -1212,6 +1212,9 @@ class RoadMesh {
     static get WALL_RUN_M() { return 10; }
     // The grid a retaining wall's style is picked on (StructureStyles.wall): walls that start in one square agree
     static get WALL_STYLE_M() { return 120; }
+    // How far a steel rail's upstand on a wall stands in from the wall's face (StructureStyles.WALLS `guard`): out of
+    // its plane for the depth test (world-structures reads 2 cm as one plane), within the 2.5 cm a seam is read at
+    static get RAIL_IN_M() { return 0.024; }
 
     // The outward direction of each side of a row's edge points
     static outward(side) {
@@ -1583,6 +1586,12 @@ class RoadMesh {
             const segs = fine ? fine.seg[key] : plan.seg[key], ends = fine ? fine.end[key] : plan.end[key];
             let i = fine ? sides[k].i - fine.base : k;
             if (fine) while (i + 1 < sides[k + 1].i - fine.base && !segs[i]) i++;
+            // (a piece past a wall's end, its face going on as the wall's taper, takes the nearest wall's style: one
+            // wall, one style, its parapet or rail with it)
+            for (let d = 1; !segs[i] && d < 64; d++) {
+                if (segs[i - d]) i -= d;
+                else if (segs[i + d]) i += d;
+            }
             let a = i, b = i;
             while (a > 0 && segs[a - 1]) a--;
             while (b + 1 < segs.length && segs[b + 1]) b++;
@@ -2431,8 +2440,14 @@ class RoadMesh {
             }
         }
         // The parapets, each run of them one continuous rail along the edge
+        // (a wall whose style's guard is a steel rail, StructureStyles.WALLS, carries the rail in its parapet's place: the
+        // same height, the same outer face, the structures' material)
+        const railed = (seg, key) => wallStyleOf(seg.k, key).guard === 'rail';
+        const steel = { look: 'cast', parapet: 'railing' };
         for (const key of ['l', 'r']) {
-            RoadMesh.rails(stone, rails.stone[key], W, H, colors.stone, RoadMesh.STONE_PROUD_M);
+            RoadMesh.rails(stone, rails.stone[key].filter(seg => !railed(seg, key)), W, H, colors.stone, RoadMesh.STONE_PROUD_M);
+            // (its upstand a few centimetres in from the wall's face: in the face's own plane the two fought in depth)
+            StructureBuild.parapet(wall, rails.stone[key].filter(seg => railed(seg, key)), W, H, steel, colors.concrete, RoadMesh.STONE_PROUD_M - RoadMesh.RAIL_IN_M);
             RoadMesh.rails(wall, rails.wall[key], W, H, colors.concrete);
         }
         while (stone.face.length < (stone.positions.length / 3) * 4) stone.face.push(0, 0, 0, 0);
@@ -2488,6 +2503,8 @@ class RoadMesh {
             const part = parts[i];
             for (const wall of part.walls) walls.push(Object.assign(wall, { owner: run.owner ?? -1 }));
             face.push(...part.stone.face);
+            // (a wall's steel rail carries its marks, StructureShade, as a structure part does)
+            if (StructureShade.marks(part.wall)) structureMarks.push([works.wall.positions.length / 3, part.wall.mark]);
             for (const key of ['apron', 'wall', 'stone', 'paving']) {
                 works[key].positions.push(...part[key].positions);
                 works[key].shades.push(...part[key].shades);

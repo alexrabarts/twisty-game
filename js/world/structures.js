@@ -52,15 +52,17 @@ class StructureStyles {
 
     // The retaining wall styles: what a wall's face shows under its top `masonryM` of dressed courses (`base`: none,
     // 'rubble' large rough blocks, 'gabion' wire baskets of stone in courses of a metre, 'faced' concrete with a stone
-    // facing and weep holes), and how many of the walls that may take it do (`weight`). A wall lower than `tallM` keeps
+    // facing and weep holes), and how many of the walls that may take it do (`weight`). `guard` is what stands on its
+    // top where the guard rule asks for one (WorldEnvironment.wallRailed: a drop of PARAPET_DROP_M or more): a masonry
+    // 'parapet', or a steel 'rail' on a low upstand, the same height and place (the physics' parapet is the same). A wall lower than `tallM` keeps
     // the masonry alone. The stone's blocks grow down the face (`grow`: their size at 6 m down over their size at the
     // top). The shader's table is WALL_GLSL; the order is the code each face carries (StructureStyles.wallCode)
     static get WALLS() {
         return {
-            masonry: { base: null, weight: 0.25, grow: 1.6 },
-            rubble: { base: 'rubble', weight: 0.3, grow: 1.4 },
-            gabion: { base: 'gabion', weight: 0.25, grow: 1.4 },
-            faced: { base: 'faced', weight: 0.2, grow: 1.3 }
+            masonry: { base: null, weight: 0.25, grow: 1.6, guard: 'parapet' },
+            rubble: { base: 'rubble', weight: 0.3, grow: 1.4, guard: 'parapet' },
+            gabion: { base: 'gabion', weight: 0.25, grow: 1.4, guard: 'rail' },
+            faced: { base: 'faced', weight: 0.2, grow: 1.3, guard: 'rail' }
         };
     }
     static get WALL_RULE() { return { tallM: 3.6, masonryM: 2.2, variants: 4 }; }
@@ -77,7 +79,7 @@ class StructureStyles {
             let sum = 0;
             for (const [key, style] of Object.entries(StructureStyles.WALLS)) { sum += style.weight; if (h < sum) { name = key; break; } }
         }
-        return { name, code: names.indexOf(name) * R.variants + v };
+        return { name, code: names.indexOf(name) * R.variants + v, guard: StructureStyles.WALLS[name].guard };
     }
 
     // A wall's face's second wallFace value: 1 (a wall's face) plus its style's code and its metres down from the top
@@ -550,10 +552,10 @@ class StructureBuild {
     // A parapet's run (RoadMesh.rails' segments) by `style`: concrete or stone as RoadMesh.rails lays it, or a railing:
     // a low upstand and two steel rails on posts (StructureShade.RAIL), to the same height
     static get UPSTAND_M() { return 0.3; }
-    static parapet(out, segments, w, h, style, color) {
+    static parapet(out, segments, w, h, style, color, proud = 0) {
         let start = StructureShade.begin(out);
         if (style.parapet !== 'railing') {
-            RoadMesh.rails(out, segments, w, h, color);
+            RoadMesh.rails(out, segments, w, h, color, proud);
             StructureShade.end(out, start, 'parapet', style.parapet === 'stone' ? 'stone' : style.look, (px, py, pz) => {
                 let best = Infinity, y = py;
                 for (const s of segments) for (const p of [s.pa, s.pb]) { const dd = Math.hypot(p[0] - px, p[2] - pz); if (dd < best) { best = dd; y = p[1]; } }
@@ -566,10 +568,10 @@ class StructureBuild {
         // shader draws the rails and the posts on it and cuts the rest away, RAIL_GLSL; its metres up from the
         // upstand in wallFace y)
         const up = StructureBuild.UPSTAND_M;
-        RoadMesh.rails(out, segments, w, up, color);
+        RoadMesh.rails(out, segments, w, up, color, proud);
         StructureShade.end(out, start, 'parapet', style.look, () => 0);
         const steel = [0.62, 0.63, 0.64];
-        const lift = (p, o, dy) => [p[0], p[1] + dy, p[2]];
+        const lift = (p, o, dy) => [p[0] + o[0] * proud, p[1] + dy, p[2] + o[1] * proud];
         for (const s of segments) {
             if (s.drawn === false) continue;
             StructureShade.quad(out, lift(s.pa, s.o, up), lift(s.pb, s.o, up), lift(s.pb, s.o, h), lift(s.pa, s.o, h), steel, 'rail', style.look, [0, 0, h - up, h - up]);
