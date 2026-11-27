@@ -481,6 +481,8 @@ class WorldEnvironment {
             const sign = runs => runs.map(run => run.key + run.points.map(p => `${Math.round(p[0] * 100)},${Math.round(p[2] * 100)}`).join(' ')).join('|');
             const plan = yield* env.rideWallsSteps(index);
             if (sign(plan.runs) !== sign(old.runs)) env.dropCuts(env.streamer.sections[index].bbox);
+            // (the same walls: the section is not built again, and its taper stays as drawn)
+            else if (old.plan && old.plan.drawn && plan.plan && !plan.plan.drawn) plan.plan.drawn = old.plan.drawn;
         });
     }
 
@@ -1252,6 +1254,18 @@ class WorldEnvironment {
     taperAt(index, sign, t = 0) {
         if (this.walledAt(index, sign) !== false) return 0;
         const walls = this.rideWalls(this.rowSection[Math.max(0, Math.min(this.rowSection.length - 1, index))]);
+        // As RoadMesh.edgeWorks laid it at full detail (`drawn`): the share at its samples along the segment, or none.
+        // Read from the plan's `past` alone, the physics stood on a coping past a wall's end where the drawing laid none
+        // (a side road's mouth at leg 5's s 37 555, the ground 0.5 m over the verge drawn there)
+        const drawn = walls.plan.drawn && walls.plan.drawn[sign > 0 ? 'r' : 'l'][index - walls.plan.base];
+        if (drawn !== undefined) {
+            if (drawn === null) return 0;
+            const at = RoadMesh.TAPER_SAMPLES, u = Math.max(0, Math.min(1, t || 0));
+            let j = 0;
+            while (j + 2 < at.length && u > at[j + 1]) j++;
+            const f = (u - at[j]) / (at[j + 1] - at[j]);
+            return drawn[j] + (drawn[j + 1] - drawn[j]) * f;
+        }
         const past = walls.plan.past && walls.plan.past[sign > 0 ? 'r' : 'l'];
         const a = past && past[index - walls.plan.base], b = past && past[index + 1 - walls.plan.base];
         if (!a || !b) return 0;

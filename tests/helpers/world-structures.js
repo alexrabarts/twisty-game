@@ -169,6 +169,9 @@ export function structureWindow(game, env, { seen = new Set(), done = new Set(),
             for (const [i, j] of edges) {
                 const ax = P[i][0], az = P[i][2], bx = P[j][0], bz = P[j][2];
                 const vx = bx - ax, vz = bz - az, l = vx * vx + vz * vz;
+                // (an upright edge stands at its own plan point only: counted at every point of the face, the top of a
+                // face's far end stood over a road the face's near end passes under)
+                if (l < 1e-6 && Math.hypot(x - ax, z - az) > 0.05) continue;
                 const t = l === 0 ? 0 : ((x - ax) * vx + (z - az) * vz) / l;
                 if (t < -1e-6 || t > 1 + 1e-6) continue;
                 const yy = P[i][1] + (P[j][1] - P[i][1]) * Math.max(0, Math.min(1, t));
@@ -190,7 +193,7 @@ export function structureWindow(game, env, { seen = new Set(), done = new Set(),
         if (!worst) return;
         out.intrusions++;
         out.byKind[`${source}:${kind}`] = (out.byKind[`${source}:${kind}`] || 0) + 1;
-        hits.push({ source, kind, owner: owner instanceof Set ? [...owner][0] : owner, road: worst.road === -1 ? 'ride' : worst.road, depthM: Math.round(worst.depth * 100) / 100, overM: Math.round(worst.over * 100) / 100, x: Math.round(worst.x * 10) / 10, y: Math.round(worst.y * 10) / 10, z: Math.round(worst.z * 10) / 10, s: worst.s !== null ? Math.round(worst.s) : Math.round(route.project(worst.x, worst.z, null, {}).s) });
+        hits.push({ source, kind, owner: owner instanceof Set ? [...owner][0] : owner, road: worst.road === -1 ? 'ride' : worst.road, depthM: Math.round(worst.depth * 100) / 100, overM: Math.round(worst.over * 100) / 100, x: Math.round(worst.x * 10) / 10, y: Math.round(worst.y * 10) / 10, z: Math.round(worst.z * 10) / 10, s: worst.s !== null ? Math.round(worst.s) : Math.round(route.project(worst.x, worst.z, null, {}).s), tri: tri.map(c => Math.round(c * 100) / 100) });
     };
     const kinds = ['apron', 'deck', 'stone', 'apron'];
     const meshTriangles = (mesh, source, ownerOf) => {
@@ -212,7 +215,14 @@ export function structureWindow(game, env, { seen = new Set(), done = new Set(),
             }
         }
     };
-    for (const group of env.roadMeshes.values()) group.traverse(o => { if (o.isMesh && o.name !== 'road-ribbon') meshTriangles(o, 'ride', -1); });
+    // (a ride section's works are read as drawn at full detail: a far section's rows are 16 m and more apart, and its
+    // coping's chord round a bend stood over the carriageway's curve as its ribbon's chord does, by up to 0.7 m. The
+    // sweep's windows put every section at full detail once)
+    for (const [index, group] of env.roadMeshes) {
+        const held = env.streamer && env.streamer.roads.get(index);
+        if (held && held.lod > 0) continue;
+        group.traverse(o => { if (o.isMesh && o.name !== 'road-ribbon') meshTriangles(o, 'ride', -1); });
+    }
     for (const group of env.sideMeshes.values()) group.traverse(o => { if (o.isMesh && o.name !== 'road-side') meshTriangles(o, 'side', null); });
     // The physics on each stub, from the ride's carriageway out, across the side road
     const graph = env.graph, located = {}, proj = {};

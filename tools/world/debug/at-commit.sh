@@ -12,5 +12,5 @@ trap 'git -C "$here" worktree remove --force "$tree" >/dev/null 2>&1 || true' EX
 modules=$(readlink "$here/node_modules" 2>/dev/null || echo "$here/node_modules")
 ln -s "$modules" "$tree/node_modules"
 mkdir -p "$tree/tools/world/debug"
-cp "$here"/tools/world/debug/*.mjs "$tree/tools/world/debug/"
+cp "$here"/tools/world/debug/*.mjs "$here"/tools/world/debug/sweep.sh "$tree/tools/world/debug/"
 cd "$tree" && "$@"

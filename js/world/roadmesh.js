@@ -141,6 +141,9 @@ class RoadMesh {
     // The deepest a coping's mitre goes, in widths of the coping: on a sharper turn its point is cut back
     static get MITRE_MAX() { return 2; }
 
+    // Where along a segment the taper past a wall's end is recorded for the physics (edgeWorks `drawn`)
+    static get TAPER_SAMPLES() { return [0, 0.25, 0.5, 0.75, 1]; }
+
     // A side of a wall's block of stone that is not its face (`wallFace` 3: drawn from the side it faces only, lit by
     // the way given, its courses laid along the metres given): `out` the stone ({positions, shades, face})
 
@@ -1510,6 +1513,15 @@ class RoadMesh {
         // Where the retaining walls stand: the ride's plan as its section was given it (`sides.plan`, read for these
         // rows), else this road's own. With a plan no edge point decides a wall by itself
         const plan = sides.plan ? (sides.plan.base !== undefined ? RoadMesh.planFor(sides, sides.plan, foot, guard) : sides.plan) : yield* RoadMesh.wallPlanSteps(sides, foot, guard);
+        // The share of the slope's fall the stone past a wall's end holds, as drawn, recorded in the ride's plan for each
+        // of its segments these rows lay at full detail (`drawn`: TAPER_SAMPLES of it along the segment, null where
+        // none is laid), so the physics stands on the taper that is drawn (WorldEnvironment.taperAt). A far ribbon's
+        // rows skip rows of the plan and record nothing
+        const fine = sides.plan && sides.plan.base !== undefined && sides.every((side, k) => k === 0 || side.i === sides[k - 1].i + 1) ? sides.plan : null;
+        if (fine) {
+            fine.drawn = fine.drawn || { l: [], r: [] };
+            for (let k = 0; k + 1 < sides.length; k++) for (const key of ['l', 'r']) fine.drawn[key][sides[k].i - fine.base] = null;
+        }
         const colors = RoadMesh.COLORS;
         const rank = { apron: 1, wall: 2, deck: 3 };
         // A slope's foot stands on the land at its own place (`foot.land`, the land as it is drawn): between two rows
@@ -2066,6 +2078,7 @@ class RoadMesh {
                     const planned = [!!past && Number.isFinite(past[1][1]) && !Number.isFinite(past[0][1]), !!past && Number.isFinite(past[0][0]) && !Number.isFinite(past[1][0])];
                     const stops = [planned[0] || mouthRow(k) || (kindOf(k - 1, key) !== 'wall' && !slopes(k - 1)), planned[1] || mouthRow(k + 1) || (kindOf(k + 1, key) !== 'wall' && !slopes(k + 1))];
                     const share = t => Math.max(part(0, t), part(1, t)) * (stops[0] ? t : 1) * (stops[1] ? 1 - t : 1);
+                    if (fine) fine.drawn[key][sides[k].i - fine.base] = RoadMesh.TAPER_SAMPLES.map(share);
                     // (between two walls of this edge whose faces past their ends would end under WALL_GAP_M apart, it goes
                     // on to the next at its height however little it holds: two closed ends a few metres apart were two
                     // walls that stopped short, round the inside of a hairpin)
