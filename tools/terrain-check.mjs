@@ -4268,17 +4268,23 @@ const WORLD = {
         const route = env.route;
         twistyDev.freeze();
         new Function('game', 'cruise', `return (${pilotSource})(game, cruise)`)(game, 20);
-        const ride = (until, limit = 60 * 600) => {
-            for (let tick = 0; tick < limit && !until() && !v.crashed; tick++) twistyDev.step(1);
+        // (yielding now and then, so the streamer's reads come in: a ride that never yields holds the bike where the
+        // land has no data yet, Game.landHeld, for good; on leg 6 it stood in the lane past station 2)
+        const yieldEvery = async tick => { if (tick % 120 === 119) await new Promise(resolve => setTimeout(resolve, 0)); };
+        const ride = async (until, limit = 60 * 600) => {
+            for (let tick = 0; tick < limit && !until() && !v.crashed; tick++) { twistyDev.step(1); await yieldEvery(tick); }
         };
-        ride(() => game.checkpointsPassed >= 2);
-        const station = env.stationGates[2];
-        ride(() => v.routeS >= station.s + 300);
-        const before = { passed: game.checkpointsPassed, elapsed: game.raceElapsed(), s: v.routeS, penaltyMs: game.penaltyMs };
+        // (station 2, or the last before one more that is not the finish: leg 3 has one station between its start and
+        // its finish, and station 2 there was the finish)
+        const k = Math.max(0, Math.min(2, env.stationGates.length - 3));
+        await ride(() => game.checkpointsPassed >= k);
+        const station = env.stationGates[k];
+        await ride(() => v.routeS >= station.s + 300);
+        const before = { passed: game.checkpointsPassed, elapsed: game.raceElapsed(), s: v.routeS, penaltyMs: game.penaltyMs, crashed: v.crashed, cause: v.crashed ? v.crashCause || v.crashWhy || null : null, lateral: Math.round(v.projection.lateral * 100) / 100, speed: Math.round(v.speed * 10) / 10 };
         game.restartFromCheckpoint('key');
         const after = { s: v.projection.s, speed: v.speed, restarts: game.restarts, penaltyMs: game.penaltyMs, elapsedJump: game.raceElapsed() - before.elapsed, passed: game.checkpointsPassed, lastS: game.worldRun.lastS };
         // A crash 150 m on: no dialog, the cause in a call-out, and the game puts the bike back by itself
-        ride(() => v.routeS >= before.s + 150);
+        await ride(() => v.routeS >= before.s + 150);
         const crashAt = { s: v.projection.s, elapsed: game.raceElapsed(), restarts: game.restarts, ticks: twistyDev.ticks };
         v.crashed = true;
         v.crashCause = 'Hit the probe';
@@ -4286,10 +4292,10 @@ const WORLD = {
         const callout = [...document.querySelectorAll('.hud-top *')].map(el => el.textContent).find(text => /Hit the probe/.test(text)) || null;
         const dialogs = () => ['crashNotification', 'worldConfirm', 'world-pause'].filter(id => document.getElementById(id));
         const during = { dialogs: dialogs(), restarts: game.restarts - crashAt.restarts, crashed: v.crashed };
-        for (let tick = 0; tick < 60 * 5 && game.restarts === crashAt.restarts; tick++) twistyDev.step(1);
+        for (let tick = 0; tick < 60 * 5 && game.restarts === crashAt.restarts; tick++) { twistyDev.step(1); await yieldEvery(tick); }
         const crash = { callout, during, dialogs: dialogs(), seconds: (twistyDev.ticks - crashAt.ticks) / 60, mostS: Game.WORLD_CRASH.mostS, backM: crashAt.s - v.projection.s, speed: v.speed, crashed: v.crashed,
             restarts: game.restarts - crashAt.restarts, penaltyMs: game.penaltyMs - after.penaltyMs, lateral: v.projection.lateral, half: v.projection.width / 2 };
-        ride(() => game.checkpointsPassed >= 3);
+        await ride(() => game.checkpointsPassed >= k + 1);
         const next = { passed: game.checkpointsPassed, restarts: game.restarts, crashed: v.crashed };
         // The restart-the-ride box holds the race: real animate() frames run no physics and stop the clock, Escape
         // answers CANCEL and the ride goes on, Enter answers YES. twistyDev.step unpauses each frame, so call animate itself.
@@ -4313,18 +4319,21 @@ const WORLD = {
         key('Enter');
         confirm.entered = { open: !!document.getElementById('worldConfirm'), paused: game.paused, proceeded };
         // One excursion: 60 m off the road for longer than the guide waits
+        // (off every road: 60 m to the side lay on another road in the Schoellenen on leg 3, where the bike is not off
+        // the ride's way, so no guide restarted it; the nearest of 60, 90 and 120 m to either side clear of every road)
         const p = route.sample(v.routeS + 40, {});
-        const at = { x: p.x + 60 * Math.cos(p.heading), z: p.z - 60 * Math.sin(p.heading) };
+        const offRoads = q => Math.abs(route.project(q.x, q.z, null, {}).lateral) > 40 && !(env.ground.sideRoadY && env.ground.sideRoadY(q.x, q.z) !== null);
+        const at = [60, -60, 90, -90, 120, -120].map(d => ({ x: p.x + d * Math.cos(p.heading), z: p.z - d * Math.sin(p.heading) })).find(offRoads) || { x: p.x + 60 * Math.cos(p.heading), z: p.z - 60 * Math.sin(p.heading) };
         const restarts = game.restarts;
         const base = v.update.bind(v);
         v.update = (...args) => {
             base(...args);
             if (game.restarts === restarts) { v.position.x = at.x; v.position.z = at.z; v.speed = 0; v.crashed = false; v.offRoadTime = 0; }
         };
-        for (let tick = 0; tick < 60 * 16 && game.restarts === restarts; tick++) twistyDev.step(1);
+        for (let tick = 0; tick < 60 * 16 && game.restarts === restarts; tick++) { twistyDev.step(1); await yieldEvery(tick); }
         v.update = base;
-        for (let tick = 0; tick < 60 * 12; tick++) twistyDev.step(1);
-        return { station: 2, stationS: station.s, backM: env.physics.restartBackM, before, after, crash, next, confirm, excursion: { restarts: game.restarts - restarts, penaltyMs: game.penaltyMs, guideCause: env.guide.cause, pendingCutMs: game.worldRun.pendingCutMs } };
+        for (let tick = 0; tick < 60 * 12; tick++) { twistyDev.step(1); await yieldEvery(tick); }
+        return { station: k, stationS: station.s, backM: env.physics.restartBackM, before, after, crash, next, confirm, excursion: { restarts: game.restarts - restarts, penaltyMs: game.penaltyMs, guideCause: env.guide.cause, pendingCutMs: game.worldRun.pendingCutMs } };
     }, pilotWorld.toString()),
     // The HUD of a world ride (.agent/system/ui.md), in stage 2 of the mini world (--worldData tests/fixtures/world/mini,
     // --world all), at 1024x640, 1440x900 and 390x844 as a touch device. The checkpoints are shown once: a tick on the
@@ -4459,7 +4468,13 @@ const WORLD = {
             for (let d = -36; d <= 40; d += 4) total += route.headingChange(s + d - 4, s + d);
             return Math.abs(total) * 180 / Math.PI;
         };
-        const starts = [2900, 3900, 4400, 5000, 7400, 8000];
+        // (60 m before each of the stage's first six hairpin frames' bends, as the frames read them: the starts were the
+        // Tremola's, and on another leg none came to a hairpin)
+        const starts = [];
+        for (let s = (env.startS ?? 0) + 100; s < (env.endS ?? route.length) - 200 && starts.length < 6; s += 4) {
+            if (turnAround(s) > 115 && (!starts.length || s - 60 - starts[starts.length - 1] > 200)) starts.push(Math.round(s - 60));
+        }
+        if (!starts.length) return { none: 'no hairpin on the stage' };
         const runs = [];
         const aim = new THREE.Vector3();
         for (const start of starts) {
@@ -4784,6 +4799,8 @@ const WORLD = {
         const v = game.vehicle;
         const input = game.input;
         const tight = 1 / 30;
+        // The widest hairpin (its tightest radius, m) the riders on full lock ride
+        const lockRadius = 20;
         const k = s => route.curvatureAt(s, 4);
         twistyDev.freeze();
         game.worldLinger = false;
@@ -4792,7 +4809,9 @@ const WORLD = {
             while (from > apex - 120 && Math.abs(k(from - 2)) > tight) from -= 2;
             while (to < apex + 120 && Math.abs(k(to + 2)) > tight) to += 2;
             const advice = WorldAssist.advice(route, physics, from, 4);
-            return { apex: Math.round(apex), from, to, advised: advice ? advice.speed : 8 };
+            let radius = Infinity;
+            for (let s = from; s <= to; s += 2) radius = Math.min(radius, 1 / Math.max(1e-6, Math.abs(k(s))));
+            return { apex: Math.round(apex), from, to, advised: advice ? advice.speed : 8, radius };
         }).filter((bend, i, all) => !traceApex || Math.abs(bend.apex - traceApex) === Math.min(...all.map(b => Math.abs(b.apex - traceApex))));
         let rider = { target: 8, from: 0, to: 0 };
         // The approach and the road after the hairpin are the pilot's, so a bend before it cannot spoil the test
@@ -4827,6 +4846,10 @@ const WORLD = {
         for (const [name, level, slow, aim] of runs) {
             const rows = [];
             for (const bend of bends) {
+                // (the riders on full lock only on a hairpin as tight as full lock: through a wider one, 21 m round at
+                // leg 6's s 3 648, full lock turns the bike on an 8 m circle onto the grass inside, as no rider rides it;
+                // the aiming riders ride every hairpin)
+                if (!aim && bend.radius > lockRadius) continue;
                 v.reset();
                 v.assistLevel = level;
                 await placeAt(bend.from - 40);
@@ -4853,8 +4876,8 @@ const WORLD = {
                     if (tick % 240 === 0) await new Promise(resolve => setTimeout(resolve, 0));
                 }
                 row.crashed = v.crashed;
-                // Where and how it went down: metres from the bend's start, the lean, the speed, the bike's colour
-                if (v.crashed) row.at = { ds: Math.round((v.projection.s - bend.from) * 10) / 10, lean: Math.round(v.leanAngle * 573) / 10, speed: Math.round(v.speed * 10) / 10, lateral: Math.round(v.projection.lateral * 100) / 100, cause: v.frame.material.color.getHexString(), radius: Math.round((bend.to - bend.from)), advised: Math.round(bend.advised * 10) / 10 };
+                // Where and how it went down: metres from the bend's start, the lean, the speed, the crash's cause
+                if (v.crashed) row.at = { ds: Math.round((v.projection.s - bend.from) * 10) / 10, lean: Math.round(v.leanAngle * 573) / 10, speed: Math.round(v.speed * 10) / 10, lateral: Math.round(v.projection.lateral * 100) / 100, cause: v.crashCause || v.crashWhy || null, radius: Math.round((bend.to - bend.from)), advised: Math.round(bend.advised * 10) / 10 };
                 row.wide = Math.round(row.wide * 100) / 100;
                 row.cut = Math.round(row.cut * 100) / 100;
                 row.step = Math.round(row.step * 1000) / 1000;
@@ -5030,13 +5053,16 @@ const WORLD = {
         const physics = env.physics;
         const pts = route.points;
         let pair = null;
-        for (let i = 100; i < pts.length - 200 && !pair; i++) {
-            for (let j = i + 36; j < Math.min(pts.length - 1, i + 80); j++) {
+        // (within the stage: a world folder holds several legs, and past the stage's end the ride is not this leg's)
+        const first = Math.max(100, route.indexAt((env.startS ?? 0) + 100)), last = Math.min(pts.length - 200, route.indexAt((env.endS ?? route.length) - 200));
+        for (let i = first; i < last && !pair; i++) {
+            for (let j = i + 36; j < Math.min(last + 150, pts.length - 1, i + 80); j++) {
                 const gap = Math.hypot(pts[i].x - pts[j].x, pts[i].z - pts[j].z);
                 if (gap >= 14 && gap <= 28) { pair = { i, j, gap, ds: route.sArray[j] - route.sArray[i] }; break; }
             }
         }
-        if (!pair) return { error: 'no stacked pair of legs on the ride' };
+        // (a leg with no stacked legs has no cut to make: nothing to check there)
+        if (!pair) return { none: 'no stacked pair of legs on the stage' };
         twistyDev.freeze();
         new Function('game', 'cruise', `return (${pilotSource})(game, cruise)`)(game, 12);
         const lower = route.sArray[pair.i];
@@ -9368,7 +9394,7 @@ function worldChecks(report) {
     }
     const restart = results['world-restart'];
     if (restart) {
-        const { before, after, crash, next, confirm, excursion, stationS, backM } = restart;
+        const { before, after, crash, next, confirm, excursion, stationS, backM, station } = restart;
         const { held, cancelled, entered } = confirm;
         if (held.ticks !== 0 || held.moved !== 0 || held.clock !== 0 || !held.open) failures.push(`world-restart: the ride went on while the restart box was open: ${JSON.stringify(held)}`);
         if (cancelled.open || cancelled.paused || cancelled.proceeded !== 0 || cancelled.ticks !== 30) failures.push(`world-restart: Escape must cancel and give the ride back: ${JSON.stringify(cancelled)}`);
@@ -9378,12 +9404,13 @@ function worldChecks(report) {
         if (crash.during.dialogs.length || crash.dialogs.length || crash.during.restarts !== 0 || !crash.during.crashed) failures.push(`world-restart: a crash must open no dialog and play its fall first: ${JSON.stringify(crash)}`);
         if (!crash.callout || !/Hit the probe\s+\+5 s/.test(crash.callout)) failures.push(`world-restart: the call-out must say the cause and the cost: ${JSON.stringify(crash.callout)}`);
         if (crash.restarts !== 1 || crash.penaltyMs !== 5000 || crash.crashed || !(crash.seconds <= crash.mostS + 0.1) || !(crash.backM >= 0 && crash.backM <= backM + 25) || Math.abs(crash.lateral) > crash.half) failures.push(`world-restart: the game must restart a crashed rider in place by itself: ${JSON.stringify(crash)}`);
-        if (next.passed !== 3 || next.restarts !== 2 || next.crashed) failures.push(`world-restart: the ride did not go on to the next station: ${JSON.stringify(next)}`);
+        if (next.passed !== station + 1 || next.restarts !== 2 || next.crashed) failures.push(`world-restart: the ride did not go on to the next station: ${JSON.stringify(next)}`);
         if (excursion.restarts !== 1 || excursion.penaltyMs !== 15000 || excursion.guideCause !== null || excursion.pendingCutMs !== 0) failures.push(`world-restart: an excursion must cost one penalty: ${JSON.stringify(excursion)}`);
     }
     const cut = results['world-cut'];
     if (cut) {
         if (cut.error) failures.push(`world-cut: ${cut.error}`);
+        else if (cut.none) report.notes.push(`world-cut: ${cut.none}`);
         else {
             if (cut.control.restarts || cut.control.crashed) failures.push(`world-cut control: ${JSON.stringify(cut.control)}`);
             if (cut.flicker.restarts) failures.push(`world-cut: a flicker restarted the ride: ${JSON.stringify(cut.flicker)}`);
@@ -9404,7 +9431,8 @@ function worldChecks(report) {
         }
     }
     const camera = results['world-camera'];
-    if (camera) {
+    if (camera && camera.none) report.notes.push(`world-camera: ${camera.none}`);
+    else if (camera) {
         if (camera.boomUnderGround) failures.push(`world-camera: the boom went under the ground on ${camera.boomUnderGround} of ${camera.frames} frames`);
         if (!(camera.hairpinFrames > 0) || !(camera.share >= 0.95)) failures.push(`world-camera: the road 30 m ahead is in view on ${camera.share} of ${camera.hairpinFrames} hairpin frames, want 0.95 or more: ${JSON.stringify(camera.runs)}`);
         camera.runs.forEach(r => { if (r.crashed) failures.push(`world-camera: the ride from s ${r.start} crashed`); });
