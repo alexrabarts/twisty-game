@@ -55,6 +55,10 @@ SEAT = (0, 0.875, -0.08)
 PIVOT = (0.43, -0.17)
 # The dual-purpose tyres' block tread: the depth cut between the knobs (m). TWISTY_KNOBS sets it for a variant build
 KNOBS = float(os.environ.get("TWISTY_KNOBS") or 0.012)
+# The engine's small parts (engine_parts). TWISTY_ENGINE=0 leaves them out, for a comparison
+ENGINE_PARTS = os.environ.get("TWISTY_ENGINE", "1") != "0"
+# The spokes' finish. TWISTY_SPOKE sets it for a variant build
+SPOKE = os.environ.get("TWISTY_SPOKE") or "steel"
 
 COLOURS = {"paint": 0xD0101C, "paint_dark": 0x5A0508, "accent": 0xECECEC, "rim": 0x17181A, "caliper": 0x2B2C30, "fork_gold": 0xB8923E, "spring": 0xC4161C,
            "trim": 0x151618, "seat": 0x131315, "plastic": 0xECECEC}
@@ -70,14 +74,25 @@ EXTRA = {
     "scuff_grey": (0x8B8D90, 0.9, 0.0),
     "scuff_metal": (0xC9CCD0, 0.45, 0.9),
     "tape": (0x9A9C9E, 0.8, 0.1),
+    # The discs a darker, rougher steel: a bright mirror steel read as a flat white ring in the sun
+    "disc": (0x8A8D92, 0.45, 1.0),
+    # The blank plate off-white: pure white was the brightest thing on the bike and read as a lamp
+    "plate": (0xC9C9C2, 0.55, 0.05),
+    # The cases a cast-alloy grey: near black, the engine read as one dark blob
+    "casing": (0x6A6C70, 0.5, 0.7),
 }
+# A finish as "name=colour,roughness,metalness" (TWISTY_FINISH, for a variant build)
+if os.environ.get("TWISTY_FINISH"):
+    name, value = os.environ["TWISTY_FINISH"].split("=")
+    colour, rough, metal = value.split(",")
+    EXTRA[name] = (int(colour, 16), float(rough), float(metal))
 
 
 def wheels(k):
     k.begin("wheel_front", FRONT)
-    E.wheel(k, FRONT, FRONT_R, 0.08, RIM_F, spokes="wire", count=36, hub=0.05, knobs=KNOBS)
+    E.wheel(k, FRONT, FRONT_R, 0.08, RIM_F, spokes="wire", count=36, hub=0.05, knobs=KNOBS, spoke_mat=SPOKE)
     k.begin("wheel_rear", REAR)
-    E.wheel(k, REAR, REAR_R, 0.12, RIM_R, spokes="wire", count=36, hub=0.055, knobs=KNOBS)
+    E.wheel(k, REAR, REAR_R, 0.12, RIM_R, spokes="wire", count=36, hub=0.055, knobs=KNOBS, spoke_mat=SPOKE)
     # Sprocket on the left, inboard of the swingarm
     parts.sprocket(k, REAR, -0.082, 0.105)
     k.begin("disc_front", (DISC_SIDE * DISC_X, FRONT[1], FRONT[2]))
@@ -214,6 +229,8 @@ def chassis(k):
     k.box((0.14, 0.09, 0.16), (0, 0.72, 0.18), "dark_metal", rot=(0.24, 0, 0), bevel=0.014)
     k.lathe([(0, 0), (0.085, 0), (0.085, 0.018), (0.062, 0.034), (0, 0.036)], (0.122, 0.42, 0.02), "casing", axis="x", seg=20)
     k.lathe([(0, 0), (0.07, 0), (0.07, 0.016), (0.05, 0.03), (0, 0.032)], (-0.122, 0.42, 0.08), "casing", axis="x", rot=(0, 0, math.pi), seg=18)
+    if ENGINE_PARTS:
+        engine_parts(k)
     # Skid plate under the cradle, black
     k.loft([(0.34, 0.33, 0.41, 0.07, 4, 3), (0.24, 0.265, 0.33, 0.115, 4, 3), (0.0, 0.255, 0.3, 0.12, 4, 3), (-0.14, 0.27, 0.3, 0.09)], "trim", ring=10, steps=2)
 
@@ -243,6 +260,24 @@ def chassis(k):
 
     parts.pegs(k, PEG, hanger=(0.5, -0.12), wide=0.07)
     k.side_stand((-0.13, 0.31, -0.04), (-0.28, 0.03, 0.05), 0.01, "steel_dark", seg=6)
+
+
+def engine_parts(k):
+    """What makes the single read as an engine close up: the joint between barrel and head, the bolts round the
+    covers and on the head, the coolant hoses from the radiator and the plug cap. It is water-cooled: no fins."""
+    k.box((0.134, 0.012, 0.146), (0, 0.674, 0.168), "dark_metal", rot=(0.24, 0, 0), bevel=0.002)
+    for i in range(8):
+        a = 2 * math.pi * (i + 0.5) / 8
+        k.cylinder(0.0055, 0.008, (0.15, 0.42 + math.cos(a) * 0.074, 0.02 + math.sin(a) * 0.074), "steel", axis="x", seg=6)
+    for i in range(6):
+        a = 2 * math.pi * (i + 0.5) / 6
+        k.cylinder(0.0055, 0.008, (-0.146, 0.42 + math.cos(a) * 0.06, 0.08 + math.sin(a) * 0.06), "steel", axis="x", seg=6)
+    for x in (-0.05, 0.05):
+        for z in (0.12, 0.23):
+            k.cylinder(0.006, 0.01, (x, 0.765 - (z - 0.18) * 0.24, z), "steel", seg=6)
+    k.tube([(0.1, 0.84, 0.3), (0.065, 0.82, 0.285), (0.03, 0.76, 0.265)], 0.011, "rubber", seg=7, smooth=2)
+    k.tube([(0.1, 0.68, 0.31), (0.12, 0.6, 0.27), (0.125, 0.5, 0.2)], 0.012, "rubber", seg=7, smooth=2)
+    k.cylinder(0.012, 0.045, (0, 0.785, 0.205), "rubber", rot=(-0.3, 0, 0), seg=8)
 
 
 def scuffs(k):
