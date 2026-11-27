@@ -154,7 +154,9 @@ class StructureStyles {
         for (let k = -8; k <= 8; k++) {
             const dd = d + (r * k) / 8;
             const up = Math.sqrt(Math.max(0, r * r - (dd - d) * (dd - d)));
-            low = Math.min(low, (dd < 0 ? -Infinity : StructureStyles.roofAt(profile, dd, roof)) - up);
+            // (past the wall is the wall's rule, WorldCamera's faces: only the roof over the tube is read)
+            if (dd < 0) continue;
+            low = Math.min(low, StructureStyles.roofAt(profile, dd, roof) - up);
         }
         return Math.min(low, roof - r);
     }
