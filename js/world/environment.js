@@ -871,7 +871,8 @@ class WorldEnvironment {
                     const key = lean > 0 ? 'right' : 'left';
                     // (and the rows the side road's own tube opens across, out to its verges' edges: a ride tube's wall is left
                     // out there only, TubeLining.run `mouth`)
-                    const tube = Math.min(16, (width / 2 + RoadSurface.VERGE_M) / Math.max(0.4, Math.abs(lean)));
+                    // (half a row's spacing more: the ride's wall opens between two rows, both of them in it)
+                    const tube = Math.min(16, (width / 2 + RoadSurface.VERGE_M) / Math.max(0.4, Math.abs(lean)) + WorldEnvironment.MOUTH_ROW_M);
                     points.forEach((p, i) => {
                         if (Math.abs(p.s - pass.sIn) <= tube) styles[i][key === 'right' ? 'tubeMouthR' : 'tubeMouthL'] = true;
                         if (Math.abs(p.s - pass.sIn) > reach) return;
@@ -3346,6 +3347,9 @@ class WorldEnvironment {
         }
         return low;
     }
+
+    // Half the ride's row spacing, by which a side tube's mouth in the ride's tube wall reaches past its verges
+    static get MOUTH_ROW_M() { return 2; }
 
     // The room the chase camera keeps under a tube's roof besides its own margin (WorldCamera roofClearM, roofHardM):
     // the lights, fans and services hung from the roof, and the view's near plane (0.46 m from the eye at its corners)
