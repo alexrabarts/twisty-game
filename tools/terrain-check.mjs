@@ -2315,6 +2315,21 @@ const WORLD_RESIDENT_TILES = 60;
 const WORLD_MESH_MARGIN = 0.15;
 const WORLD_BIKE_TILE_M = 900;
 
+// In a world the pilot rides alone: it holds its cruise and its bend speeds and never brakes for a vehicle ahead, so it
+// rode into the crew where the crew took a hairpin slower than it (leg 6, s 6 224), and a probe of the camera or the
+// road failed on a crash of the group's. Installed after tools/autopilot.js, which a page that loads it again replaces.
+// A probe about the group (CREW_PROBES) keeps its crew
+async function rideAlone(page) {
+    await page.evaluate(() => {
+        const autopilot = twistyDev.autopilot.bind(twistyDev);
+        twistyDev.autopilot = (options = {}) => {
+            const g = window.game, traffic = g && g.traffic;
+            if (!window.probeCrew && (options.speed || 0) > 0 && g.environment && g.environment.isWorld && traffic && traffic.dropCrew && !traffic.noCrew) traffic.dropCrew();
+            return autopilot(options);
+        };
+    });
+}
+
 async function openWorld(browser, port, id, seed = 1, data = option('worldData')) {
     for (let attempt = 0; attempt < 3; attempt++) {
         // (--query adds to the address: free roam is `--query 'mode=roam&debug'`)
@@ -2328,6 +2343,7 @@ async function openWorld(browser, port, id, seed = 1, data = option('worldData')
         }
         await page.evaluate(() => { window.game.adaptResolution = () => {}; });
         await page.addScriptTag({ path: join(root, 'tools/autopilot.js') });
+        await rideAlone(page);
         await pageLook(page);
         return page;
     }
@@ -4623,11 +4639,8 @@ const WORLD = {
                 const route = env.route;
                 const cam = game.camera;
                 twistyDev.freeze();
-                // The ride is the camera's, ridden alone (the crew dropped, as free roam ridden alone): the pilot holds
-                // its cruise and its bend speeds and never brakes for a vehicle ahead, so it rode into the group where
-                // the group took a hairpin slower than it (leg 6, s 6 224: the riders on their lane at 11 to 15 m/s, the
-                // pilot on the road's middle at 20). The crash it left also stood into the next view's ride
-                if (game.traffic && game.traffic.dropCrew) game.traffic.dropCrew();
+                // (ridden alone, as every world probe's pilot not about the group: openPage. A crash it left stood
+                // into the next view's ride)
                 game.setCameraView(mode);
                 const start = from || Math.max(20, (env.startS ?? 0) + 20);
                 const end = to || Math.min(route.length - 30, (env.endS ?? route.length) - 30);
@@ -4665,7 +4678,10 @@ const WORLD = {
                 } finally {
                     game.updateCamera = update;
                 }
-                return { start: Math.round(start), end: Math.round(end), reached: Math.round(v.routeS), crashed: v.crashed, cause: v.crashed ? v.crashCause || null : null, rows };
+                return { start: Math.round(start), end: Math.round(end), reached: Math.round(v.routeS), crashed: v.crashed, cause: v.crashed ? v.crashCause || v.crashWhy || null : null, crew: game.traffic ? game.traffic.motorcycles.length : null,
+                    // (what stood near the bike as it crashed: a car's or a rock's place along the ride and across it)
+                    near: v.crashed ? [...(game.traffic ? game.traffic.cars : []).map(c => ({ kind: 'car', g: c.carGroup })), ...(game.rockfalls && game.rockfalls.rocks ? game.rockfalls.rocks.map(r => ({ kind: 'rock', g: r.mesh })) : [])].filter(o => o.g && Math.hypot(o.g.position.x - v.position.x, o.g.position.z - v.position.z) < 25).map(o => { const p = route.project(o.g.position.x, o.g.position.z, null, {}); return { kind: o.kind, s: Math.round(p.s), lateral: Math.round(p.lateral * 10) / 10 }; }) : null,
+                    lateral: Math.round(route.project(v.position.x, v.position.z, null, {}).lateral * 100) / 100, rows };
             }, placeAt.toString(), pilotWorld.toString(), tubeRoom.toString(), mode, Number(option('speed') || 20), Number(option('from') || 0), Number(option('to') || 0));
             // (from 60 m in: the pilot sets off from a stand at the start and the camera settles)
             const rows = swingOf(ride.rows.map(r => ({ s: r[0], yaw: r[1], screen: r[2], room: r[3], speed: r[4], under: r[5] ?? Infinity, ey: r[6], up: r[7], back: r[8] }))).filter(r => r.s >= ride.start + 60);
@@ -4693,7 +4709,7 @@ const WORLD = {
             const round = n => Math.round(n * 100) / 100;
             const peaks = peaksOf(rows);
             out.modes[mode] = {
-                start: ride.start, end: ride.end, reached: ride.reached, crashed: ride.crashed, cause: ride.cause, frames: rows.length,
+                start: ride.start, end: ride.end, reached: ride.reached, crashed: ride.crashed, cause: ride.cause, crew: ride.crew, near: ride.near, lateral: ride.lateral, frames: rows.length,
                 rate: round(peaks.rate), accel: round(peaks.accel), sway: round(peaks.sway), room: round(peaks.room),
                 tube: { under: under === Infinity ? null : round(under), underAt, bounce: Math.round(bounce * 10000) / 10000, bounceAt },
                 boom: { up: centile('up', 0.5), up90: centile('up', 0.9), back: centile('back', 0.5), back90: centile('back', 0.9) },
@@ -8638,6 +8654,10 @@ async function modelPictures(placeSource, b, playM, group) {
     return pngs;
 }
 
+// The world probes about the group, and world-quality, which times the frame as a ride draws it: the pilot rides with
+// the crew there (every other world probe's pilot rides alone, rideAlone)
+const CREW_PROBES = new Set(['world-finish', 'world-shot', 'world-group-shots', 'world-place-shots', 'world-stop-shots', 'world-roam', 'world-crew-start', 'world-quality']);
+
 async function worldMain() {
     const executablePath = chromePath();
     const gpu = flag('gpu');
@@ -8657,6 +8677,7 @@ async function worldMain() {
                 for (const seed of finishSeeds()) {
                     state.requests = [];
                     const page = await openWorld(browser, port, id, seed);
+                    await page.evaluate(crew => { window.probeCrew = crew; }, CREW_PROBES.has(name));
                     rides.push({ seed, ...(await WORLD[name](page, port)) });
                     await page.close();
                     state.requests = null;
@@ -8670,6 +8691,7 @@ async function worldMain() {
             const page = name.startsWith('hill-') ? await openHill(browser, port) : name === 'world-hud' && !option('worldData')
                 ? await openWorld(browser, port, 'all', 1, WORLD_HUD_DATA)
                 : await openWorld(browser, port, id);
+            await page.evaluate(crew => { window.probeCrew = crew; }, CREW_PROBES.has(name));
             report.results[name] = await WORLD[name](page, port);
             if (name === 'world-net') report.results[name].offHost = state.requests.filter(url => !isAllowedRequest(url, port));
             await page.close();
