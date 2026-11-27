@@ -308,26 +308,24 @@ class WorldEnvironment {
     // The things built once: the horizon, the gate frames, the roadworks sites and the landmarks
     buildFixtures() {
         if (this.data.far) {
-            const horizon = Horizon.build(this.data.far, this.data.farCover, this.data.farSink);
-            this.horizon = horizon.mesh;
-            this.triangleCount += horizon.triangles;
-            this.group.add(this.horizon);
+            // The far grid and the mountains round it out to 40 km (the camera's far plane reaches them,
+            // WorldEnvironment.FAR_PLANE_M), each grid closed onto the level round it (FarLand.join)
+            const far = FarLand.assemble(this.data.far, this.data.farCover, this.data.farSink, this.data.farLevels || []);
+            this.horizon = far.horizon;
+            this.farLand = far.levels;
+            this.triangleCount += far.triangles;
+            for (const mesh of [this.horizon, ...this.farLand]) this.group.add(mesh);
             // (cut to the tubes' boxes as the tiles are: under a tile cut away in a tube, the far grid drawn a few
             // metres under the land stood in the tube, a mound across the lane at km 13.2 of the Gotthard leg)
             // (its colours made linear here, once, as a tile's are: the geometry is built again at each cut)
-            const linear = Float32Array.from(horizon.mesh.geometry.attributes.color.array, v => (v <= 0.04045 ? v / 12.92 : Math.pow((v + 0.055) / 1.055, 2.4)));
-            horizon.mesh.geometry.userData.linearColors = true;
-            this.horizonWhole = { positions: Float32Array.from(horizon.mesh.geometry.attributes.position.array), shades: linear, index: Uint32Array.from(horizon.mesh.geometry.index.array) };
+            const geometry = this.horizon.geometry;
+            const linear = Float32Array.from(geometry.attributes.color.array, v => (v <= 0.04045 ? v / 12.92 : Math.pow((v + 0.055) / 1.055, 2.4)));
+            geometry.userData.linearColors = true;
+            this.horizonWhole = { positions: Float32Array.from(geometry.attributes.position.array), shades: linear, index: Uint32Array.from(geometry.index.array), normals: Float32Array.from(geometry.attributes.normal.array) };
             this.clipHorizon();
             // Where the drawn tiles end, a tile takes the far land's colour and normal (LandShade.EDGE_M)
             this.edgeFar = Horizon.edgeTextures(this.horizon);
             LandShade.setEdge(this.edgeFar, this.drawnTiles());
-            // The mountains out to 40 km: the camera's far plane reaches them (WorldEnvironment.FAR_PLANE_M)
-            this.farLand = FarLand.build(this.data.farLevels || [], this.data.far).map(({ mesh, triangles }) => {
-                this.triangleCount += triangles;
-                this.group.add(mesh);
-                return mesh;
-            });
         }
         // The arch stands at the start only. Each checkpoint between is a roadworks site (Roadworks), and the finish has
         // no marker at all: the owner asked for no yellow finish gantry, the HUD shows the progress, and the line is timed
@@ -3311,6 +3309,9 @@ class WorldEnvironment {
         // length, and a draw with an attribute shorter than the positions draws nothing, the whole far grid gone)
         geometry.deleteAttribute('normal');
         geometry.computeVertexNormals();
+        // (the grid's own vertices and its skirt keep the normals FarLand.join gave them: run into the level round
+        // it at its edge, and a skirt's its edge vertex's; the cut's new vertices take theirs from the cut)
+        if (whole.normals) geometry.attributes.normal.array.set(whole.normals);
         geometry.computeBoundingSphere();
         this.triangleCount += geometry.index.count / 3 - before;
         this.onMeshBuilt(this.horizon);
