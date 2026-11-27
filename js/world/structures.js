@@ -248,16 +248,23 @@ vec4 structPanel(vec2 p) {
 }
 // Granite courses whose height grows with the face (a course 0.3 to 0.45 m), blocks of mixed length, mortar joints
 vec4 structStone(vec2 p) {
-    float y = p.y + 0.28 * (landNoise(vec2(p.x * 0.45, p.y * 0.3)) - 0.5);
-    float row = floor(y / 0.46);
-    float vIn = fract(y / 0.46);
-    float courseH = 0.46;
-    float w = p.x / 0.62 + landHash(vec2(row, 3.0)) + 0.35 * landNoise(vec2(p.x * 0.8, row));
-    float col = floor(w), fx = fract(w);
-    float len = 0.62;
-    // (a block's own top and bottom wander a little: hand-dressed granite, not brick)
-    vIn = clamp(vIn + 0.08 * (landHash(vec2(col, row + 5.0)) - 0.5), 0.0, 1.0);
-    float joint = min(min(fx, 1.0 - fx) * len, min(vIn, 1.0 - vIn) * courseH);
+    // Courses in bands of 1.1 m, each split in two at a height of its own (courses 0.35 to 0.75 m), wandering a little
+    float y = p.y + 0.18 * (landNoise(vec2(p.x * 0.35, p.y * 0.25)) - 0.5);
+    float band = floor(y / 1.1), inBand = fract(y / 1.1);
+    float split = 0.32 + 0.36 * landHash(vec2(band, 5.0));
+    float upper = step(split, inBand);
+    float row = band * 2.0 + upper;
+    float courseH = 1.1 * mix(split, 1.0 - split, upper);
+    float vIn = (inBand - upper * split) / mix(split, 1.0 - split, upper);
+    // Blocks of their own length (0.5 to 1.4 m): a joint near every 0.95 m, each moved by up to 0.45 m
+    float L = 0.95;
+    float i = floor(p.x / L + landHash(vec2(row, 3.0)));
+    float x = p.x / L + landHash(vec2(row, 3.0));
+    float b0 = i + (landHash(vec2(i, row + 1.0)) - 0.5) * 0.45, b1 = i + 1.0 + (landHash(vec2(i + 1.0, row + 1.0)) - 0.5) * 0.45;
+    float col = x < b0 ? i - 1.0 : (x > b1 ? i + 1.0 : i);
+    float dx = min(abs(x - b0), abs(x - b1)) * L;
+    vIn = clamp(vIn + 0.1 * (landHash(vec2(col, row + 5.0)) - 0.5), 0.0, 1.0);
+    float joint = min(dx, min(vIn, 1.0 - vIn) * courseH);
     return vec4(landHash(vec2(col, row)), landHash(vec2(row, col + 11.0)) - 0.5, joint, landNoise(vec2(p.x, p.y) * 3.0));
 }
 // The relief of a face at p (its metres along and up, or across a level face): the height its normal is bent by
