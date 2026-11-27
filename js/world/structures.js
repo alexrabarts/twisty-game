@@ -549,14 +549,15 @@ class StructureBuild {
             });
             return;
         }
-        // (the steel is one upright panel on the upstand's middle line, from its top to the parapet's height: the
+        // (the steel is one upright panel on the upstand's outer face, from its top to the parapet's height, its foot
+        // on the upstand's own corners (a foot set in from them left corners a hand apart, world-structures): the
         // shader draws the rails and the posts on it and cuts the rest away, RAIL_GLSL; its metres up from the
         // upstand in wallFace y)
         const up = StructureBuild.UPSTAND_M;
         RoadMesh.rails(out, segments, w, up, color);
         StructureShade.end(out, start, 'parapet', style.look, () => 0);
         const steel = [0.62, 0.63, 0.64];
-        const lift = (p, o, dy) => [p[0] - o[0] * w / 2, p[1] + dy, p[2] - o[1] * w / 2];
+        const lift = (p, o, dy) => [p[0], p[1] + dy, p[2]];
         for (const s of segments) {
             if (s.drawn === false) continue;
             StructureShade.quad(out, lift(s.pa, s.o, up), lift(s.pb, s.o, up), lift(s.pb, s.o, h), lift(s.pa, s.o, h), steel, 'rail', style.look, [0, 0, h - up, h - up]);
