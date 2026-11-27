@@ -83,16 +83,11 @@ const TOLERANCE = {
     tree: { height: 0.1, spread: 0.2, base: 0.02, middle: 0.07, lum: 0.2, tint: 0.03 },
     bike: { height: 0.06, spread: 0.06, base: 0.01, middle: 0.01, lum: 0.15, tint: 0.06 }
 };
-// Lower levels whose mean colour stands further than TOLERANCE.bike.lum from their source today, and how far: far.py
-// gives each new corner the occlusion (the vertex colour) of the nearest old one and merges small materials into the
-// kept one nearest in colour, which darkens these; the detail files' lod1 darkens z750. Each may only leave this list
-// (the test fails when one comes back inside the tolerance, so it is taken off)
-const KNOWN = {
-    'bike03_duke390 far/lod1': 0.79,
-    'bike13_panigale_black far/lod1': 0.792,
-    'bike01_z650 far/lod1': 0.831,
-    'bike06_z750 lod1/lod0': 0.788
-};
+// Lower levels whose mean colour stands further than TOLERANCE.bike.lum from their source today, and how far. Each may
+// only leave this list (the test fails when one comes back inside the tolerance, so it is taken off). Empty since far.py
+// scales each kept material's occlusion to the light of the source faces merged into it (its rule 5), and kit B's lod1
+// keeps the lightness of its finishes
+const KNOWN = {};
 
 function check(kind, name, lower, upper) {
     const d = drift(lower, upper), most = TOLERANCE[kind];
