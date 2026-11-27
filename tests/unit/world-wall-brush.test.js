@@ -180,6 +180,26 @@ describe.each(Object.entries(WALLS))('%s', (name, make) => {
         expect(r.brushes).toBe(0);
     });
 
+    test('at walking pace every touch is a brush: head-on, leaned toward it, against it for mostS, and the bike is never in the wall', () => {
+        // (the owner: a touch against a wall at walking pace is not a crash; leg 3's hairpin at s 2 980 crashed a rider
+        // into its wall at 1.8 m/s)
+        const slow = rule.slowMs - 0.5;
+        // (at a lean a bike can hold at that pace: leaned further it tips over, a fall of its own, tipLeanDeg)
+        for (const [away, angle, against] of [[10, 6, 0], [0, 6, 0], [-10, 6, 0], [10, 60, 0], [0, 89, 0], [10, 6, rule.mostS]]) {
+            const r = touch(make, { away, angle, speed: slow, gap: 0.05, seconds: 1.5, against });
+            if (r.crashed) throw new Error(`a touch at ${slow} m/s, ${away} degrees away, ${angle} degrees into the wall, ${against} s against it: ${r.cause}`);
+            expect(r.deep).toBeLessThanOrEqual(Math.max(DEEP, slow * DT));
+        }
+    });
+
+    test('at walking pace a wall met where the brush finds no face of its own is no crash either: the bike stands against it', () => {
+        const r = touch(make, { away: 0, gap: -(rule.deepM + 0.25), speed: rule.slowMs - 0.5, seconds: 0.5 });
+        if (r.crashed) throw new Error(`a wall found deep at walking pace: ${r.cause}`);
+        expect(r.speeds[r.speeds.length - 1]).toBeLessThan(rule.slowMs);
+        // (at speed the same is the crash it was: above)
+        expect(touch(make, { away: 35, gap: -(rule.deepM + 0.25), seconds: 0.1 }).crashed).toBe(true);
+    });
+
     test('slowly but head-on, leaned away: a crash', () => {
         const angle = rule.glanceDeg + 10;
         expect(4 * Math.sin(angle / DEG)).toBeLessThan(rule.closeMax);

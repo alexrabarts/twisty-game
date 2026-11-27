@@ -175,11 +175,12 @@ describe('the ride before with the block set is the ride now with every multipli
     // The shipped stage from the first drops of the rain through four cobbled hairpins: the pilot of
     // tests/helpers/world-rider.js at the advised speed, braking for each bend
     // This tree is ridden without the edge lean (WorldPhysics.edgeLean), which came after the block and is no part of
-    // it: the commit before has none, and with it the ride through these hairpins differs by 7 mm
+    // it: the commit before has none, and with it the ride through these hairpins differs by 7 mm. Nor the hairpin
+    // assist's hold (WorldPhysics.holdSpeedMs, 2026-11-27), held by tests/unit/hairpin-assist.test.js
     async function world(G0, where, character, bike) {
         const rows = [];
         const own = where.physics;
-        if (G0 === game) where.physics = { ...own, edgeLean: null };
+        if (G0 === game) where.physics = { ...own, edgeLean: null, holdSpeedMs: 0 };
         const out = await rideSpan(G0, where, { s0: 7650, s1: 8450, speed: advisedPace(G0, where, 18), character, bike, watch: v => rows.push(state(v)) });
         where.physics = own;
         return { rows, out };

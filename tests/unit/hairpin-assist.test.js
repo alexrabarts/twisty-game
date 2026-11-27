@@ -158,6 +158,20 @@ describe('line capture', () => {
         expect(off.crashed || off.inside > WIDTH / 2 || off.outside > WIDTH / 2).toBe(true);
     });
 
+    test('full steering held into a 10 m hairpin at 9 m/s, over turnBlendSpeed and the advice, is held on the line at normal; off it cuts the inside', () => {
+        // (holdSpeedMs, holdTightR: full lean turns the bike on about 8 m, tighter than the line, and outside the capture
+        // window; leg 3's hairpins at s 2 980 and 4 060 put a rider on the grass inside at 9 m/s)
+        const world = hairpin(10);
+        expect(9.2).toBeGreaterThan(WorldPhysics.turnBlendSpeed);
+        expect(9.2).toBeLessThanOrEqual(WorldPhysics.holdSpeedMs);
+        expect(10).toBeLessThanOrEqual(WorldPhysics.holdTightR);
+        const normal = ride(world, 'normal', { speed: 9.2 });
+        expect(normal.crashed).toBe(false);
+        expect(normal.inside).toBeLessThanOrEqual(WIDTH / 2);
+        const off = ride(world, 'off', { speed: 9.2 });
+        expect(off.crashed || off.inside > WIDTH / 2).toBe(true);
+    });
+
     test('it adds no lean with no input or with the input out of the bend', () => {
         const world = hairpin(12);
         for (const input of [0, -1, -0.4]) {

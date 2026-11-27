@@ -3722,8 +3722,13 @@ class Vehicle {
         }
         const capture = world.lineCapture * (this.lineCaptured ? 2 : 1);
         // Under turnBlendSpeed a turn tighter than the line is captured too: the handlebar can turn the bike far
-        // tighter than any hairpin, and a rider holding the lock would otherwise circle on the spot
-        this.lineCaptured = Math.abs(radius / lineRadius - 1) <= capture || (handlebarShare > 0 && radius < lineRadius);
+        // tighter than any hairpin, and a rider holding the lock would otherwise circle on the spot. So it is at up
+        // to holdSpeedMs where the bend ahead is holdTightR or tighter: full lean turns the bike on about 8 m there,
+        // and a rider holding it cut across the inside onto the grass (leg 3, s 2 980 and 4 060, at 9 m/s)
+        // (hold, 0 to 1: it comes in over the last metre per second under holdSpeedMs and over a bend a quarter tighter
+        // than holdTightR, so the line's weight never steps as a bend comes into reach)
+        const hold = Math.min(1, Math.max(0, world.holdSpeedMs - v)) * Math.min(1, Math.max(0, (this.tightAhead(v) * world.holdTightR - 1) * 4));
+        this.lineCaptured = Math.abs(radius / lineRadius - 1) <= capture || ((handlebarShare > 0 || hold > 0) && radius < lineRadius);
         if (!this.lineCaptured) return this.releaseLine(rate);
         // The arc runs along the road: a heading turned past the road's (or short of it) is brought back over
         // about a second of riding, so an early or late turn-in ends on the arc rather than parallel to it
@@ -3732,12 +3737,22 @@ class Vehicle {
         const want = Math.max(0, Math.min(1 / radiusFloor, 1 / lineRadius - 2 * Math.sin(ahead) / reach));
         const lineLean = -sign * Math.min(leanLimit, Math.atan(v * v * want / 9.81));
         this.lineLeanTarget = lineLean; // read by the smoothness tests
-        const weight = Math.min(1, world.lineStrength * share * fade * Math.abs(u));
+        // (held whole in a tight bend at a low pace, hold: at lineStrength a rider at 4 m/s still leaned 35 degrees
+        // on the handlebar's turn and went onto the inside grass of leg 3's 10 m hairpins)
+        const weight = Math.min(1, (world.lineStrength + (1 - world.lineStrength) * hold) * share * fade * Math.abs(u));
         this.lineWant = sign * want;
         // The handlebar is steered onto the line whole at full input (the rider's share of a lock that turns the bike
         // at under 3 m would still cut every hairpin)
         this.lineWeight = handlebarShare > 0 ? Math.min(1, share * fade * Math.abs(u)) : 0;
         return rate * (1 - weight) + weight * WorldAssist.LINE_GAIN * (lineLean - this.leanAngle);
+    }
+
+    // The tightest the road bends (1/m) from the bike's place to HOLD_LOOK_S of riding ahead of it, 8 m at the least
+    tightAhead(v) {
+        let most = 0;
+        const reach = Math.max(8, v * Vehicle.HOLD_LOOK_S);
+        for (let d = 0; d <= reach; d += 2) most = Math.max(most, Math.abs(this.roadCurvature(d)));
+        return most;
     }
 
     releaseLine(rate) {
@@ -5163,8 +5178,18 @@ class Vehicle {
         if (world && !this.crashed) this.brushStep(deltaTime);
         const brushed = world && !this.crashed && this.brushWall(zone, projection, halfRoadWidth, deltaTime);
 
-        // Hit a wall: crash with a bounce back toward the road
-        if (zone.kind === 'wall' && !this.crashed && !brushed) {
+        // At walking pace (wallBrush.slowMs) a wall is no crash, wherever the bike met it: it is put back the step it
+        // came and stands against the wall (a wall met where the brush finds no face of its own, the inside of leg 3's
+        // hairpin at s 2 980, crashed a rider at 0.8 m/s)
+        const slow = world && world.wallBrush && this.speed < (world.wallBrush.slowMs || 0);
+        if (zone.kind === 'wall' && !this.crashed && !brushed && slow) {
+            this.position.x -= this.velocity.x * deltaTime;
+            this.position.z -= this.velocity.z * deltaTime;
+            this.speed = 0;
+            this.velocity.x = 0;
+            this.velocity.z = 0;
+        } else if (zone.kind === 'wall' && !this.crashed && !brushed) {
+            // Hit a wall: crash with a bounce back toward the road
             this.crashed = true;
             this.crashWhy = 'wall';
             // The wall's face, out of it toward the road, for how the rider meets it (Vehicle.riderCrash)
@@ -5227,6 +5252,8 @@ class Vehicle {
         const rule = this.worldPhysics && this.worldPhysics.wallBrush;
         if (!rule) return false;
         const sin = Math.sin(this.yawAngle), cos = Math.cos(this.yawAngle);
+        // At walking pace every touch is a brush (WorldPhysics.wallBrush.slowMs)
+        if (this.speed < (rule.slowMs || 0)) return true;
         // The share of the heading that goes into the wall: 0 along it, 1 head-on
         const into = -(sin * nx + cos * nz);
         // The speed into the wall counts over the whole contact: a wall may turn a bike that grazes it, not carry it
@@ -5438,6 +5465,16 @@ class Vehicle {
         if (house) {
             // A building's face is a wall as any other: the tyres alone at a glance brush it (wallTouch)
             if (house !== true && this.brushHouse(house, world.houseHitM || 0)) return;
+            // At walking pace a building is no crash either (wallBrush.slowMs): the bike is put back the step it came
+            // and stands against it
+            if (world.wallBrush && this.speed < (world.wallBrush.slowMs || 0)) {
+                this.position.x -= this.velocity.x * deltaTime;
+                this.position.z -= this.velocity.z * deltaTime;
+                this.speed = 0;
+                this.velocity.x = 0;
+                this.velocity.z = 0;
+                return;
+            }
             // (a stopping place's props name themselves: PlaceMesh)
             this.worldCrash(house.label ? `Rode into a ${house.label}` : 'Rode into a building', null, 'building');
             return;
@@ -5752,6 +5789,9 @@ Vehicle.TAIL_LIGHT_INTENSITY = 1.0;
 // A lowside or a fall at walking pace as it is drawn (Vehicle.drawFall): downS and tipS seconds for the bike to go
 // from its lean to its side; spin rad the sliding bike turns into the bend for each metre slid, at most spinMax;
 // sparkS seconds between the sparks a bike sliding on the carriageway throws, over sparkSpeed m/s (Game)
+// Seconds of riding the line capture's hold looks ahead for a tight bend (Vehicle.tightAhead)
+Vehicle.HOLD_LOOK_S = 1.5;
+
 Vehicle.FALL = Object.freeze({ downS: 0.45, tipS: 0.8, spin: 0.07, spinMax: 1.3, sparkS: 0.08, sparkSpeed: 4 });
 
 // How the rider comes off, by what caused the crash. Whoever raises a crash names the class of its cause
