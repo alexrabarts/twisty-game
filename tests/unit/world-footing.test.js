@@ -52,12 +52,10 @@ describe('the Tremola slice: buildings on dry land, meeting the ground', () => {
     });
 
     test('every building stands on its own footing, in stone, reaching up into its walls; no footing stands alone', () => {
-        // The walls' stone, or (since 0f20e16, a house that fades in and out) its own copy of it that fades with the
-        // house (Scenery.footingMaterial): both are the stone, patched as the walls are
-        const stone = [game.RoadMesh.stoneMaterial(), game.Scenery.footingMaterial()];
+        const stone = game.RoadMesh.stoneMaterial();
         const footings = things.filter(t => t.name === 'houses:footing' || t.name.endsWith(':footing'));
         expect(footings.length).toBe(rows.length);
-        expect(footings.filter(f => !stone.includes(f.material)).map(f => f.name)).toEqual([]);
+        expect(footings.every(f => f.material === stone)).toBe(true);
         expect(buildings.orphans).toEqual([]);
         const bare = rows.filter(r => !r.footing || r.gapM > 0);
         if (bare.length) throw new Error(`${bare.length} buildings without a footing under their walls:\n${list(bare)}`);

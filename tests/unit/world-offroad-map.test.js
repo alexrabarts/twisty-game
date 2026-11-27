@@ -22,9 +22,7 @@ import { findHairpins } from '../../tools/world/verify.mjs';
 
 const REPO = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..', '..');
 const game = loadGame();
-// (with the tip of a rider who cannot reach the ground on a slope, Vehicle.FOOT_REACH since af878c6: the top off-road
-// bike's rider is one, and on the steep land behind a wall the bike can stop and go over on its side)
-const CAUSES = ['Rode into the water', 'Hit the wall', 'Went over the edge of a drop', 'Went over the edge of a steep drop', 'Rode onto a slope too steep to hold', 'Rode into a building', 'Rode off the edge of the mapped land', game.Vehicle.FOOT_REACH.cause];
+const CAUSES = ['Rode into the water', 'Hit the wall', 'Went over the edge of a drop', 'Went over the edge of a steep drop', 'Rode onto a slope too steep to hold', 'Rode into a building', 'Rode off the edge of the mapped land'];
 
 describe('the top off-road bike over the map', () => {
     let env, hairpins, top, plain, penalty;

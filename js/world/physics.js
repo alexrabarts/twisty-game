@@ -57,7 +57,6 @@ const WorldPhysics = Object.freeze({
     fallSpeed: 1.75,       // m/s
     tipLeanDeg: 18,
     tipS: 0.15,
-    stopLean: 0.8,         // under fallSpeed the steering leans the bike to this share of tipLeanDeg at most
     footDownDecel: 2.5,    // m/s^2
     footDownRight: 6,      // 1/s
     footDownSpeed: 1,      // m/s, under this with a foot down the bike stops

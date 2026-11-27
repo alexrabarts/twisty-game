@@ -2,7 +2,8 @@
 // stands at (WorldGround.groundY) is the height of the surface drawn there. Shared by the node test
 // (tests/unit/world-ground-drawn.test.js) and tools/world/debug/ground-drawn.mjs.
 //
-// groundDrawnWindow(game, env, store, s0, s1) reads the ride's rows from s0 to s1 (each row and half way to the next),
+// groundDrawnWindow(game, env, store, s0, s1) reads the ride's segments from s0 to s1 (a quarter and three quarters of the way along each: on a row
+// itself a point belongs to both its segments, and a wall's end there is read from the one that has it),
 // on each side, at laterals from just past the carriageway's edge to `faceM` short of the verge's edge (the coping's
 // band lies in the verge, COPING_W_M in from a face STONE_PROUD_M past it; within a hand of the face the two read the
 // face's line a few centimetres apart), and keeps every point where the two differ by more than `stepM`: the drawn top is the highest drawn
@@ -66,15 +67,15 @@ export function groundDrawnWindow(game, env, store, s0, s1, rules = GROUND_DRAWN
         const held = env.streamer && env.streamer.roads.get(index);
         // (a far section's rows are 16 m apart: read at full detail only)
         if (held && held.lod > 0) continue;
-        group.traverse(o => { if (o.isMesh && !/tube|lining|fitting/.test(o.name)) grids.push(gridOf(o, 0, o.geometry.index ? o.geometry.index.count : o.geometry.attributes.position.count)); });
+        group.traverse(o => { if (o.isMesh && o.name !== 'tube-fittings') grids.push(gridOf(o, 0, o.geometry.index ? o.geometry.index.count : o.geometry.attributes.position.count)); });
     }
-    for (const group of env.sideMeshes.values()) group.traverse(o => { if (o.isMesh && !/tube|lining|fitting/.test(o.name)) grids.push(gridOf(o, 0, o.geometry.index ? o.geometry.index.count : o.geometry.attributes.position.count)); });
+    for (const group of env.sideMeshes.values()) group.traverse(o => { if (o.isMesh && o.name !== 'tube-fittings') grids.push(gridOf(o, 0, o.geometry.index ? o.geometry.index.count : o.geometry.attributes.position.count)); });
     const drawnTop = (x, z, under) => { let best = null; for (const g of grids) { const y = g.top(x, z, under); if (y !== null && (best === null || y > best)) best = y; } return best; };
-    const route = env.route, points = route.points, proj = {}, located = {};
+    const route = env.route, points = route.points, located = {};
     const verge = game.RoadSurface.VERGE_M;
     const from = Math.max(0, route.indexAt(s0)), to = Math.min(points.length - 2, route.indexAt(s1));
     for (let i = from; i <= to; i++) {
-        for (const t of [0, 0.5]) {
+        for (const t of [0.25, 0.75]) {
             const a = points[i], b = points[i + 1];
             const s = a.s + (b.s - a.s) * t;
             const p = route.sample(s, {});
@@ -84,15 +85,14 @@ export function groundDrawnWindow(game, env, store, s0, s1, rules = GROUND_DRAWN
                 const edge = env.ground.vergeAt ? env.ground.vergeAt(i, side * (half + 0.5), t) : verge;
                 for (let d = half + 0.1; d <= half + edge - rules.faceM + 1e-6; d += rules.lateralStepM) {
                     const x = p.x + nx * d * side, z = p.z + nz * d * side;
-                    route.project(x, z, null, proj);
-                    // (only where this row's edge is the nearest road: in a hairpin the other leg is its own)
-                    if (Math.abs(proj.s - s) > 2) continue;
-                    Object.assign(located, { index: proj.index, t: proj.along, lateral: proj.lateral, x, z, roadY: proj.y, flags: proj.flags });
-                    const zone = env.ground.zoneAt(located, proj.width / 2);
+                    // (located on this row's own leg, as the bike rides it: in a hairpin or under a road the other
+                    // leg is its own; WorldGround.locate with a hint)
+                    const y = env.ground.groundY(x, z, { start: Math.max(0, i - 1), end: i + 1 }, false, located);
+                    if (Math.abs(located.lateral) <= located.width / 2) continue;
+                    const zone = env.ground.zoneAt(located, located.width / 2);
                     // (a fall, and a wall the bike meets as a face, a parapet or a tube's rock, are world-fairness's: a wall's
                     // coping, COPING_UP_M high, is a step the bike stands on)
                     if (zone && (zone.kind === 'fall' || (zone.kind === 'wall' && !(zone.height <= game.RoadMesh.COPING_UP_M + 1e-6)))) continue;
-                    const y = env.ground.groundY(x, z, null);
                     if (!Number.isFinite(y)) continue;
                     const drawn = drawnTop(x, z, y + rules.overM);
                     if (drawn === null) continue;

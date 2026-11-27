@@ -8,14 +8,14 @@
 //   mouth   no land over the road in front of a portal, between its walls
 //   face    land that stands over the roof behind a portal is fronted in the portal's plane
 // The rules that hold these are the builders' own, for any world (.agent/system/world.md, "Land and the tunnels").
-import { describe, test, expect, beforeAll, afterAll } from '@jest/globals';
+import { describe, test, expect, beforeAll } from '@jest/globals';
 import { loadGame } from '../helpers/load-game.js';
 import { stagesFor } from '../helpers/world-stages.js';
 import { diskFetch } from '../helpers/world-fetch.js';
 import { tunnelWindow, tunnelReport, TUNNEL_LIMITS } from '../helpers/world-tunnels.js';
 
 const game = loadGame(undefined, []);
-const { THREE } = game;
+const { THREE, WorldEnvironment } = game;
 const WALK_M = 200;
 // Every tube within this of the bike is read: the side roads' tubes stand up to some hundreds of metres off the ride
 const NEAR_M = 500;
@@ -59,35 +59,21 @@ describe('the rule (TerrainMesh.tubeClip)', () => {
 const list = (items, kind, n = 8) => items.filter(r => r[kind] > 0).slice(0, n).map(r => JSON.stringify({ key: r.key, kind: r.kind, s: r.s, lengthM: r.lengthM, [kind]: r[kind], worst: r.worst[kind] })).join('\n');
 
 for (const stage of stagesFor()) describe(`the ${stage} stage: no land in a tube or across its portals`, () => {
-    // Each stage has a game of its own, so nothing the builders keep between worlds (shared materials, caches) lives
-    // on past the stage
-    let found, env, own;
+    let found, env;
     beforeAll(async () => {
-        own = loadGame(undefined, []);
         const { fetchFn } = diskFetch();
-        env = await own.WorldEnvironment.load(new own.THREE.Scene(), { id: stage, fetchFn, models: null, digest: async () => '0' });
+        env = await WorldEnvironment.load(new THREE.Scene(), { id: stage, fetchFn, models: null, digest: async () => '0' });
         env.scenery.buildTile = () => null;
         const store = {};
         for (let s = env.startS + 1; s < env.endS; s += WALK_M) {
             const p = env.route.sample(s, {});
             env.update(p, s, null, Infinity);
             await env.streamer.settle(p, s);
-            tunnelWindow(own, env, store, p, { nearM: NEAR_M });
+            tunnelWindow(game, env, store, p, { nearM: NEAR_M });
         }
         found = tunnelReport(store);
-        console.log(`tunnels (heap ${Math.round(process.memoryUsage().heapUsed / 1048576)} MB): ${found.runs} runs, ${found.portals} portals, ${found.places} places; ${found.inside} with land inside, ${found.floor} with no floor, ${found.mouth} with land in front of a mouth, ${found.face} with land unfronted across a portal\n${JSON.stringify(found.list.slice(0, 12).map(r => ({ key: r.key, kind: r.kind, lengthM: r.lengthM, inside: r.inside, floor: r.floor, mouth: r.mouth, face: r.face })))}`);
+        console.log(`tunnels: ${found.runs} runs, ${found.portals} portals, ${found.places} places; ${found.inside} with land inside, ${found.floor} with no floor, ${found.mouth} with land in front of a mouth, ${found.face} with land unfronted across a portal\n${JSON.stringify(found.list.slice(0, 12).map(r => ({ key: r.key, kind: r.kind, lengthM: r.lengthM, inside: r.inside, floor: r.floor, mouth: r.mouth, face: r.face })))}`);
     }, 3600000);
-    // Each stage's world is let go when its tests are done: every stage's env and readings held to the file's end ran
-    // the worker out of its heap after four or five of the tour's stages
-    afterAll(() => {
-        if (env) env.dispose();
-        env = null;
-        found = null;
-        own = null;
-        const g = typeof gc === 'function' ? gc : (globalThis.gc || null);
-        if (g) g();
-        console.log(`MEM after ${stage}: gc ${!!g} heap ${Math.round(process.memoryUsage().heapUsed / 1048576)} MB`);
-    });
 
     test('the far grid is cut only in the tubes\' boxes: every triangle clear of them is kept whole, every attribute at the vertex count', () => {
         const whole = env.horizonWhole, geometry = env.horizon.geometry, tubes = [...env.rideTubes(), ...[...env.sideTubes.values()].flat()];

@@ -184,15 +184,23 @@ class WorldGround extends Ground {
     }
 
     // The verge's width on the `sign` side of the ride between row `index` and the next, at share `t`: the drawn verge
-    // (RoadSurface.VERGE_M), and a stopping place's hard standing where the ride has one (WorldPlaces: padN, padP).
+    // (RoadMesh.verges: RoadSurface.VERGE_M, less on a bridge or in a tube), and a stopping place's hard standing where
+    // the ride has one (WorldPlaces: padN, padP).
     // `safe` reads every place, drawn or not (safeN, safeP): what the bike's surface rule calls the verge
     vergeAt(index, sign, t = 0, safe = false) {
         const points = this.route.points;
         const i = Math.max(0, Math.min(points.length - 1, index));
         const a = points[i], b = points[Math.min(points.length - 1, i + 1)];
-        const key = safe ? (sign > 0 ? 'safeP' : 'safeN') : sign > 0 ? 'padP' : 'padN';
-        const pa = a[key] || 0, pb = b[key] || 0;
-        return RoadSurface.VERGE_M + (pa || pb ? pa + (pb - pa) * Math.max(0, Math.min(1, t || 0)) : 0);
+        const u = Math.max(0, Math.min(1, t || 0));
+        if (!safe) {
+            // As RoadMesh draws each row's verge (RoadMesh.verges: narrower on a bridge and in a tube, and the hard
+            // standing's on top), between the two rows. At VERGE_M on a structure's row, the physics stood on 1.1 m
+            // of verge where 0.4 to 0.7 m is drawn, over a drop at a tunnel's portal onto a bridge (leg 4 s 11 066)
+            const k = sign > 0 ? 1 : 0, va = RoadMesh.verges(a)[k], vb = RoadMesh.verges(b)[k];
+            return va + (vb - va) * u;
+        }
+        const key = sign > 0 ? 'safeP' : 'safeN', pa = a[key] || 0, pb = b[key] || 0;
+        return RoadSurface.VERGE_M + (pa || pb ? pa + (pb - pa) * u : 0);
     }
 
     groundY(x, z, hint, exact = false, loc = {}) {
@@ -206,7 +214,7 @@ class WorldGround extends Ground {
     heightAt(loc, exact = false, lift = 0, coping = true) {
         const half = loc.width !== undefined ? loc.width / 2 : this.halfRoad(loc);
         const reach = Math.abs(loc.lateral);
-        const roofed = loc.flags ? loc.flags.tunnel || loc.flags.gallery : false;
+        const roofed = this.roofedAt(loc);
         if (reach <= half || (roofed && reach <= half + WorldGround.BENCH_M + 1)) return loc.roadY + lift;
         const at = this.position(loc);
         const side = this.sideRoadY(at.x, at.z);
@@ -225,7 +233,10 @@ class WorldGround extends Ground {
             const run = a ? (b ? a.run + (b.run - a.run) * t : a.run) : b ? b.run : 0;
             if ((a || b) && reach > edge && reach - edge <= run) return Math.max(land, a && b ? a.y + (b.y - a.y) * t : a ? a.y + (Math.min(a.y, land) - a.y) * t : b.y + (Math.min(b.y, land) - b.y) * (1 - t));
         }
-        if (!this.bridgeOrDrop(loc, half)) return Math.max(land, this.earthworkY(loc, half, reach, lift));
+        // (on the verge the drawn verge is the top: the land is held under it, and at a tube's portal it is cut away.
+        // Read as the higher of the two, the physics stood on the land's uncut height 4 m over the verge drawn at leg
+        // 5's s 32 377)
+        if (!this.bridgeOrDrop(loc, half)) return reach <= half + this.vergeAt(loc.index, loc.lateral, loc.t) ? this.earthworkY(loc, half, reach, lift) : Math.max(land, this.earthworkY(loc, half, reach, lift));
         if (band) return reach < band.from ? loc.roadY + lift : land;
         // Before a retaining wall the verge is the ribbon's, at the road's height, out to the parapet's inner face (the
         // parapet stands on the last PARAPET_W_M of the verge); on a viaduct out to its parapet
@@ -265,6 +276,13 @@ class WorldGround extends Ground {
                 if ((loc.roadY - this.landY(at.x, at.z, loc.roadY)) * share < 0.1) return null;
             }
         }
+        // (as the coping is drawn there at full detail, WorldEnvironment.copingAt: none where none is laid)
+        const drawn = this.copingAt ? this.copingAt(loc.index, sign) : undefined;
+        if (drawn === null) return null;
+        if (drawn) {
+            const u = Math.max(0, Math.min(1, loc.t || 0)), to = drawn[0] + (drawn[2] - drawn[0]) * u, from = drawn[1] + (drawn[3] - drawn[1]) * u;
+            return { from: Math.max(half, from), to };
+        }
         // (never on the carriageway itself: where a verge narrows by a junction the coping reaches over its edge)
         return { from: Math.max(half, face - RoadMesh.COPING_W_M), to: face };
     }
@@ -277,6 +295,10 @@ class WorldGround extends Ground {
     earthworkY(loc, half, reach, lift = 0) {
         const edge = half + this.vergeAt(loc.index, loc.lateral, loc.t);
         if (reach <= edge) return loc.roadY + lift;
+        // (none where edgeWorks laid no slope on the segment at full detail, WorldEnvironment.slopeAt: the land is the
+        // ground there. A slope the physics read where none is drawn stood 4 m over the land beside a wall's end at the
+        // Tremola's s 1 257)
+        if (this.slopeAt && this.slopeAt(loc.index, Math.sign(loc.lateral || 1)) === false) return -Infinity;
         const point = this.route.points[Math.max(0, Math.min(this.route.points.length - 1, loc.index))];
         const side = Math.sign(loc.lateral || 1);
         const at = WorldGround.pointAt(point, side * edge, this.scratchEdge || (this.scratchEdge = {}));
@@ -347,6 +369,17 @@ class WorldGround extends Ground {
     // from the 8 m zone layer and has none). Vehicle.brushWall reads both
     // `loc.t` is how far along its piece loc is: a parapet past a wall's end can start part of the way along one
     // (WorldEnvironment.parapetAt)
+    // Whether loc lies in a tube: its segment's two rows are a tunnel's or a gallery's, as the tube is drawn (TubeLining
+    // and the portal stand at the last roofed row). Read from the segment's first row alone, the segment from a
+    // tunnel's last row out onto a bridge (leg 4 s 11 064.5 to 11 068.4) had the tube's bench at the road's height
+    // 8 m out and its rock wall past it, over a drop of 19 m with nothing drawn there
+    roofedAt(loc) {
+        const points = this.route.points, roof = WorldRoute.FLAG.tunnel | WorldRoute.FLAG.gallery;
+        if (!(loc.index >= 0) || !points.length) return loc.flags ? !!(loc.flags.tunnel || loc.flags.gallery) : false;
+        const i = Math.min(points.length - 1, loc.index), j = Math.min(points.length - 1, i + 1);
+        return !!(points[i].bits & roof) && !!(points[j].bits & roof);
+    }
+
     zoneAt(loc, halfRoad) {
         const sign = loc.lateral < 0 ? -1 : 1;
         const reach = Math.abs(loc.lateral);
@@ -354,7 +387,7 @@ class WorldGround extends Ground {
         if (reach <= halfRoad) return { kind: 'road', side: this.roadSide, sign, start: 0 };
         const point = this.route.points[Math.max(0, Math.min(this.route.points.length - 1, loc.index))];
         const works = reach <= halfRoad + WorldGround.WORKS_REACH_M;
-        if (works && point.bits & (WorldRoute.FLAG.tunnel | WorldRoute.FLAG.gallery)) {
+        if (works && this.roofedAt(loc)) {
             // Rock beside a tunnel or gallery: a wall just past the kerb
             return { kind: reach <= halfRoad + WorldGround.BENCH_M ? 'shoulder' : 'wall', side: this.benchSide, sign, start: reach <= halfRoad + WorldGround.BENCH_M ? halfRoad : halfRoad + WorldGround.BENCH_M, line: true };
         }

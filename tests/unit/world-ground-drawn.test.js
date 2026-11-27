@@ -6,10 +6,9 @@
 // drawn there by more than 0.2 m is a place. world-fairness reads only the wall and fall zones the physics makes, so a
 // step under a wall's rise, the physics on a coping past a wall's end that the drawing never laid (leg 5 s 37 555,
 // 0.5 m over the verge: WorldEnvironment.taperAt now reads the taper RoadMesh.edgeWorks lays), passed as verge.
-// KNOWN holds the places each stage has today (2026-11-27), as exact counts that may only shrink. Most are the
-// physics' coping over a verge that is drawn lower or not at all, the worst 10 to 27 m over the land drawn there
-// (leg 4 s 11 113, leg 3 s 5 905, the Gotthard north side s 12 539); `node tools/world/debug/ground-drawn.mjs <stage>`
-// lists them.
+// KNOWN holds the places each stage has today (2026-11-27), as exact counts that may only shrink: steps of 0.2 to 0.5 m,
+// most at a wall's end (the coping's band against the end drawn) or where the drawn verge stands a little over the
+// physics; `node tools/world/debug/ground-drawn.mjs <stage>` lists them.
 import { describe, test, beforeAll } from '@jest/globals';
 import { loadGame } from '../helpers/load-game.js';
 import { diskFetch } from '../helpers/world-fetch.js';
@@ -17,16 +16,16 @@ import { groundDrawnWindow, groundDrawnReport } from '../helpers/world-ground-dr
 import { stagesFor } from '../helpers/world-stages.js';
 
 const KNOWN = {
-    tremola: 30,
-    'gotthard-north': 104,
-    'airolo-lookout': 61,
-    'lookout-andermatt': 103,
-    'andermatt-goeschenen': 117,
-    'goeschenen-susten': 135,
-    'susten-gadmen': 103,
-    'gadmen-innertkirchen': 43,
-    'innertkirchen-guttannen': 27,
-    'guttannen-grimsel': 44
+    tremola: 6,
+    'gotthard-north': 7,
+    'airolo-lookout': 9,
+    'lookout-andermatt': 8,
+    'andermatt-goeschenen': 5,
+    'goeschenen-susten': 2,
+    'susten-gadmen': 0,
+    'gadmen-innertkirchen': 3,
+    'innertkirchen-guttannen': 2,
+    'guttannen-grimsel': 9
 };
 
 const game = loadGame(undefined, []);

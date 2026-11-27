@@ -293,12 +293,8 @@ describe('how far the road turns ahead', () => {
 
     test('the cut rule, the camera and the test pilot read the one sampler and keep no copy of it', () => {
         const copy = /\.heading\s*-\s*[\w.]+\.heading|wrap\(\s*\w+\s*-\s*\w+\s*\)/;
-        // The camera's road mean (WorldCamera.roadMean, since e73c9f4) unwraps the road's heading at one s near the
-        // camera's own heading, then turns it by the sampler's curvature. That is no heading change of the road
-        // between two places, so it is no copy of the sampler, and it is the one line let through
-        const unwrap = 'let heading = near + WorldCamera.wrap(start - near);';
         for (const file of ['js/world/run.js', 'js/world/camera.js', 'tools/autopilot.js']) {
-            const text = readFileSync(new URL(file, root), 'utf8').split(unwrap).join('');
+            const text = readFileSync(new URL(file, root), 'utf8');
             expect([file, copy.test(text)]).toEqual([file, false]);
             expect([file, /\.(headingChange|curvatureAt)\(/.test(text)]).toEqual([file, true]);
         }

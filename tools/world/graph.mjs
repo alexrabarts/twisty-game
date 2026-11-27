@@ -138,41 +138,10 @@ export function buildCorridorGraph({ edges, stages, corridorM = CORRIDOR_M }) {
     if (e) side.push(e);
   }
   side.sort(sideOrder);
-  for (const e of looseKept(out, side, nodes.length)) { e.id = out.length; out.push(e); }
+  for (const e of side) { e.id = out.length; out.push(e); }
 
   const ride = steps.map(st => ({ edgeId: edgeOfPiece.get(st.piece).id, dir: st.from === graph.pieces[st.piece].a ? 1 : -1, stage: st.stage }));
   return { nodes, edges: out, ride, stageSteps, snaps: snaps.map(s => ({ name: s.waypoint.name, distM: s.d, road: s.e.name ?? null })) };
-}
-
-// The side edges a world keeps of `side`: a bridge whose end is a dead end (a node no other kept edge meets) is
-// dropped, then every piece no longer joined to the ride. In the source an old road's bridge is a motor road while
-// the ways that lead to it are paths (Weg), which stay out (isMotorRoad): the bridge was kept alone and drawn as a
-// deck in the air (andermatt-goeschenen, edges 730 and 731 at ride km 1.9 and 2.1). Repeats until nothing changes,
-// as a dropped bridge can leave another dead end
-export function looseKept(ride, side, nodeCount) {
-  const bridge = e => /br(ue|ü)cke/i.test(e.structure ?? '');
-  let kept = side.slice();
-  for (let changed = true; changed;) {
-    changed = false;
-    const deg = new Uint16Array(nodeCount);
-    for (const e of [...ride, ...kept]) { deg[e.a]++; deg[e.b]++; }
-    const next = kept.filter(e => !(bridge(e) && (deg[e.a] === 1 || deg[e.b] === 1)));
-    if (next.length !== kept.length) { kept = next; changed = true; }
-  }
-  // (and a piece that only a dropped bridge joined to the ride: joined before, cut off now. A piece the corridor
-  // cut off on its own stays as it was)
-  const reached = list => {
-    const reach = new Set();
-    for (const e of ride) { reach.add(e.a); reach.add(e.b); }
-    for (let grew = true; grew;) {
-      grew = false;
-      for (const e of list) if (reach.has(e.a) !== reach.has(e.b)) { reach.add(e.a); reach.add(e.b); grew = true; }
-    }
-    return reach;
-  };
-  if (kept.length === side.length) return kept;
-  const before = reached(side), after = reached(kept);
-  return kept.filter(e => after.has(e.a) || !before.has(e.a));
 }
 
 export function degreeOf(nodes, edges) {

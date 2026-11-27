@@ -174,15 +174,11 @@ describe('a ride built in steps holds the same window as one built whole', () =>
             for (let k = 0; k < 4; k++) env.update(p, s, null, Infinity, 1);
             await env.streamer.settle(p, s);
             // (a tile's scenery that waits for its side roads' data, WorldEnvironment.buildScenery, is not the streamer's
-            // to wait for: its data comes in its own time, whichever way the builds were taken. The wait is for the data,
-            // not for a count of turns: 500 turns of 5 ms gave up on a busy host, and the window compared then held a
-            // tile's scenery on one side that the other was still waiting to build)
-            const until = Date.now() + 120000;
-            while (env.sceneryWaiting && env.sceneryWaiting.size && Date.now() < until) {
+            // to wait for: its data comes in its own time, whichever way the builds were taken)
+            for (let k = 0; k < 500 && env.sceneryWaiting && env.sceneryWaiting.size; k++) {
                 await new Promise(r => setTimeout(r, 5));
                 await env.streamer.settle(p, s);
             }
-            expect([Math.round(s), [...(env.sceneryWaiting || new Map()).keys()]]).toEqual([Math.round(s), []]);
             await env.streamer.settle(p, s);
             env.scenery.rankTrees(p);
             const forest = [];

@@ -116,14 +116,11 @@ describe('a rider ahead of the player', () => {
 
     test('ahead of a slow player it eases to the player\'s pace and does not pull over while it is near: in sight, or less than farS ahead', () => {
         const bad = [];
-        let easing = 0, most = 0, pulls = 0, stood = 0, stoodMost = 0;
+        let easing = 0, most = 0, pulls = 0;
         const ride = groupRide(game, env, {
             rider: byPlace(6), at: [2300, 2285, 2270, 2255, 2240], player: { s: 2200, pace: () => 6 }, seconds: 420,
             onFrame: ({ t, riders, traffic, proxy, playerS }) => {
                 const group = traffic.group;
-                // (the longest the player stood, at a light: the riders ahead ride on at A.leastMs meanwhile)
-                stood = proxy.currentSpeed < 1 ? stood + 1 / 60 : 0;
-                stoodMost = Math.max(stoodMost, stood);
                 for (const r of riders) {
                     const ahead = sOf(r) - playerS;
                     if (t > 30) most = Math.max(most, ahead);
@@ -134,13 +131,10 @@ describe('a rider ahead of the player', () => {
                     r.ride.wasState = r.ride.state;
                     if (!r.ride.easing) { r.easedS = 0; continue; }
                     easing++;
-                    // It has slowed to the player's pace once it could at a firm 5 m/s^2 from the speed it started to ease at:
-                    // the player's speed eased over A.paceS, never under A.leastMs (a rider held to the player's speed of
-                    // the moment stood in its lane while the player stood)
-                    const pace = Math.max(A.leastMs, group.leadPace);
-                    if (!r.easedS) r.settleS = Math.max(3, (r.currentSpeed - pace) / 5);
+                    // It has slowed to the player's pace once it could at a firm 5 m/s^2 from the speed it started to ease at
+                    if (!r.easedS) r.settleS = Math.max(3, (r.currentSpeed - proxy.currentSpeed) / 5);
                     r.easedS = (r.easedS || 0) + 1 / 60;
-                    if (r.easedS > r.settleS && r.currentSpeed > pace + 0.3) bad.push({ t, name: r.riderName, speed: r.currentSpeed, pace, player: proxy.currentSpeed });
+                    if (r.easedS > r.settleS && r.currentSpeed > proxy.currentSpeed + 0.3) bad.push({ t, name: r.riderName, speed: r.currentSpeed, player: proxy.currentSpeed });
                 }
             }
         });
@@ -148,8 +142,7 @@ describe('a rider ahead of the player', () => {
         if (bad.length) throw new Error(`${bad.length} frames: ${JSON.stringify(bad.slice(0, 6))}`);
         // (held to the player's pace from aheadM, it never gets far: nobody pulls over)
         expect(pulls).toBe(0);
-        // (and the metres a rider rides on at A.leastMs while the player stands at a light)
-        expect(most).toBeLessThan(A.aheadM + 120 + A.leastMs * stoodMost);
+        expect(most).toBeLessThan(A.aheadM + 120);
         expect(ride.overlaps).toEqual([]);
     }, 600000);
 

@@ -40,7 +40,7 @@ export function modesOf(THREE) {
 // (its walls RoadMesh.TUBE_WALL_M past half the road's width, its roof WorldRoute.ROOF_M over the road), looked for within
 // `units` route samples of `index`: the least of its room under the roof and to the nearer wall (m, below 0 through
 // it), Infinity outside a tube and in front of a portal
-export function tubeRoom(game, route, x, y, z, index, units = 12, out = {}, env = game.environment) {
+export function tubeRoom(game, route, x, y, z, index, units = 12, out = {}) {
     const { RoadMesh, WorldRoute } = game;
     const from = Math.max(0, index - units), to = Math.min(route.points.length - 2, index + units);
     route.nearestSegment(x, z, from, to, out);
@@ -53,10 +53,8 @@ export function tubeRoom(game, route, x, y, z, index, units = 12, out = {}, env 
     // (a point more than a tube's height off this road's level is in another leg's tube or over the hill)
     if (Math.abs(y - out.y) > WorldRoute.ROOF_M + 3) return Infinity;
     const wall = out.width / 2 + RoadMesh.TUBE_WALL_M - out.distance;
-    // (outside the walls, at the tube's own level: through a wall; in a rounded tube to its curve too, StructureStyles)
-    const info = env && env.tubeInfo ? env.tubeInfo() : null;
-    const run = info && info.run[out.index] >= 0 ? info.runs[info.run[out.index]] : null;
-    return game.StructureStyles.roomAt(run ? run.profile : 'box', wall, y - out.y, WorldRoute.ROOF_M);
+    // (outside the walls, at the tube's own level: through a wall)
+    return Math.min(out.y + WorldRoute.ROOF_M - y, wall);
 }
 
 // The speed (m/s) at every `step` metres from s0 to s1 that a pilot cruising at `cruise` rides
@@ -144,10 +142,10 @@ export function chaseRide(game, env, { s0, s1, mode = CHASE_MODES.near, cruise =
             road.set(q.x, q.y, q.z).project(camera);
             const seen = Math.abs(road.x) <= 1 && Math.abs(road.y) <= 1 && road.z < 1;
             // (the least room in a tube of the eye and of the near plane's corners, Infinity in the open)
-            let under = tubeRoom(game, route, e.x, e.y, e.z, vehicle.projection.index, 12, nearAt, env);
+            let under = tubeRoom(game, route, e.x, e.y, e.z, vehicle.projection.index, 12, nearAt);
             for (const [cx, cy] of NEAR_CORNERS) {
                 corner.set(cx, cy, -1).unproject(camera);
-                under = Math.min(under, tubeRoom(game, route, corner.x, corner.y, corner.z, vehicle.projection.index, 12, nearAt, env));
+                under = Math.min(under, tubeRoom(game, route, corner.x, corner.y, corner.z, vehicle.projection.index, 12, nearAt));
             }
             rows.push({ s, t, speed, yaw: Math.atan2(dir.x, dir.z), across, screen: bike.x, room, seen, under, x: vehicle.position.x, z: vehicle.position.z, ex: e.x, ey: e.y, ez: e.z });
             s += speed * DT;

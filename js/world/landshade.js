@@ -440,75 +440,6 @@ if (edgeAt > 0.0) {
     // `floor` scales the sky's floor (a structure's underside sees the light the land and the sky throw back)
     // `edge` for the tiles: where a tile meets the far land at the window's edge it takes the far land's colour and
     // normal (LandShade.EDGE_M, LandShade.setEdge)
-    // The bases of the retaining wall styles (StructureStyles.WALLS) in GLSL: wallBase(style, down, u, y, near) gives
-    // the albedo of the base and how much of it shows (0 above it, and on a wall with none). `down` metres down from
-    // the wall's top, `u` metres along it, `y` the height
-    static get WALL_GLSL() {
-        const f = v => (Number.isInteger(v) ? `${v}.0` : `${v}`);
-        const W = typeof StructureStyles !== 'undefined' ? StructureStyles.WALLS : { masonry: { base: null, grow: 1.6 } };
-        const R = typeof StructureStyles !== 'undefined' ? StructureStyles.WALL_RULE : { masonryM: 2.2 };
-        const kinds = { rubble: 1, gabion: 2, faced: 3 };
-        const list = Object.values(W);
-        const pick = (field, map) => list.map((w, i) => `if (style < ${f(i + 0.5)}) return ${f(map(w[field]))};`).join(' ');
-        return `
-float wallStyleGrow(float style) { ${pick('grow', v => v)} return 1.0; }
-float wallStyleBase(float style) { ${pick('base', v => kinds[v] || 0)} return 0.0; }
-// The nearest and second nearest of a jittered grid's points to p: (distance, second distance, cell hash)
-vec3 wallCells(vec2 p) {
-    vec2 i = floor(p), fp = fract(p);
-    float d1 = 8.0, d2 = 8.0, id = 0.0;
-    for (int x = -1; x <= 1; x++) for (int y = -1; y <= 1; y++) {
-        vec2 g = vec2(float(x), float(y));
-        vec2 o = vec2(landHash(i + g), landHash(i + g + 19.7)) * 0.8 + 0.1;
-        float d = length(g + o - fp);
-        if (d < d1) { d2 = d1; d1 = d; id = landHash(i + g + 3.3); } else if (d < d2) d2 = d;
-    }
-    return vec3(d1, d2, id);
-}
-vec4 wallBase(float style, float down, float u, float y, float near) {
-    float kind = wallStyleBase(style);
-    float from = ${f(R.masonryM)};
-    if (kind < 0.5 || down < from - 0.06) return vec4(0.0);
-    // (the course line between the masonry and the base: a dark ledge)
-    float ledge = 1.0 - smoothstep(0.02, 0.07, abs(down - from));
-    vec3 c;
-    if (kind < 1.5) {
-        // Rubble: big rough blocks, 0.7 to 1.3 m, deep dark joints, each its own tone
-        vec3 cell = wallCells(vec2(u, y) / vec2(1.05, 0.75));
-        float joint = cell.y - cell.x;
-        float tone = 0.62 + 0.42 * cell.z + 0.15 * (landNoise(vec2(u, y) * 4.0) - 0.5);
-        c = vec3(tone * 1.03, tone, tone * 0.95) * mix(0.38, 1.0, smoothstep(0.02, 0.12, joint) * near + 1.0 - near);
-        c *= 0.9 + 0.2 * landNoise(vec2(u, y) * 1.3);
-    } else if (kind < 2.5) {
-        // Gabions: baskets of a metre's course (each stepped back, its top shaded by the one over it), two metres
-        // long, small stones packed in behind a galvanised diamond mesh
-        float course = floor((down - from) / 1.0);
-        float inCourse = fract((down - from) / 1.0);
-        float bu = u / 2.0 + 0.5 * mod(course, 2.0);
-        float edge = min(min(fract(bu), 1.0 - fract(bu)) * 2.0, min(inCourse, 1.0 - inCourse));
-        vec3 cell = wallCells(vec2(u, y) / 0.2);
-        float tone = 0.55 + 0.45 * cell.z;
-        c = vec3(tone * 1.02, tone, tone * 0.96) * mix(0.3, 1.0, smoothstep(0.01, 0.12, cell.y - cell.x) * near + 1.0 - near);
-        float m1 = abs(fract((u + y) / 0.1) - 0.5), m2 = abs(fract((u - y) / 0.1) - 0.5);
-        float wire = (1.0 - smoothstep(0.03, 0.07, min(m1, m2))) * near;
-        c = mix(c, vec3(0.62, 0.63, 0.64), wire * 0.55);
-        c *= mix(0.55, 1.0, smoothstep(0.0, 0.05, edge));
-        c *= 1.0 - 0.35 * (1.0 - smoothstep(0.0, 0.18, inCourse));
-    } else {
-        // Faced concrete: a plain pour with a stone facing pattern pressed in, weep holes every 2 m in rows, a
-        // stain under each
-        c = vec3(0.86, 0.85, 0.82) * (0.88 + 0.2 * landNoise(vec2(u, y) * 0.6));
-        vec2 hole = vec2(fract(u / 2.0) - 0.5, fract((down - from - 0.6) / 1.6) - 0.5) * vec2(2.0, 1.6);
-        float pipe = 1.0 - smoothstep(0.045, 0.06, length(hole));
-        float stain = (1.0 - smoothstep(0.04, 0.12, abs(hole.x))) * step(hole.y, 0.0) * smoothstep(-0.8, 0.0, hole.y);
-        c *= (1.0 - 0.75 * pipe) * (1.0 - 0.3 * stain * near);
-        c *= mix(1.0, 0.9, (1.0 - smoothstep(0.004, 0.012, abs(fract(y / 0.3) - 0.5) * 0.3)) * near);
-    }
-    c *= 1.0 - 0.5 * ledge;
-    return vec4(c, 1.0);
-}`;
-    }
-
     static patch(material, { curvature = false, detail = false, stone = false, floor = 1, edge = false } = {}) {
         if (material.userData.landShade) return material;
         const S = LandShade.STONE;
@@ -537,7 +468,7 @@ float landNoise(vec2 p) {
     vec2 i = floor(p), f = fract(p);
     vec2 u = f * f * (3.0 - 2.0 * f);
     return mix(mix(landHash(i), landHash(i + vec2(1.0, 0.0)), u.x), mix(landHash(i + vec2(0.0, 1.0)), landHash(i + vec2(1.0, 1.0)), u.x), u.y);
-}${edge ? LandShade.EDGE_COMMON : ''}${stone ? LandShade.WALL_GLSL : ''}`)
+}${edge ? LandShade.EDGE_COMMON : ''}`)
                 .replace('#include <color_fragment>', detail ? `#include <color_fragment>
 {
     float dist = length(vViewPosition);
@@ -566,19 +497,6 @@ float landNoise(vec2 p) {
     if (vWallFace.y > 1.5 && !barrel && dot(vViewPosition, vNormal) < 0.0) discard;
     float u = barrel ? vWallFace.y - ${f(typeof RoadMesh !== 'undefined' ? RoadMesh.BARREL : 50)} : vWallFace.y > 0.5 ? vWallFace.x : dot(vLandPos.xz, t);
     float rise = barrel ? vWallFace.x : vLandPos.y;
-    // A retaining wall's style (StructureStyles.WALLS, wallFace): its code and its metres down from the top. The
-    // blocks grow down the face a band of 2 m at a time (a course line where they change), and under the masonry a
-    // tall wall's base is rubble, gabions or faced concrete (wallBase)
-    float wallDown = 0.0, wallCode = 0.0;
-    if (!barrel && vWallFace.y > 0.5 && vWallFace.y < 1.5) {
-        float wv = vWallFace.y - 1.0;
-        wallCode = floor((wv + 1e-5) / 0.025);
-        wallDown = max(0.0, (wv - wallCode * 0.025) * 5000.0);
-        float grow = wallStyleGrow(floor(wallCode / 4.0));
-        float scale = mix(1.0, grow, clamp(floor(wallDown / 2.0) * 2.0 / 6.0, 0.0, 1.0)) * (0.92 + 0.06 * mod(wallCode, 4.0));
-        u /= scale;
-        rise = (rise - floor(wallDown / 2.0) * 0.37) / scale;
-    }
     float y = rise + ${f(S.wanderM)} * (landNoise(vec2(u * 0.9, rise * 0.5)) - 0.5);
     float band = floor(y / ${f(S.bandM)});
     float inBand = fract(y / ${f(S.bandM)});
@@ -598,12 +516,7 @@ float landNoise(vec2 p) {
     float tone = (0.68 + 0.5 * h + 0.24 * (landNoise(vec2(u, rise) * 5.0) - 0.5)) * (0.78 + 0.36 * stain);
     vec3 face = vec3(tone * (1.0 + 0.14 * tint), tone * (1.0 + 0.04 * (stain - 0.5)), tone * (1.0 - 0.14 * tint)) * mix(0.66, 1.0, smoothstep(0.006, 0.035, joint));
     float far = smoothstep(30.0, 140.0, length(vViewPosition));
-    // (each wall's stone a little warmer or cooler by its variant)
-    float wallTint = mod(wallCode, 4.0) - 1.5;
-    face *= vec3(1.0 + 0.025 * wallTint, 1.0, 1.0 - 0.03 * wallTint);
-    vec4 base = wallBase(floor(wallCode / 4.0), wallDown, vWallFace.x, vLandPos.y, 1.0 - far);
-    face = mix(face, base.rgb, base.a);
-    diffuseColor.rgb *= mix(face, vec3(0.84 + 0.2 * (stain - 0.5)) * mix(vec3(1.0), base.rgb / max(0.4, dot(base.rgb, vec3(0.333))) * 0.9, base.a * 0.5), far);
+    diffuseColor.rgb *= mix(face, vec3(0.84 + 0.2 * (stain - 0.5)), far);
 }` : '#include <color_fragment>')
                 // The land is lit by its own normals from either side. A skirt (TerrainMesh.build) carries the normal of
                 // the land above it, and half the skirts face away from the eye: three's two-sided flip turned their
