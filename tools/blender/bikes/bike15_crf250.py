@@ -56,6 +56,8 @@ SEAT = (0, 0.875, -0.08)
 PIVOT = (0.43, -0.17)
 # The dual-purpose tyres' block tread: the depth cut between the knobs (m). TWISTY_KNOBS sets it for a variant build
 KNOBS = float(os.environ.get("TWISTY_KNOBS") or 0.012)
+# The mirrors' glass: "chrome" read as a white card from behind (TWISTY_MIRROR "mirror" for the darker glass)
+MIRROR = os.environ.get("TWISTY_MIRROR") or "mirror"
 # The engine's small parts (engine_parts). TWISTY_ENGINE=0 leaves them out, for a comparison
 ENGINE_PARTS = os.environ.get("TWISTY_ENGINE", "1") != "0"
 # The barrel's finish under its ribs (TWISTY_BARREL for a variant build)
@@ -68,7 +70,7 @@ RIB_OUT = float(os.environ.get("TWISTY_RIB_OUT") or 0.0015)
 SPOKE = os.environ.get("TWISTY_SPOKE") or "steel"
 
 COLOURS = {"paint": 0xD0101C, "paint_dark": 0x5A0508, "accent": 0xECECEC, "rim": 0x17181A, "caliper": 0x2B2C30, "fork_gold": 0xB8923E, "spring": 0xC4161C,
-           "trim": 0x151618, "seat": 0x131315, "plastic": 0xECECEC}
+           "trim": 0x151618, "seat": 0x131315}
 EXTRA = {
     "alu": (0xA6A9AE, 0.36, 0.9),
     "casing": (0x3A3B3F, 0.5, 0.6),
@@ -80,12 +82,16 @@ EXTRA = {
     "scuff_plastic": (0xEFC4BE, 0.9, 0.0),
     # (a mid grey: lighter, on the black plate and guards it read as a white card stuck on)
     "scuff_grey": (0x6A6C70, 0.9, 0.0),
+    # Mirror glass: a dark silvered glass, which shows the sky dimmed
+    "mirror": (0x5A5E64, 0.06, 1.0),
+    # The white graphics with a decal's sheen: matt, they read as paper laid on the red
+    "plastic": (0xE6E4DE, 0.25, 0.0),
     "scuff_metal": (0xC9CCD0, 0.45, 0.9),
     "tape": (0x9A9C9E, 0.8, 0.1),
     # The discs a darker, rougher steel: a bright mirror steel read as a flat white ring in the sun
     "disc": (0x8A8D92, 0.45, 1.0),
     # The blank plate off-white: pure white was the brightest thing on the bike and read as a lamp
-    "plate": (0xC9C9C2, 0.55, 0.05),
+    "plate": (0xB4B4AE, 0.7, 0.05),
     # The cases a cast-alloy grey: near black, the engine read as one dark blob
     "casing": (0x6A6C70, 0.5, 0.7),
 }
@@ -142,7 +148,7 @@ def front_end(k):
                 (g[2] + 0.085, GRIP[1] - 0.06, GRIP[1] + 0.05, 0.075, 2.6, 2.6, 0.5, 1, 1, side * (GRIP[0] - 0.01)),
                 (g[2] + 0.1, GRIP[1] - 0.04, GRIP[1] + 0.03, 0.06, 2.6, 2.6, 0.5, 1, 1, side * (GRIP[0] - 0.005))], "trim", ring=10, steps=2)
     k.tube([(-0.17, GRIP[1] - 0.012, GRIP[2] + 0.03), (0, GRIP[1] - 0.02, GRIP[2] + 0.055), (0.17, GRIP[1] - 0.012, GRIP[2] + 0.03)], 0.008, "steel_dark", seg=6)
-    E.mirror(k, (0.22, GRIP[1] + 0.01, GRIP[2] + 0.03), (0.33, GRIP[1] + 0.2, GRIP[2] + 0.02), size=(0.055, 0.04), mat="trim", shape="round")
+    E.mirror(k, (0.22, GRIP[1] + 0.01, GRIP[2] + 0.03), (0.33, GRIP[1] + 0.2, GRIP[2] + 0.02), size=(0.055, 0.04), mat="trim", shape="round", glass=MIRROR)
 
     # The small square headlight in the face of its shroud
     k.begin("headlight", (0, 0.985, 0.56))

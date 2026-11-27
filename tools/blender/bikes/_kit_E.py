@@ -377,7 +377,7 @@ def lever_set(k, grip, side, root_x, bent=None):
         k.box((0.04, 0.03, 0.03), g - out * 0.15 + Vector((0, 0.045, 0.0)), "steel_dark", bevel=0.006)
 
 
-def mirror(k, root, head, size=(0.06, 0.042), mat="dark_metal", shape="rect"):
+def mirror(k, root, head, size=(0.06, 0.042), mat="dark_metal", shape="rect", glass="chrome"):
     """A mirror on a stalk each side: `root` and `head` for the right side."""
     for side in (-1, 1):
         a = Vector((side * root[0], root[1], root[2]))
@@ -390,7 +390,7 @@ def mirror(k, root, head, size=(0.06, 0.042), mat="dark_metal", shape="rect"):
                 (c.z - 0.008, c.y - h, c.y + h, w, 3.2, 3.2, 0.5, 1, 1, c.x),
                 (c.z + 0.006, c.y - h * 0.95, c.y + h * 0.95, w * 0.95, 3.2, 3.2, 0.5, 1, 1, c.x),
                 (c.z + 0.008, c.y - h * 0.9, c.y + h * 0.9, w * 0.9, 3.2, 3.2, 0.5, 1, 1, c.x)], mat, ring=12, steps=1)
-        k.box((w * 1.75, h * 1.75, 0.004), (c.x, c.y, c.z - 0.0165), "chrome", bevel=0)
+        k.box((w * 1.75, h * 1.75, 0.004), (c.x, c.y, c.z - 0.0165), glass, bevel=0)
 
 
 def indicator(k, root, tip, mat="signal", stalk="dark_metal", radius=0.012):
