@@ -57,6 +57,7 @@ import { execFileSync, spawnSync } from 'node:child_process';
 import { createReadStream, existsSync, mkdirSync, readdirSync, readFileSync, statSync, writeFileSync } from 'node:fs';
 import { createServer } from 'node:http';
 import { dirname, extname, join, normalize, relative, resolve, sep } from 'node:path';
+import { cpus, loadavg } from 'node:os';
 import { fileURLToPath } from 'node:url';
 import puppeteer from 'puppeteer';
 import { D6_CLASSES, buildEnvironment, captureLeg, loadGame } from '../tests/helpers/load-game.js';
@@ -8866,12 +8867,22 @@ WORLD['world-stop-shots'] = async (page) => {
 // does (the streamer's own budget a frame), and each step is timed with its parts (the rows, the wall plans, the land's
 // cut, the land, the scenery). A step is what one frame's pump ran of one task: a whole build, or a slice of a build in
 // steps (WorldStreamer). Every build is taken in steps of about 12 ms at the most; it fails on any step over
-// STEPS_MOST_MS.
+// STEPS_MOST_MS. A step is timed by the wall clock, so a busy host times every kind of step long, with the time outside
+// every part timed (the laptop at a load of 9 on 10 CPUs: steps of 68, 31, 26 and 18 ms where the Mac mini, on the
+// same commit, took 12 at the most): the host's load per CPU is read before and after the ride, and over
+// STEPS_LOAD_MOST the run fails as not measured, not as slow steps. Run it on a quiet host (heavy -c browser)
 //   node tools/terrain-check.mjs world-steps --world tremola --gpu [--every 1] [--parts deep]
 const STEPS_M = 1;
 const STEPS_MOST_MS = 16;
+const STEPS_LOAD_MOST = 0.8;
+const hostLoad = () => Math.round(loadavg()[0] / cpus().length * 100) / 100;
 WORLD_PROBES.push('world-steps');
-WORLD['world-steps'] = async (page) => page.evaluate(async (every, deep) => {
+WORLD['world-steps'] = async (page) => {
+    const before = hostLoad();
+    const ride = await stepsRide(page);
+    return { ...ride, hostLoad: Math.max(before, hostLoad()) };
+};
+const stepsRide = async (page) => page.evaluate(async (every, deep) => {
     const env = game.environment, route = env.route;
     const now = () => performance.now();
     const parts = {};
@@ -9312,7 +9323,8 @@ function worldChecks(report) {
     const pops = results['world-pops'];
     if (pops && pops.summary && pops.summary.inViewByCause.room) failures.push(`world-pops: ${pops.summary.inViewByCause.room.n} pops in view from a change of the window's room, want none`);
     const steps = results['world-steps'];
-    if (steps) for (const list of Object.values(steps.slowestByKind || {})) for (const t of list) if (t.ms > STEPS_MOST_MS) failures.push(`world-steps: ${t.id} took ${t.ms} ms, over ${STEPS_MOST_MS}: ${JSON.stringify(t.parts)}`);
+    if (steps && steps.hostLoad > STEPS_LOAD_MOST) failures.push(`world-steps: the host's load was ${steps.hostLoad} per CPU, over ${STEPS_LOAD_MOST}: the steps are not measured (run it on a quiet host)`);
+    else if (steps) for (const list of Object.values(steps.slowestByKind || {})) for (const t of list) if (t.ms > STEPS_MOST_MS) failures.push(`world-steps: ${t.id} took ${t.ms} ms, over ${STEPS_MOST_MS}: ${JSON.stringify(t.parts)}`);
     camWallChecks(results, failures);
     treeChecks(results, failures);
     roadLookChecks(results, failures);
