@@ -1,7 +1,7 @@
 /**
- * Unlock detection and the flow it drives: a newly unlocked bike sends the
- * player back to the rider screen with that bike focused and badged NEW;
- * a leg-only unlock keeps the normal next-leg flow.
+ * Unlock detection: a finished leg of the tour opens the next leg and, at its
+ * count, the next rider, who is badged NEW on the rider screen; and the rider
+ * screen's bike and outfit pickers.
  */
 
 import { jest } from '@jest/globals';
@@ -16,93 +16,79 @@ const charactersSource = vehicleSource.slice(0, vehicleSource.indexOf(end) + end
 // The catalogue's rules are the statics at the end of the file (the bike a rider rides, its physics, the card's stars:
 // the rider card shows Vehicle.statsOf); they need the class's name and nothing of the class itself
 const rulesSource = `class Vehicle {}\nVehicle.BIKES = {};\n${vehicleSource.slice(vehicleSource.indexOf('const knownBike ='))}`;
-(0, eval)(`${read('modals.js')}\n${charactersSource}\n${rulesSource}\n${read('tours.js')}\nglobalThis.TourSystem = TourSystem; globalThis.CHARACTERS = CHARACTERS; globalThis.BIKE_MODELS = BIKE_MODELS;`);
+(0, eval)(`${read('modals.js')}\n${charactersSource}\n${rulesSource}\n${read('tours.js')}\n${read('world/tour.js')}\n${read('world/legs.js')}\nglobalThis.TourSystem = TourSystem; globalThis.CHARACTERS = CHARACTERS; globalThis.BIKE_MODELS = BIKE_MODELS; globalThis.WorldLegs = WorldLegs; globalThis.WorldTour = WorldTour;`);
+
+// The legs of the tour, in ride order
+const LEGS = WorldTour.built();
+
+// The menu opened on rider `id` (TourSystem.createMenu), stepped to it with the rider arrows
+function showRider(tour, id) {
+    tour.createMenu(document.body, () => {});
+    for (let i = 0; i < CHARACTERS.length && tour.riderDisplayOrder()[tour.riderFocusIndex].id !== id; i++) document.getElementById('riderNextBtn').click();
+}
 
 describe('unlock detection', () => {
     let tour;
 
     beforeEach(() => {
         localStorage.clear();
+        WorldLegs.cached = null;
         document.body.innerHTML = '';
         tour = new TourSystem();
     });
 
     afterEach(() => Modals.reset());
 
-    test('the first leg unlocks the next leg and Lucy, and routes to the rider screen', () => {
-        const unlocks = tour.markLegCompleted('mountain-dawn');
-        expect(unlocks.newLegs).toEqual(['Valley Run']);
-        expect(unlocks.legs.map(l => l.id)).toEqual(['valley-run']);
+    test('the first leg unlocks the next leg and Lucy', () => {
+        const unlocks = tour.markWorldLegFinished(LEGS[0].id);
+        expect(unlocks.newLegs).toEqual([LEGS[1].name]);
+        expect(unlocks.legs.map(l => l.id)).toEqual([LEGS[1].id]);
         expect(unlocks.characters.map(c => c.id)).toEqual(['lucy']);
-        expect(TourSystem.finishFlow(unlocks, false)).toEqual({ primary: 'choose-rider', riders: ['lucy'] });
+        expect(unlocks.newCharacters).toEqual(['Lucy']);
+        expect(tour.isRiderFresh('lucy')).toBe(true);
     });
 
-    test('a leg that opens no rider keeps the tour going', () => {
-        tour.markLegCompleted('mountain-dawn');
-        tour.markLegCompleted('valley-run');
-        const unlocks = tour.markLegCompleted('coastal-descent');
-        expect(unlocks.characters.map(c => c.id)).toEqual(['guy']);
-        const leg4 = tour.markLegCompleted('foggy-gorge');
+    test('a leg that opens no rider opens the next leg alone', () => {
+        LEGS.slice(0, 3).forEach(leg => tour.markWorldLegFinished(leg.id));
+        const leg4 = tour.markWorldLegFinished(LEGS[3].id);
         expect(leg4.characters).toEqual([]);
-        expect(TourSystem.finishFlow(leg4, false)).toEqual({ primary: 'next-leg', riders: [] });
-    });
-
-    test('the second completed leg unlocks a bike and routes to the rider screen', () => {
-        tour.markLegCompleted('mountain-dawn');
-        const unlocks = tour.markLegCompleted('valley-run');
-        expect(unlocks.characters.map(c => c.id)).toEqual(['shane']);
-        expect(unlocks.newCharacters).toEqual(['Shane']);
-        expect(TourSystem.finishFlow(unlocks, false)).toEqual({ primary: 'choose-rider', riders: ['shane'] });
-        expect(tour.isRiderFresh('shane')).toBe(true);
-    });
-
-    test('a bike unlock on the last leg still routes to the rider screen', () => {
-        const unlocks = { characters: [{ id: 'steve' }] };
-        expect(TourSystem.finishFlow(unlocks, true).primary).toBe('choose-rider');
-        expect(TourSystem.finishFlow({ characters: [] }, true).primary).toBe('restart-tour');
+        expect(leg4.legs.map(l => l.id)).toEqual([LEGS[4].id]);
     });
 
     test('a repeat completion unlocks nothing', () => {
-        tour.markLegCompleted('mountain-dawn');
-        const again = tour.markLegCompleted('mountain-dawn');
+        tour.markWorldLegFinished(LEGS[0].id);
+        const again = tour.markWorldLegFinished(LEGS[0].id);
         expect(again.legs).toEqual([]);
         expect(again.characters).toEqual([]);
-        expect(TourSystem.finishFlow(again, false).primary).toBe('next-leg');
     });
 
     test('progress names the next bike and the legs still needed', () => {
         expect(tour.unlockProgressText()).toBe("1 more leg to unlock Lucy's Trail single");
-        tour.markLegCompleted('mountain-dawn');
+        tour.markWorldLegFinished(LEGS[0].id);
         expect(tour.unlockProgressText()).toBe("1 more leg to unlock Shane's Light naked single");
-        tour.markLegCompleted('valley-run');
+        tour.markWorldLegFinished(LEGS[1].id);
         expect(tour.unlockProgressText()).toBe("1 more leg to unlock Guy's Retro scrambler");
-        tour.markLegCompleted('coastal-descent');
+        tour.markWorldLegFinished(LEGS[2].id);
         expect(tour.unlockProgressText()).toBe("2 more legs to unlock Steve's Retro sports triple");
     });
 
-    test('the rider screen opens on the new bike, badged NEW, ready to choose', () => {
-        tour.markLegCompleted('mountain-dawn');
-        tour.markLegCompleted('valley-run');
-        tour.showRiderSelector('shane');
+    test('the rider screen shows the new rider badged NEW, ready to ride', () => {
+        tour.markWorldLegFinished(LEGS[0].id);
+        tour.markWorldLegFinished(LEGS[1].id);
+        const ride = jest.fn();
+        showRider(tour, 'shane');
+        tour.onRide = ride;
 
-        expect(tour.menuScreen).toBe('rider');
-        expect(document.querySelector('.character-select-screen').style.display).toBe('flex');
         const card = document.getElementById('riderInfoCard');
         expect(card.textContent).toContain('Shane');
         expect(card.querySelector('.new-badge')).not.toBeNull();
         expect(document.getElementById('riderContinueBtn').disabled).toBe(false);
 
-        // Choosing it selects the bike and clears the NEW badge
+        // Choosing it selects the rider, clears the NEW badge and rides
         document.getElementById('riderContinueBtn').click();
         expect(tour.selectedCharacterId).toBe('shane');
         expect(tour.isRiderFresh('shane')).toBe(false);
-        expect(tour.menuScreen).toBe('track');
-    });
-
-    test('the leg screen shows how far the next bike is', () => {
-        tour.markLegCompleted('mountain-dawn');
-        tour.showLegSelector();
-        expect(document.getElementById('legInfoCard').textContent).toContain('1 more leg to unlock Shane');
+        expect(ride).toHaveBeenCalledTimes(1);
     });
 });
 
@@ -146,7 +132,7 @@ describe('the bike picker', () => {
     test('steps the focused rider\'s bikes up and down with no wrap, shows each one and remembers the choice per rider', () => {
         const shown = [];
         tour.onBikeShowcase = id => shown.push([id, tour.getSelectedBike(id)]);
-        tour.showRiderSelector('guy');
+        showRider(tour, 'guy');
         const card = () => document.getElementById('riderInfoCard');
         const up = () => document.getElementById('bikePrevBtn'), down = () => document.getElementById('bikeNextBtn');
         expect(card().textContent).toContain('Retro scrambler twin (2017)');
@@ -184,7 +170,7 @@ describe('the bike picker', () => {
 
     test('the five bars are the rider on the bike in the row, and change as the row steps', () => {
         const guy = CHARACTERS.find(c => c.id === 'guy');
-        tour.showRiderSelector('guy');
+        showRider(tour, 'guy');
         // The lit squares of each bar of the card, in the card's order
         const shown = () => [...document.querySelectorAll('#riderInfoCard .showcase-stats .stat-bar')].map(bar => bar.querySelectorAll('i.on').length);
         const stars = bike => Object.values(TourSystem.statsOf(guy, bike));
@@ -208,7 +194,7 @@ describe('the bike picker', () => {
         const tim = CHARACTERS.find(c => c.id === 'tim'), bikes = tim.bikes;
         tim.bikes = ['bike14_forza'];
         try {
-            tour.showRiderSelector('tim');
+            showRider(tour, 'tim');
             expect(document.getElementById('bikeNextBtn')).toBeNull();
             expect(document.getElementById('bikeName').textContent).toBe('Sports scooter, blue and silver (2019)');
         } finally {
@@ -234,7 +220,7 @@ describe('the bike picker', () => {
         const later = new TourSystem();
         expect(later.getSelectedBike('tim')).toBe('bike14_forza');
         expect(BIKE_MODELS.bike14_tmax).toBeUndefined();
-        expect(() => later.showRiderSelector('tim')).not.toThrow();
+        expect(() => showRider(later, 'tim')).not.toThrow();
         expect(document.getElementById('bikeName').textContent).toContain('Sports scooter, blue and silver (2019)');
         // Choosing again writes the id the catalogue has
         later.selectBike('tim', 'bike06_z750');
@@ -274,18 +260,18 @@ describe('the bike picker', () => {
         warn.mockRestore();
     });
 
-    test('debug mode opens every rider and every leg, and saves none of it as progress', () => {
+    test('debug mode opens every rider, and saves none of it as progress', () => {
         localStorage.clear();
+        WorldLegs.cached = null;
         const open = new TourSystem({ unlockAll: true });
         expect(CHARACTERS.every(c => open.isCharacterUnlocked(c.id))).toBe(true);
-        expect(open.legs.every((leg, i) => open.isLegUnlocked(i))).toBe(true);
-        expect(CHARACTERS.every(c => open.riderTierFor(c.id) === 'lit') && open.legs.every((leg, i) => open.legTierFor(i) === 'lit')).toBe(true);
+        expect(CHARACTERS.every(c => open.riderTierFor(c.id) === 'lit')).toBe(true);
         expect(open.completedLegs).toEqual([]);
         // A leg finished in debug mode unlocks nothing new: all of it was open
-        expect(open.markLegCompleted('mountain-dawn').characters).toEqual([]);
+        expect(open.markWorldLegFinished(LEGS[0].id).characters).toEqual([]);
+        expect(localStorage.getItem('twistyProgress')).toBeNull();
         const plain = new TourSystem();
         expect(plain.isCharacterUnlocked('steve')).toBe(false);
-        expect(plain.isLegUnlocked(plain.legs.length - 1)).toBe(false);
     });
 });
 
@@ -304,7 +290,7 @@ describe('a rider\'s bikes open one by one, and the outfit row', () => {
             expect(tour.openBikes(c.id)).toEqual([c.bikes[0]]);
             expect(tour.isBikeUnlocked(c.id, c.bikes[1])).toBe(false);
         }
-        tour.showRiderSelector('guy');
+        showRider(tour, 'guy');
         expect(document.getElementById('riderInfoCard').textContent).toContain('1 / 4');
         expect(document.getElementById('bikeLockHint').textContent).toContain('Finish a ride on this bike to open the next');
         expect(document.getElementById('bikeNextBtn').disabled).toBe(true);
@@ -336,7 +322,7 @@ describe('a rider\'s bikes open one by one, and the outfit row', () => {
         expect(later.openBikes('guy')).toEqual(guy.bikes);
         later.selectBike('guy', guy.bikes[3]);
         expect(later.getSelectedBike('guy')).toBe(guy.bikes[3]);
-        later.showRiderSelector('guy');
+        showRider(later, 'guy');
         expect(document.getElementById('bikeLockHint')).toBeNull();
         // A bike of another rider, or a rider that is not one, opens nothing
         expect(later.markRideFinished('lucy', guy.bikes[0])).toBeNull();
@@ -364,7 +350,7 @@ describe('a rider\'s bikes open one by one, and the outfit row', () => {
         const shown = [];
         tour.onBikeShowcase = id => shown.push([id, tour.getSelectedOutfit(id)]);
         const guy = CHARACTERS.find(c => c.id === 'guy');
-        tour.showRiderSelector('guy');
+        showRider(tour, 'guy');
         const before = () => document.getElementById('outfitPrevBtn'), after = () => document.getElementById('outfitNextBtn');
         const name = () => document.getElementById('outfitName').textContent;
         expect(name()).toContain(guy.outfits[0].name);

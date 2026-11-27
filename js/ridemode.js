@@ -2,9 +2,8 @@
 // Everything that differs for a world ride after this keys off the environment (`environment.isWorld`), so a world
 // chosen on the menu and a world named in the URL ride the same.
 //
-//   (no query)        the menu; choosing a rider starts DEFAULT_WORLD, and Classic legs opens the leg screen
+//   (no query)        the menu; choosing a rider starts DEFAULT_WORLD (or, of a tour of several legs, the leg picked on the map)
 //   ?world=<id|all>   that world at once, without the menu
-//   ?legs             the menu as it was before the world: the rider goes on to the leg screen
 //   ?<HILL_KEY>       the hill ride (js/hill/ride.js) at once, without the menu: a ride of its own, timed only on its end card (js/hill/board.js)
 //   &mode=roam        a world ridden in free roam (GameModes; open in debug mode only); time trial otherwise
 //   &start=<where>    free roam's start: place (a stopping place) or summit; the start otherwise
@@ -14,18 +13,18 @@ const RideMode = {
     // The world a rider chosen on the menu rides: the Tremola slice (world/manifest.json)
     DEFAULT_WORLD: 'tremola',
 
-    // What the menu says when the world's data could not load and the legs took over
-    FALLBACK_NOTE: 'The Andermatt road could not load here, so the classic legs are open instead.',
-    // What the menu says when a world's land stopped loading during a ride (WorldStreamer.landState lost) and the legs
-    // took over
-    // What the menu says when the hill ride could not start
-    HILL_FAIL_NOTE: 'The hill ride could not load here, so the classic legs are open instead.',
-    LAND_LOST_NOTE: 'The land beside the road stopped loading, so the ride has ended and the classic legs are open instead.',
+    // The error card of a ride that could not load (Game.showLoadError): its title, and its text when the world's data
+    // could not load, when the land stopped loading during a ride (WorldStreamer.landState lost) and when the hill ride
+    // could not start
+    LOAD_FAIL_TITLE: 'The world could not load',
+    LOAD_FAIL_NOTE: 'The Andermatt road could not load here. Check the connection, then try again.',
+    LAND_LOST_NOTE: 'The land beside the road stopped loading, so the ride has ended.',
+    HILL_FAIL_NOTE: 'The hill ride could not load here. Check the connection, then try again.',
 
     // The address key that opens the hill ride: the only place the key is written
     HILL_KEY: 'hovis',
 
-    // { kind: 'world' | 'legs' | 'hill', world: the stage id or 'all' (null otherwise), direct: start without the menu,
+    // { kind: 'world' | 'hill', world: the stage id or 'all' (null otherwise), direct: start without the menu,
     //   mode: 'roam' when the address asks for free roam (absent otherwise; GameModes decides whether it is open) }
     resolve(search) {
         const params = new URLSearchParams(search || '');
@@ -41,7 +40,6 @@ const RideMode = {
         if (roam.mode && ['dawn', 'day', 'sunset', 'night'].includes(params.get('time'))) roam.time = params.get('time');
         if (roam.mode && ['clear', 'fog', 'rain'].includes(params.get('weather'))) roam.weather = params.get('weather');
         if (asked) return { kind: 'world', world: asked, direct: true, ...roam };
-        if (params.has('legs')) return { kind: 'legs', world: null, direct: false };
         return { kind: 'world', world: RideMode.DEFAULT_WORLD, direct: false, ...roam };
     },
 

@@ -16,7 +16,7 @@ A row is `{ id, label, hint, group, min, max, step, scales }`. `scales` lists th
 | `grip` | `dry` or `wet`: the lean's grip. Wet is any weather that takes grip. | `Vehicle.gripTune()`. |
 | `camera` | `distance` or `swing` of the chase camera. | `Game.tune('camera', field, value)`. |
 
-`inverse: true` divides, for a number where less is more (a turn radius). `world: true` is set by the table itself for a row that scales only `WorldPhysics` fields: a classic leg does not read it.
+`inverse: true` divides, for a number where less is more (a turn radius).
 
 The rows:
 
@@ -105,7 +105,6 @@ What depended on the old numbers, and what holds now:
 - **The board floors** (`tools/world/floors.mjs`) read a lean and the top speed. They assume a rider who brakes and accelerates without limit, so a weaker brake keeps them valid. The lean and one rule of the floors did change: "The lean limit by the rider" and `.agent/system/world-data.md`, "The floors and the rider's lean".
 - **The land's speed rule** did not change (`landCrashSpeed`, `landCrashS`). A full brake on the grass now brings a road bike under it in time from 38 m/s (44 before).
 - **The key ease** (`steerKeys`) did not change: the owner rode it at 1.00. Tapped keys rock the lean by 0.6 to 1.7 degrees (under 0.6 before; 5.3 to 6.2 with no ease). Taps of half the time now hold 49 degrees (36 before), so a line is set with taps of a third of the time or less.
-- **The legs' frozen golden.** The autopilot's rides of the one leg still bound to `tests/golden/browser-baseline.json` are other rides now (the same outcomes, 2 to 10 steps apart). `tests/golden/amendments.json` declares it: `unbound.traj` and `declared["gates.approaches"]`. The baseline files are not changed.
 - **At speed** the world's bike reaches 10 degrees 15% to 25% sooner than a leg's bike (within 10% before), because a leg's steering is a torque and a world's is a rate. The owner left `steerFast` at 1.00.
 
 To apply the next block:

@@ -20,7 +20,7 @@ import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { execFileSync } from 'node:child_process';
 import { describe, test, expect, beforeAll, afterAll, afterEach } from '@jest/globals';
-import { loadGame, loadScript, buildEnvironment } from '../helpers/load-game.js';
+import { loadGame, loadScript } from '../helpers/load-game.js';
 import { diskFetch } from '../helpers/world-fetch.js';
 import { rideSpan, advisedPace } from '../helpers/world-rider.js';
 import { decodeWorld } from '../../tools/world/encode.mjs';
@@ -186,32 +186,6 @@ describe('the ride before with the block set is the ride now with every multipli
         return { rows, out };
     }
 
-    // A classic leg with the steering of tools/autopilot.js (a heading error to a lean, held by the steering), the
-    // throttle and the brake to a speed that changes, so the brake works while the bike is leaned
-    function leg(G0, character, bike) {
-        const { env: legEnv } = buildEnvironment(G0, 1);
-        const route = legEnv.route;
-        const v = new G0.Vehicle(legEnv.scene, null, character, bike, { model: false });
-        const start = route.sample(route.unitM * 2, {});
-        v.environment = legEnv;
-        v.position.set(start.x, start.y, start.z);
-        v.yawAngle = start.heading;
-        v.speed = 20;
-        const aim = {}, rows = [];
-        const wrap = a => Math.atan2(Math.sin(a), Math.cos(a));
-        for (let tick = 0; tick < 60 * 150 && !v.crashed; tick++) {
-            const t = route.sample(Math.min((v.routeS || 0) + 2 * route.unitM, route.length), aim);
-            const err = wrap(Math.atan2(t.x - v.position.x, t.z - v.position.z) - v.yawAngle);
-            const yawRate = Math.max(-1.2, Math.min(1.2, err * 1.6));
-            const lean = Math.max(-0.75, Math.min(0.75, -Math.atan(yawRate * Math.max(v.speed, 5) / G)));
-            const steer = Math.max(-1, Math.min(1, (v.leanAngle - lean) * 4 + v.leanVelocity * 1.2));
-            const target = tick % 480 < 300 ? 32 : 18;
-            v.update(DT, steer, v.speed < target ? 1 : 0, v.speed > target + 2 ? 1 : 0, 0);
-            rows.push(state(v));
-        }
-        return { rows, crashed: v.crashed };
-    }
-
     test('the shipped stage, a rider with no multiplier of their own: the same to the last bit', async () => {
         tuneBefore();
         const was = await world(before, envBefore, plain(before));
@@ -244,25 +218,6 @@ describe('the ride before with the block set is the ride now with every multipli
         console.log(`the shipped stage, the real riders: the two rides differ by ${most} at the most`);
     }, 600000);
 
-    test('a classic leg: the same to the last bit for the rider with no multiplier, within the tolerance for the real riders', () => {
-        tuneBefore();
-        const was = leg(before, plain(before)), now = leg(game, plain(game));
-        // 4 km of the leg with no crash, leaned to 19 degrees, the brake on for 14 s of it
-        expect([now.crashed, now.rows.length]).toEqual([false, 60 * 150]);
-        expect(Math.max(...now.rows.map(row => Math.abs(row[4])))).toBeGreaterThan(0.3);
-        expect(now.rows.filter((row, i) => i > 0 && now.rows[i - 1][3] - row[3] > 5 * DT).length).toBeGreaterThan(600);
-        expect(apart(was.rows, now.rows)).toBe(-1);
-        let most = -1;
-        for (const character of CHARACTERS) {
-            tuneBefore(Vehicle.leanOf(character));
-            const ride = firstFree(character);
-            const a = leg(before, riderOf(before, character.id), ride), b = leg(game, character, ride);
-            const gap = apart(a.rows, b.rows);
-            most = Math.max(most, gap);
-            expect([character.id, gap < TOLERANCE]).toEqual([character.id, true]);
-        }
-        console.log(`a classic leg, the real riders: the two rides differ by ${most} at the most`);
-    }, 600000);
 });
 
 describe('the lean limit by how daring the rider is', () => {

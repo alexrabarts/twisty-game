@@ -1,5 +1,4 @@
 import { jest } from '@jest/globals';
-import { loadGame, buildEnvironment } from '../helpers/load-game.js';
 
 // Mock THREE.js
 global.THREE = {
@@ -331,42 +330,5 @@ describe('AI Motorcycle', () => {
                 expect(collision).toBe(true);
             }
         }
-    });
-});
-
-// The real class on the real shared course, with Math.random fixed at 0: the
-// crew then stands on its grid base and the oncoming car on the lowest start.
-describe('Traffic starts on the shared course (real class)', () => {
-    const PINS = [
-        ['valley-run', 117, [90, 87, 84, 81, 78]],
-        ['coastal-descent', 199, [170, 167, 164, 161, 158]],
-        ['foggy-gorge', 285, [254, 251, 248, 245, 242]],
-        ['high-pass', 375, [342, 339, 336, 333, 330]],
-        ['storm-valley', 469, [434, 431, 428, 425, 422]],
-        ['night-ride', 566, [530, 527, 524, 521, 518]],
-        ['winter-pass', 663, [628, 625, 622, 619, 616]]
-    ];
-    let game;
-    beforeAll(() => {
-        game = loadGame();
-    });
-
-    test.each(PINS.map((pin) => [...pin, ['mountain-dawn', 'valley-run', 'coastal-descent', 'foggy-gorge', 'high-pass', 'storm-valley', 'night-ride', 'winter-pass'].indexOf(pin[0])]))('%s keeps its car and crew start segments', (id, car, crew, index) => {
-        const quiet = console.log;
-        const random = Math.random;
-        console.log = () => {};
-        Math.random = () => 0;
-        let traffic;
-        try {
-            const { env, scene, leg } = buildEnvironment(game, index);
-            expect(leg.id).toBe(id);
-            // The player rides as one of the characters; the other five are the crew
-            traffic = new game.Traffic(scene, env, game.CHARACTERS[0].name);
-        } finally {
-            console.log = quiet;
-            Math.random = random;
-        }
-        expect(traffic.cars.map(entry => entry.currentSegment)).toEqual([car]);
-        expect(traffic.motorcycles.map(entry => entry.currentSegment)).toEqual(crew);
     });
 });

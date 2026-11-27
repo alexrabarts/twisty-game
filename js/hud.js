@@ -162,7 +162,7 @@ class Hud {
             progressKm: byId('hudProgressKm'),
             stageText: byId('hudStageText')
         };
-        // A world ride shows its checkpoints on the progress bar; the classic legs on the pips
+        // A ride shows its checkpoints on the progress bar; free roam (no progress bar) on the pips
         this.progressOn = false;
         this.shown = {};
         this.hintShown = true;
@@ -259,7 +259,7 @@ class Hud {
     }
 
     // Checkpoints passed, of how many. One display holds them: the progress bar of a world ride (its ticks and
-    // the count at its end), else the pips of a classic leg
+    // the count at its end), else the pips (free roam)
     setGates(passed, total) {
         if (this.progressOn) {
             const marks = this.el.progressMarks;
@@ -285,7 +285,7 @@ class Hud {
 
     // The progress element of a world ride, in place of the pips: a bar for the stage being ridden with a tick at
     // each checkpoint (`marks`: shares of the stage, HudRules.progressMarks), the rider's place on it and the
-    // count. Leg pages never show it.
+    // count. Free roam never shows it.
     showProgress(marks) {
         const box = this.el.progress;
         if (!box) return;

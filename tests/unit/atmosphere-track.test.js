@@ -1,13 +1,12 @@
-// The atmosphere track: what the light, sky, fog and weather do along a leg, and
+// The atmosphere track: what the light, sky, fog and weather do along a ride, and
 // the game code that writes them. Real three, real WeatherSystem, Graphics and
-// Environment; the Game methods are cut out of js/main.js and bound to a rig.
+// WorldEnvironment; the Game methods are cut out of js/main.js and bound to a rig.
 import { describe, test, expect, jest } from '@jest/globals';
-import { buildEnvironment, canvasStub, gameMethods, legs, loadSharedGame as loadGame, loadScript, realThree } from '../helpers/load-game.js';
-// Leg 1 is a converted leg now: these tests are of the shared course, with leg 1 put back on it (Course.release)
+import { canvasStub, gameMethods, loadGame, loadScript, realThree } from '../helpers/load-game.js';
 
 const THREE = realThree();
 const game = loadGame(THREE);
-const { AtmosphereTrack, Environment, Terrain } = game;
+const { AtmosphereTrack, WorldEnvironment, RoadSurface } = game;
 
 const load = (file, name) => new Function('THREE', 'document', 'window', 'AtmosphereTrack', `${loadScript(file)}\nreturn ${name};`)(THREE, canvasStub(), {}, AtmosphereTrack);
 const WeatherSystem = load('weather.js', 'WeatherSystem');
@@ -21,7 +20,6 @@ const timeConfigs = (() => {
     return new Function(`return ${lines.slice(start, end + 1).join('\n').replace('this.timeConfigs =', '')}`)();
 })();
 
-const LEG_INTENSITIES = [0, 0, 0, 4, 0, 0.9, 0, 1];
 const oneLook = (extra = {}) => ({ timeOfDay: 'golden', weather: 'clear', weatherIntensity: 0, fogDensity: 0.001, heightFog: null, shafts: 0, ring: 1, baseY: 0, ...extra });
 // Two parts that meet at segment 100: dawn in clear air, then night in rain
 const twoParts = () => AtmosphereTrack.build([
@@ -31,15 +29,14 @@ const twoParts = () => AtmosphereTrack.build([
 
 describe('AtmosphereTrack.sample', () => {
     test('a one-part track gives the same look with no blend at every segment', () => {
-        legs(game).forEach((leg, index) => {
-            const { env } = buildEnvironment(game, index);
-            const track = AtmosphereTrack.forLeg(leg, game.Terrain.legConfig(index), env);
+        for (const look of [oneLook(), oneLook({ timeOfDay: 'night', weather: 'rain', weatherIntensity: 0.9 })]) {
+            const track = AtmosphereTrack.build([{ startSegment: 0, endSegment: 799, look }]);
             for (let segment = -5; segment <= 800; segment += 7) {
                 const sample = track.sample(segment);
                 expect(sample.t).toBe(0);
                 expect(sample.a).toBe(sample.b);
             }
-        });
+        }
     });
 
     test('the blend zone is 15 segments centred on the boundary, and smooth', () => {
@@ -107,76 +104,7 @@ describe('AtmosphereTrack.build', () => {
     });
 });
 
-describe('AtmosphereTrack.forLeg', () => {
-    test('an unconverted leg is one part with its own look', () => {
-        legs(game).forEach((leg, index) => {
-            const config = Terrain.legConfig(index);
-            const { env } = buildEnvironment(game, index);
-            const track = AtmosphereTrack.forLeg(leg, config, env);
-            expect(track.parts).toHaveLength(1);
-            const look = track.parts[0].look;
-            expect(look.timeOfDay).toBe(leg.timeOfDay);
-            expect(look.weather).toBe(leg.weather);
-            expect(look.fogDensity).toBe(config.look.fogDensity);
-            expect(look.heightFog).toBe(config.atmosphere.heightFog);
-            expect(look.shafts).toBe(config.atmosphere.shafts);
-            expect(look.baseY).toBe(AtmosphereTrack.lowestRoadHeight(env.route, leg.startSegment, leg.endSegment));
-        });
-    });
-
-    test('the far ring of mountain-dawn rises 0.15, 0.575, 1 over the leg; the others hold', () => {
-        const rides = legs(game).map((leg, index) => {
-            const { env } = buildEnvironment(game, index);
-            const track = AtmosphereTrack.forLeg(leg, Terrain.legConfig(index), env);
-            return [0, 0.5, 1].map(f => AtmosphereTrack.blendLook(track.sample(leg.startSegment + f * (leg.endSegment - leg.startSegment))).ring);
-        });
-        expect(rides[0][0]).toBe(0.15);
-        expect(rides[0][1]).toBeCloseTo(0.575, 9);
-        expect(rides[0][2]).toBe(1);
-        expect(rides[2]).toEqual([0.35, 0.35, 0.35]);
-        expect(rides[1]).toEqual([1, 1, 1]);
-    });
-
-    test('a converted leg takes its parts from the config, with the base height of each part', () => {
-        const leg = legs(game)[0];
-        const { env } = buildEnvironment(game, 0);
-        const config = {
-            ...Terrain.legConfig(0),
-            parts: [
-                { startSegment: leg.startSegment, endSegment: leg.startSegment + 30, look: { weather: 'rain', weatherIntensity: 0.5 } },
-                { startSegment: leg.startSegment + 40, endSegment: leg.endSegment, look: { timeOfDay: 'night' } }
-            ]
-        };
-        const track = AtmosphereTrack.forLeg(leg, config, env);
-        expect(track.parts.map(part => part.look.timeOfDay)).toEqual([leg.timeOfDay, 'night']);
-        expect(track.parts[0].look.baseY).toBe(AtmosphereTrack.lowestRoadHeight(env.route, leg.startSegment, leg.startSegment + 30));
-        expect(track.parts[1].look.fogDensity).toBe(Terrain.legConfig(0).look.fogDensity);
-    });
-});
-
 describe('intensity rule', () => {
-    // Every tours.js leg defines the intensity, and a weather that is not clear has some
-    const offenders = list => list.filter(leg => leg.weatherIntensity === undefined || (leg.weather && leg.weather !== 'clear' && !(leg.weatherIntensity > 0)));
-
-    test('the single rule gives the intensities of all 8 legs, and the three old rules agree', () => {
-        const all = legs(game);
-        const fromTrack = all.map((leg, index) => {
-            const { env } = buildEnvironment(game, index);
-            return AtmosphereTrack.forLeg(leg, Terrain.legConfig(index), env).parts[0].look.weatherIntensity;
-        });
-        expect(fromTrack).toEqual(LEG_INTENSITIES);
-        expect(all.map(leg => leg.weatherIntensity || 0)).toEqual(LEG_INTENSITIES);
-        all.forEach((leg, index) => {
-            if (leg.weather !== 'clear') expect(leg.weatherIntensity || 1).toBe(LEG_INTENSITIES[index]);
-        });
-    });
-
-    test('the guard holds for every leg and catches a copy of storm-valley with intensity 0', () => {
-        expect(offenders(legs(game))).toEqual([]);
-        const mutated = legs(game).map(leg => (leg.id === 'storm-valley' ? { ...leg, weatherIntensity: 0 } : leg));
-        expect(offenders(mutated).map(leg => leg.id)).toEqual(['storm-valley']);
-    });
-
     test('an intensity left out is 1.0, so a part with only a weather still has some', () => {
         const track = AtmosphereTrack.build([{ startSegment: 0, endSegment: 9, look: { weather: 'snow' } }]);
         expect(track.parts[0].look.weatherIntensity).toBe(1);
@@ -226,8 +154,8 @@ describe('AtmosphereTrack.weatherMix and blendLook', () => {
 describe('seeded random', () => {
     test('the same string gives the same sequence, another string another', () => {
         const draw = seed => { const random = AtmosphereTrack.seededRandom(seed); return Array.from({ length: 5 }, random); };
-        expect(draw('mountain-dawn-v3')).toEqual(draw('mountain-dawn-v3'));
-        expect(draw('mountain-dawn-v3')).not.toEqual(draw('valley-run-v3'));
+        expect(draw('world-tremola')).toEqual(draw('world-tremola'));
+        expect(draw('world-tremola')).not.toEqual(draw('world-gotthard-north'));
         draw('x').forEach(value => { expect(value).toBeGreaterThanOrEqual(0); expect(value).toBeLessThan(1); });
     });
 
@@ -241,7 +169,7 @@ describe('seeded random', () => {
             const real = Math.random;
             Math.random = seedMath;
             try {
-                const system = new WeatherSystem(scene, null, AtmosphereTrack.seededRandom('mountain-dawn-v3'));
+                const system = new WeatherSystem(scene, null, AtmosphereTrack.seededRandom('world-tremola'));
                 system.prepare(['rain']);
                 system.setMix({ rain: 1, intensity: 0.9 });
                 const seen = [system.lightningInterval];
@@ -305,22 +233,6 @@ describe('WeatherSystem mix', () => {
         expect(scene.children.filter(child => child.isPoints)).toHaveLength(2);
         weather.dispose();
         expect(scene.children.filter(child => child.isPoints)).toHaveLength(0);
-    });
-
-    test('the grip of one look equals the baseline of each leg', () => {
-        const expected = {
-            'storm-valley': { lateralFriction: 0.6935, brakeForce: 0.779, acceleration: 0.91 },
-            'winter-pass': { lateralFriction: 0.34, brakeForce: 0.51, acceleration: 0.7 },
-            'night-ride': { lateralFriction: 0.9, brakeForce: 0.9, acceleration: 1 }
-        };
-        legs(game).forEach((leg, index) => {
-            const { weather } = system([]);
-            weather.surfaceGrip = Terrain.legConfig(index).grip ?? 1;
-            weather.setMix({ rain: leg.weather === 'rain' ? 1 : 0, snow: leg.weather === 'snow' ? 1 : 0, fog: leg.weather === 'fog' ? 1 : 0, intensity: leg.weatherIntensity });
-            const grip = weather.getPhysicsMultipliers();
-            const want = expected[leg.id] || { lateralFriction: 1, brakeForce: 1, acceleration: 1 };
-            Object.keys(want).forEach(key => expect(grip[key]).toBeCloseTo(want[key], 9));
-        });
     });
 
     test('half a rain mix lies strictly between clear and rain', () => {
@@ -516,7 +428,7 @@ describe('Game atmosphere', () => {
         'blendRoadSurface', 'roadPosition', 'applySectionLook', 'applyShadowBox', 'updateCullDistance', 'atmosphereUnit'];
     // The Game statics the methods read, from the real source
     const statics = name => Number(loadScript('main.js').match(new RegExp(`^Game\\.${name} = ([0-9.]+);$`, 'm'))[1]);
-    const GameStatics = { WORLD_OVERCAST_HEADLIGHT: statics('WORLD_OVERCAST_HEADLIGHT'), WORLD_OVERCAST_SUN: statics('WORLD_OVERCAST_SUN') };
+    const GameStatics = { WORLD_OVERCAST_HEADLIGHT: statics('WORLD_OVERCAST_HEADLIGHT'), WORLD_OVERCAST_SUN: statics('WORLD_OVERCAST_SUN'), WORLD_OVERCAST_SKY: statics('WORLD_OVERCAST_SKY') };
 
     const rig = (track, weatherTypes = track.weatherTypes()) => {
         const scene = new THREE.Scene();
@@ -536,13 +448,9 @@ describe('Game atmosphere', () => {
                 uSunIntensity: number(), uGlow: number(), uFogBlend: number(), uMountains: number()
             }
         });
-        const environment = Object.assign(Object.create(Environment.prototype), {
-            scene: new THREE.Scene(),
-            roadMaterial: new THREE.MeshStandardMaterial({ color: 0xffffff }),
-            roadPath: []
-        });
-        environment.route = new game.LegRoute(environment);
-        environment.roadMaterial.map = {};
+        // A world's environment: its road surface is RoadSurface's wetness
+        const environment = Object.assign(Object.create(WorldEnvironment.prototype), { isWorld: true, scene: new THREE.Scene() });
+        RoadSurface.setWet(0);
         const weatherSystem = new WeatherSystem(scene, { position: new THREE.Vector3() });
         weatherSystem.prepare(weatherTypes);
         const self = {
@@ -555,7 +463,7 @@ describe('Game atmosphere', () => {
             fillLight: new THREE.DirectionalLight(),
             rimLight: new THREE.DirectionalLight(),
             headlight: { visible: false, intensity: 0 },
-            vehicle: { routeS: 0 },
+            vehicle: { routeS: 0, projection: {} },
             atmosphereTrack: track,
             atmosphereHold: false
         };
@@ -580,51 +488,33 @@ describe('Game atmosphere', () => {
         expect(clear.sunIntensity).toBe(night.sunIntensity);
         expect(clear.distantIntensity).toBe(night.sunIntensity * 0.25);
         expect(clear.hemisphereIntensity).toBe(night.hemisphereIntensity);
+        // A world's rain cloud hides more of the sun and lights more of the sky, and the headlight comes on
         const rain = self.resolveTime('twilight', 'rain');
-        expect(rain.sunIntensity).toBe(timeConfigs.twilight.sunIntensity * 0.25);
-        expect(rain.hemisphereIntensity).toBe(timeConfigs.twilight.hemisphereIntensity * 1.35);
+        expect(rain.sunIntensity).toBe(timeConfigs.twilight.sunIntensity * GameStatics.WORLD_OVERCAST_SUN);
+        expect(rain.hemisphereIntensity).toBe(timeConfigs.twilight.hemisphereIntensity * GameStatics.WORLD_OVERCAST_SKY);
+        expect(rain.headlight).toBe(Math.max(timeConfigs.twilight.headlight, GameStatics.WORLD_OVERCAST_HEADLIGHT));
+        // With no world (the menu) a time keeps its own light under cloud
+        self.environment = null;
+        const plain = self.resolveTime('twilight', 'rain');
+        expect(plain.sunIntensity).toBe(timeConfigs.twilight.sunIntensity * 0.25);
+        expect(plain.hemisphereIntensity).toBe(timeConfigs.twilight.hemisphereIntensity * 1.35);
         const fog = self.resolveTime('golden', 'fog');
         expect(fog.sunIntensity).toBe(timeConfigs.golden.sunIntensity * 0.6);
         expect(fog.hemisphereIntensity).toBe(timeConfigs.golden.hemisphereIntensity * 1.15);
         expect(self.resolveTime('night', 'clear')).toBe(clear);
     });
 
-    test('a snap on a one-part leg writes the leg start values of light, sky, fog and road', () => {
-        const stormIndex = 5;
-        const leg = legs(game)[stormIndex];
-        const { env } = buildEnvironment(game, stormIndex);
-        const track = AtmosphereTrack.forLeg(leg, Terrain.legConfig(stormIndex), env);
-        const self = rig(track);
-        self.scene.fog.density = Terrain.legConfig(stormIndex).look.fogDensity;
-        self.weatherSystem = new WeatherSystem(self.scene, { position: new THREE.Vector3() });
-        self.weatherSystem.prepare(track.weatherTypes());
-        self.snapAtmosphere(track, leg.startSegment, { environment: self.environment, weatherSystem: self.weatherSystem });
-        const twilight = timeConfigs.twilight;
-        expect(self.directionalLight.intensity / twilight.sunIntensity).toBe(0.25);
-        expect(self.hemisphereLight.intensity / twilight.hemisphereIntensity).toBe(1.35);
-        expect(self.graphics.weatherType).toBe('rain');
-        expect(self.graphics.timeKey).toBe('twilight');
-        expect(self.environment.roadMaterial.roughness).toBe(0.85 * (1 - 0.9) + 0.2 * 0.9);
-        expect(self.environment.roadMaterial.color.getHex()).toBe(0xc8ccd2);
-        expect(self.scene.fog.density).toBe(0.0015 * 0.9);
-        expect(self.scene.fog.color.getHex()).toBe(0x707880);
-        expect(self.graphics.atmosphere.baseY).toBe(track.parts[0].look.baseY);
-        expect(self.graphics.environmentDirty).toBe(true);
-        expect(self.weatherSystem.mix.rain).toBe(1);
-    });
-
     test('a snap with no weather system writes no fog density and no particles', () => {
-        const leg = legs(game)[5];
-        const { env } = buildEnvironment(game, 5);
-        const track = AtmosphereTrack.forLeg(leg, Terrain.legConfig(5), env);
+        const track = twoParts();
         const self = rig(track);
         self.scene.fog.density = 0.123;
-        self.snapAtmosphere(track, leg.startSegment, { environment: self.environment, weatherSystem: null });
+        self.snapAtmosphere(track, 150, { environment: self.environment, weatherSystem: null });
         expect(self.scene.fog.density).toBe(0.123);
         expect(self.weatherSystem.mix.rain).toBe(0);
         expect(self.weatherSystem.systems.rain.points.visible).toBe(false);
-        // The tint of the ground and the surface of the road are still the leg's
-        expect(self.environment.roadMaterial.color.getHex()).toBe(0xc8ccd2);
+        // The road's surface is still the part's: wet in the rain
+        expect(RoadSurface.wetness).toBe(1);
+        RoadSurface.setWet(0);
         self.snapAtmosphere(AtmosphereTrack.oneLook({ ring: 1 }), 0, {});
         expect(self.graphics.atmosphere).toBeNull();
         expect(self.graphics.ringStrength).toBe(1);
@@ -637,14 +527,14 @@ describe('Game atmosphere', () => {
         const self = rig(track);
         self.snapAtmosphere(track, 10, { environment: self.environment, weatherSystem: self.weatherSystem });
         const fogBefore = self.scene.fog.density;
-        const roadBefore = self.environment.roadMaterial.roughness;
+        const roadBefore = RoadSurface.wetness;
         const atmosphereBefore = self.graphics.atmosphere;
         self.setTimeOfDay('night');
         expect(self.atmosphereHold).toBe(true);
         expect(self.directionalLight.intensity).toBe(timeConfigs.night.sunIntensity);
         expect(self.hemisphereLight.intensity).toBe(timeConfigs.night.hemisphereIntensity);
         expect(self.scene.fog.density).toBe(fogBefore);
-        expect(self.environment.roadMaterial.roughness).toBe(roadBefore);
+        expect(RoadSurface.wetness).toBe(roadBefore);
         expect(self.graphics.atmosphere).toBe(atmosphereBefore);
         self.snapAtmosphere(track, 10, {});
         expect(self.atmosphereHold).toBe(false);
@@ -660,26 +550,26 @@ describe('Game atmosphere', () => {
         const self = rig(track);
         self.snapAtmosphere(track, 10, { environment: self.environment, weatherSystem: self.weatherSystem });
         const start = timeValues(self);
-        self.vehicle.routeS = 2000;
+        self.vehicle.routeS = 10000;
         self.applyAtmosphere();
         const middle = timeValues(self);
         expect(middle.background).not.toBe(start.background);
         expect(middle.hemisphere).not.toBe(start.hemisphere);
         expect(self.weatherSystem.mix.rain).toBeCloseTo(0.5, 9);
-        expect(self.environment.roadMaterial.roughness).toBeLessThan(0.85);
-        expect(self.environment.roadMaterial.roughness).toBeGreaterThan(0.85 * (1 - 0.9) + 0.2 * 0.9);
+        expect(RoadSurface.wetness).toBeGreaterThan(0);
+        expect(RoadSurface.wetness).toBeLessThan(1);
 
         // An override stands against 60 frames inside the zone
         self.setTimeOfDay('golden');
         const held = timeValues(self);
         for (let frame = 0; frame < 60; frame++) {
-            self.vehicle.routeS = (97 + frame * 0.1) * 20;
+            self.vehicle.routeS = (97 + frame * 0.1) * 100;
             self.applyAtmosphere();
         }
         expect(timeValues(self)).toEqual(held);
         // A snap in the zone ends the hold and blends again
         self.snapAtmosphere(track, 100, {});
-        self.vehicle.routeS = 2040;
+        self.vehicle.routeS = 10200;
         self.applyAtmosphere();
         expect(timeValues(self)).not.toEqual(held);
     });
@@ -688,45 +578,42 @@ describe('Game atmosphere', () => {
         const track = twoParts();
         const self = rig(track);
         self.snapAtmosphere(track, 10, { environment: self.environment, weatherSystem: self.weatherSystem });
-        self.vehicle.routeS = 2000;
+        self.vehicle.routeS = 10000;
         self.applyAtmosphere();
-        self.vehicle.routeS = 2400;
+        self.vehicle.routeS = 12000;
         self.graphics.environmentDirty = false;
         self.applyAtmosphere();
         expect(self.graphics.environmentDirty).toBe(true);
         expect(self.scene.background.equals(new THREE.Color(timeConfigs.night.skyColor))).toBe(true);
         expect(self.weatherSystem.mix.rain).toBe(1);
-        expect(self.environment.roadMaterial.color.getHex()).toBe(0xc8ccd2);
+        expect(RoadSurface.wetness).toBe(1);
 
         const writes = jest.spyOn(self.graphics, 'writeSky');
         self.graphics.environmentDirty = false;
-        self.vehicle.routeS = 2600;
+        self.vehicle.routeS = 13000;
         self.applyAtmosphere();
-        self.vehicle.routeS = 2800;
+        self.vehicle.routeS = 14000;
         self.applyAtmosphere();
         expect(writes).not.toHaveBeenCalled();
         expect(self.graphics.environmentDirty).toBe(false);
     });
 
-    test('the blend follows the bike between segments, not in steps of one segment', () => {
-        const path = Array.from({ length: 200 }, (_, i) => ({ x: i * 20, z: 0, y: 0 }));
+    test('the blend follows the bike\'s place on the road, not its whole units of progress', () => {
         const track = twoParts();
         const self = rig(track);
-        self.environment.roadPath = path;
-        self.vehicle.position = { x: 0, z: 0 };
         self.snapAtmosphere(track, 10, { environment: self.environment, weatherSystem: self.weatherSystem });
         const mix = [];
-        for (const x of [97.2 * 20, 97.6 * 20, 98.1 * 20]) {
-            self.vehicle.position = { x, z: 0 };
-            self.vehicle.routeS = (Math.round(x / 20)) * 20;
+        for (const s of [9720, 9760, 9810]) {
+            self.vehicle.projection = { s };
+            self.vehicle.routeS = Math.round(s / 100) * 100;
             self.applyAtmosphere();
             mix.push(self.weatherSystem.mix.rain);
         }
         expect(mix[0]).toBeLessThan(mix[1]);
         expect(mix[1]).toBeLessThan(mix[2]);
         expect(self.roadPosition()).toBeCloseTo(98.1, 9);
-        // With no road to project on it falls back to the segment
-        self.environment.roadPath = [];
+        // With no projection it reads the progress
+        self.vehicle.projection = {};
         expect(self.roadPosition()).toBe(98);
     });
 
@@ -738,7 +625,7 @@ describe('Game atmosphere', () => {
         let requests = 0;
         for (let frame = 0; frame < 300; frame++) {
             self.graphics.frames++;
-            self.vehicle.routeS = (93 + frame * (14 / 300)) * 20;
+            self.vehicle.routeS = (93 + frame * (14 / 300)) * 100;
             self.graphics.environmentDirty = false;
             self.applyAtmosphere();
             if (self.graphics.environmentDirty) {
@@ -811,13 +698,13 @@ describe('Game atmosphere', () => {
         self.snapAtmosphere(track, 10, { environment: self.environment, weatherSystem: self.weatherSystem });
         self.directionalLight.shadow.camera.far = 0;
         self.applyShadowBox({ shadowSpan: 120 });
-        self.vehicle.routeS = 1900;
+        self.vehicle.routeS = 9500;
         self.applyAtmosphere();
         const early = self.cullDistance;
-        self.vehicle.routeS = 2120;
+        self.vehicle.routeS = 10600;
         self.applyAtmosphere();
         expect(self.cullDistance).toBeLessThan(early);
-        self.vehicle.routeS = 3000;
+        self.vehicle.routeS = 15000;
         self.applyAtmosphere();
         expect(self.cullDistance).toBe(250);
         expect(self.appliedShadowSpan).toBe(200);

@@ -933,8 +933,10 @@ body.touch.world-ride .hud-guide {
 }
 
 /* The loading note of a world (js/main.js startWorld) */
-/* While a world loads there is no ride: no HUD over the loading screen */
-body.world-loading-on .hud {
+/* While a world loads there is no ride: no HUD over the loading screen, nor under the error card of a ride that could
+   not load (Game.showLoadError) */
+body.world-loading-on .hud,
+body.load-error-on .hud {
     visibility: hidden;
 }
 
@@ -1322,10 +1324,8 @@ body.in-menu .virtual-button-camera {
 .btn,
 .finish-btn,
 .showcase-continue,
-.select-leg-btn,
 .leaderboard-submit-btn,
-.leaderboard-cancel-btn,
-.lb-close {
+.leaderboard-cancel-btn {
     /* Not flex: a label like <u>R</u>estart must stay one run of text */
     display: inline-block;
     vertical-align: middle;
@@ -1346,23 +1346,20 @@ body.in-menu .virtual-button-camera {
 
 .btn:hover,
 .finish-btn:hover,
-.leaderboard-cancel-btn:hover,
-.lb-close:hover {
+.leaderboard-cancel-btn:hover {
     background: rgba(255, 255, 255, 0.13);
     border-color: rgba(255, 255, 255, 0.3);
 }
 
 .btn:active,
 .finish-btn:active,
-.showcase-continue:active,
-.select-leg-btn:active {
+.showcase-continue:active {
     transform: translateY(1px);
 }
 
 .btn-primary,
 .finish-btn.primary,
 .showcase-continue,
-.select-leg-btn,
 .leaderboard-submit-btn {
     background: linear-gradient(180deg, #3fe887, #1fb760);
     border-color: rgba(255, 255, 255, 0.25);
@@ -1374,7 +1371,6 @@ body.in-menu .virtual-button-camera {
 .btn-primary:hover,
 .finish-btn.primary:hover,
 .showcase-continue:hover:not(:disabled),
-.select-leg-btn:hover,
 .leaderboard-submit-btn:hover:not(:disabled) {
     background: linear-gradient(180deg, #5ef39d, #27c96c);
     border-color: rgba(255, 255, 255, 0.4);
@@ -1401,8 +1397,7 @@ body.in-menu .virtual-button-camera {
 .carousel-arrow:focus-visible,
 .carousel-back:focus-visible,
 .leaderboard-submit-btn:focus-visible,
-.leaderboard-cancel-btn:focus-visible,
-.lb-close:focus-visible {
+.leaderboard-cancel-btn:focus-visible {
     outline: 3px solid var(--c-gold);
     outline-offset: 2px;
 }
@@ -1413,7 +1408,7 @@ body.in-menu .virtual-button-camera {
     text-underline-offset: 3px;
 }
 
-/* Run cards: crash and finish */
+/* Run cards: the error card of a ride that could not load */
 .run-card {
     position: fixed;
     left: 50%;
@@ -1429,32 +1424,24 @@ body.in-menu .virtual-button-camera {
     text-align: center;
 }
 
-/* The crashed bike stays in view below the card */
-.crash-card {
+/* A world or the hill ride that could not load (Game.showLoadError) */
+.load-error-card {
     top: max(calc(var(--edge-top) + 96px), 22vh);
     transform: translateX(-50%);
     border-top: 3px solid var(--c-bad);
     animation: card-in 0.3s var(--ease-out) both;
 }
 
-.crash-title {
-    font: italic 800 clamp(44px, 3vw + 30px, 64px) / 1 var(--font-display);
+.load-error-title {
+    font: italic 800 clamp(24px, 1.5vw + 18px, 32px) / 1.1 var(--font-display);
     letter-spacing: 0.04em;
     color: var(--c-bad);
-    text-shadow: 0 0 24px rgba(255, 90, 90, 0.35);
-    animation: crash-hit 0.45s var(--ease-out) both;
 }
 
-.crash-sub {
+.load-error-text {
     margin-top: var(--sp-2);
     font-size: var(--fs-md);
     color: var(--c-text-dim);
-}
-
-.crash-tip {
-    margin-top: var(--sp-2);
-    font-size: var(--fs-sm);
-    color: var(--c-text-faint);
 }
 
 .run-buttons {
@@ -1472,14 +1459,6 @@ body.in-menu .virtual-button-camera {
 @keyframes card-in {
     from { opacity: 0; transform: translateX(-50%) translateY(10px) scale(0.97); }
     to { opacity: 1; transform: translateX(-50%); }
-}
-
-@keyframes crash-hit {
-    0% { opacity: 0; transform: scale(1.5); }
-    40% { opacity: 1; transform: scale(0.96) translateX(-6px); }
-    55% { transform: translateX(5px); }
-    70% { transform: translateX(-3px); }
-    100% { transform: none; }
 }
 
 /* Finish screen: the time leads, style points follow */
@@ -1751,23 +1730,7 @@ body.in-menu .virtual-button-camera {
     text-shadow: 0 2px 18px rgba(0, 0, 0, 0.8), 0 0 30px rgba(74, 168, 255, 0.35);
 }
 
-/* A short line under the menu title: the world's data did not load and the legs took over */
-.menu-notice {
-    align-self: center;
-    max-width: min(560px, 100%);
-    margin: 0 0 var(--sp-2);
-    padding: 8px 14px;
-    border-radius: var(--r-md);
-    border: 1px solid color-mix(in srgb, var(--c-warn) 55%, transparent);
-    background: var(--panel-bg-strong);
-    color: var(--c-warn);
-    font: 600 var(--fs-sm) / 1.35 var(--font-ui);
-    text-align: center;
-    pointer-events: auto;
-}
-
-.showcase-panel .character-select-screen,
-.showcase-panel .track-select-screen {
+.showcase-panel .character-select-screen {
     display: flex;
     flex-direction: column;
     flex: 1;
@@ -2100,12 +2063,7 @@ body.home-map-on .home-panel {
     text-align: left;
 }
 
-.home .menu-notice {
-    align-self: stretch;
-}
-
-.home .character-select-screen,
-.home .track-select-screen {
+.home .character-select-screen {
     gap: var(--sp-3);
 }
 
@@ -2588,8 +2546,7 @@ body.touch .map-pin {
         font-size: 26px;
     }
 
-    .home .character-select-screen,
-    .home .track-select-screen {
+    .home .character-select-screen {
         gap: var(--sp-2);
     }
 
@@ -2659,8 +2616,7 @@ body.touch .map-pin {
     }
 
     /* The panel scrolls; RIDE and the ways on stay at its foot */
-    .home .character-select-screen .showcase-actions,
-    .home .track-select-screen .showcase-actions {
+    .home .character-select-screen .showcase-actions {
         position: sticky;
         bottom: calc(-1 * (var(--home-pad) + env(safe-area-inset-bottom, 0px)));
         z-index: 1;
@@ -2718,8 +2674,7 @@ body.touch .map-pin {
     display: flex;
 }
 
-.leaderboard-entry-panel,
-.lb-panel {
+.leaderboard-entry-panel {
     box-sizing: border-box;
     width: min(440px, calc(100vw - 32px));
     max-height: calc(100dvh - 32px);
@@ -2740,8 +2695,7 @@ body.touch .map-pin {
     to { opacity: 1; transform: none; }
 }
 
-.leaderboard-entry-title,
-.lb-title {
+.leaderboard-entry-title {
     margin: 0 0 var(--sp-3);
     font: italic 800 clamp(28px, 2vw + 18px, 40px) / 1 var(--font-display);
     letter-spacing: 0.08em;
@@ -2749,8 +2703,7 @@ body.touch .map-pin {
     color: var(--c-text);
 }
 
-.leaderboard-entry-subtitle,
-.lb-leg {
+.leaderboard-entry-subtitle {
     margin: 0 0 var(--sp-5);
     font-size: var(--fs-md);
     color: var(--c-text-dim);
@@ -2814,37 +2767,6 @@ body.touch .map-pin {
     color: var(--c-bad);
 }
 
-/* Best-times viewer over the menu */
-.lb-viewer {
-    position: fixed;
-    inset: 0;
-    z-index: var(--z-overlay);
-    display: flex;
-    align-items: center;
-    justify-content: center;
-    background: rgba(4, 8, 16, 0.75);
-}
-
-.lb-panel {
-    border-top-color: var(--c-gold);
-}
-
-.lb-body {
-    font-size: var(--fs-md);
-    color: var(--c-text-dim);
-}
-
-.lb-best {
-    margin-bottom: var(--sp-3);
-    font-weight: 600;
-    color: var(--c-go);
-}
-
-.lb-best.none,
-.lb-note {
-    color: var(--c-text-faint);
-}
-
 .lb-table {
     margin: 0 auto;
     border-collapse: collapse;
@@ -2871,10 +2793,6 @@ body.touch .map-pin {
     font: 700 var(--fs-lg) / 1 var(--font-display);
     font-variant-numeric: tabular-nums;
     color: var(--c-text);
-}
-
-.lb-close {
-    margin-top: var(--sp-5);
 }
 
 /* Small screens */
@@ -2939,7 +2857,7 @@ body.touch .map-pin {
         width: calc(100vw - 2 * var(--edge) - 2 * 44px - 2 * var(--sp-2));
     }
 
-    .crash-card {
+    .load-error-card {
         padding: var(--sp-4);
     }
 }
@@ -3063,13 +2981,13 @@ body.touch .map-pin {
         padding-bottom: 8px;
     }
 
-    .crash-card {
+    .load-error-card {
         top: calc(var(--edge-top) + 76px);
         padding: var(--sp-3) var(--sp-4);
     }
 
-    .crash-title {
-        font-size: 36px;
+    .load-error-title {
+        font-size: 24px;
     }
 
     .run-buttons {
@@ -3086,18 +3004,17 @@ body.touch .map-pin {
 
     .split-popup.show,
     .callout,
-    .crash-card,
-    .crash-title,
+    .load-error-card,
+    .load-error-title,
     .finish-banner,
     .finish-time,
     .unlock-panel,
     .leaderboard-entry-panel,
-    .lb-panel,
     .hud-combo.bump {
         animation: none;
     }
 
-    .crash-card {
+    .load-error-card {
         transform: translateX(-50%);
     }
 
@@ -3231,11 +3148,6 @@ body.touch .map-pin {
 .tuning-row[data-changed] .tuning-label,
 .tuning-row[data-changed] .tuning-value {
     color: var(--c-warn);
-}
-
-/* A row that only a world ride reads says nothing on a classic leg */
-.tuning-panel[data-ride="legs"] .tuning-row[data-world] {
-    opacity: 0.4;
 }
 
 .tuning-step,
@@ -3377,7 +3289,9 @@ body.run-over .tuning-panel,
 body.in-menu .tuning-open,
 body.in-menu .tuning-panel,
 body.world-loading-on .tuning-open,
-body.world-loading-on .tuning-panel {
+body.world-loading-on .tuning-panel,
+body.load-error-on .tuning-open,
+body.load-error-on .tuning-panel {
     display: none;
 }
 

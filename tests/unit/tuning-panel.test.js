@@ -127,17 +127,6 @@ describe('the toggle', () => {
         press('KeyT');
         expect(panel.open).toBe(true);
     });
-
-    test('the rows only a world ride reads are marked, and the panel says which ride it is', () => {
-        let world = true;
-        const panel = panelOf({ world: () => world });
-        panel.show();
-        expect(panel.el.dataset.ride).toBe('world');
-        world = false;
-        panel.refresh();
-        expect(panel.el.dataset.ride).toBe('legs');
-        for (const row of Tuning.PARAMS) expect(panel.rows[row.id].el.dataset.world).toBe(row.world ? '1' : undefined);
-    });
 });
 
 describe('the sliders', () => {

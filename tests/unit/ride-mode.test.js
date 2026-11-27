@@ -1,7 +1,7 @@
 /**
  * What the page rides (js/ridemode.js): a plain page opens the menu, and choosing a rider there starts the world (the
- * Tremola slice); Classic legs opens the leg screen; `?world=<id>` starts that world at once; `?legs` keeps the old
- * menu. A world whose data cannot load hands over to the legs with a note on the menu, not a broken screen.
+ * Tremola slice); `?world=<id>` starts that world at once. A world whose data cannot load shows the error card with
+ * Retry and Back to menu, not a broken screen and not another ride.
  *
  * The menu is the real TourSystem in jsdom, the game's own methods are cut out of js/main.js, and the world that fails
  * is the real WorldEnvironment.load over a stubbed fetch.
@@ -25,11 +25,11 @@ const rulesSource = `class Vehicle {}\nVehicle.BIKES = {};\n${vehicleSource.slic
 (0, eval)(`${read('modals.js')}\n${charactersSource}\n${rulesSource}\n${read('tours.js')}\nglobalThis.TourSystem = TourSystem; globalThis.CHARACTERS = CHARACTERS;`);
 const RideMode = new Function(`${read('ridemode.js')}\nreturn RideMode;`)();
 
-const METHODS = ['openRide', 'chooseWorld', 'startWorld', 'fallBackToLegs'];
+const METHODS = ['openRide', 'chooseWorld', 'startWorld', 'showLoadError'];
 const flush = () => new Promise(done => setTimeout(done, 0));
 const shown = selector => document.querySelector(selector) && document.querySelector(selector).style.display !== 'none';
 
-// A game over the real menu: the leg and the world builders are spies, the world loader is `WorldEnvironment`
+// A game over the real menu: the world builder is a spy, the world loader is `WorldEnvironment`
 function makeGame(search, WorldEnvironment) {
     const self = {
         rideMode: RideMode.resolve(search),
@@ -39,8 +39,7 @@ function makeGame(search, WorldEnvironment) {
         endMenuShowcase: jest.fn(),
         removeRunOverlays: jest.fn(),
         cleanupCurrentLeg: jest.fn(),
-        initializeGameWithWorld: jest.fn(async () => {}),
-        initializeGameWithLeg: jest.fn()
+        initializeGameWithWorld: jest.fn(async () => {})
     };
     Object.assign(self, gameMethods(METHODS, self, { RideMode, WorldEnvironment }));
     return self;
@@ -52,11 +51,11 @@ describe('the mode a URL asks for', () => {
         expect(RideMode.resolve('?fps=1')).toEqual({ kind: 'world', world: 'tremola', direct: false });
     });
 
-    test('?world=<id> starts that world at once, and ?legs keeps the classic menu', () => {
+    test('?world=<id> starts that world at once, and the old ?legs is a plain page', () => {
         expect(RideMode.resolve('?world=tremola')).toEqual({ kind: 'world', world: 'tremola', direct: true });
         expect(RideMode.resolve('?world=all&worldData=world/')).toEqual({ kind: 'world', world: 'all', direct: true });
-        expect(RideMode.resolve('?legs')).toEqual({ kind: 'legs', world: null, direct: false });
-        expect(RideMode.resolve('?legs=1&fps=1')).toEqual({ kind: 'legs', world: null, direct: false });
+        expect(RideMode.resolve('?legs')).toEqual({ kind: 'world', world: 'tremola', direct: false });
+        expect(RideMode.resolve('?legs=1&fps=1')).toEqual({ kind: 'world', world: 'tremola', direct: false });
     });
 
     test('&mode=roam asks for free roam; anything else is a time trial', () => {
@@ -112,43 +111,30 @@ describe('the menu of a plain page', () => {
         await flush();
         expect(WorldEnvironment.load).toHaveBeenCalledWith(game.scene, expect.objectContaining({ id: 'tremola' }));
         expect(game.initializeGameWithWorld).toHaveBeenCalledWith(environment);
-        expect(game.initializeGameWithLeg).not.toHaveBeenCalled();
         expect(game.tourSystem.selectedCharacterId).toBe(game.tourSystem.riderDisplayOrder()[game.tourSystem.riderFocusIndex].id);
         // The menu is put away for the ride
         expect(document.querySelector('.tour-selector-overlay').style.display).toBe('none');
         expect(document.getElementById('world-loading')).toBeNull();
     });
 
-    test('Classic legs opens the leg screen, and its Start rides a leg', async () => {
-        const WorldEnvironment = { load: jest.fn(async () => ({ isWorld: true })) };
-        const game = makeGame('', WorldEnvironment);
-        game.openRide();
-        document.getElementById('riderClassicBtn').click();
-        expect(game.tourSystem.menuScreen).toBe('track');
-        expect(shown('.track-select-screen')).toBe(true);
-        document.getElementById('legStartBtn').click();
-        await flush();
-        expect(game.initializeGameWithLeg).toHaveBeenCalledWith(expect.objectContaining({ id: 'mountain-dawn' }));
-        expect(WorldEnvironment.load).not.toHaveBeenCalled();
-    });
-
-    test('the rider screen offers no leg board, the leg screen offers the leg\'s own', () => {
+    test('the menu is the rider screen alone: no leg screen, no Classic legs and no leg board', () => {
         const game = makeGame('', { load: jest.fn() });
         game.openRide();
-        const riderScreen = document.querySelector('.character-select-screen');
-        expect(riderScreen.querySelector('#legLeaderboardBtn')).toBeNull();
-        expect(riderScreen.textContent).not.toMatch(/BEST TIMES/);
-        expect(document.querySelector('.track-select-screen #legLeaderboardBtn')).not.toBeNull();
+        expect(document.getElementById('riderClassicBtn')).toBeNull();
+        expect(document.querySelector('.track-select-screen')).toBeNull();
+        expect(document.getElementById('legStartBtn')).toBeNull();
+        expect(document.getElementById('legLeaderboardBtn')).toBeNull();
+        expect(document.querySelector('.character-select-screen').textContent).not.toMatch(/BEST TIMES|CLASSIC/);
     });
 
-    test('?legs keeps the old menu: the rider goes on to the leg screen', () => {
-        const WorldEnvironment = { load: jest.fn() };
+    test('the old ?legs address opens the same menu, and choosing a rider starts the world', async () => {
+        const WorldEnvironment = { load: jest.fn(async () => ({ isWorld: true })) };
         const game = makeGame('?legs', WorldEnvironment);
         game.openRide();
         expect(document.getElementById('riderClassicBtn')).toBeNull();
         document.getElementById('riderContinueBtn').click();
-        expect(game.tourSystem.menuScreen).toBe('track');
-        expect(WorldEnvironment.load).not.toHaveBeenCalled();
+        await flush();
+        expect(WorldEnvironment.load).toHaveBeenCalledWith(game.scene, expect.objectContaining({ id: 'tremola' }));
     });
 
     test('?world=<id> starts that world without the menu', async () => {
@@ -182,31 +168,37 @@ describe('a world that cannot load', () => {
         'the data is not the world format': async () => ({ ok: true, status: 200, arrayBuffer: async () => new TextEncoder().encode('{"format":"nope"}').buffer })
     };
 
-    test.each(Object.keys(failures))('%s: the leg screen opens with a note, and its Start rides a leg', async (name) => {
+    test.each(Object.keys(failures))('%s: the error card says so, with Retry and Back to menu, and no ride starts', async (name) => {
         globalThis.fetch = jest.fn(failures[name]);
         const game = makeGame('', world.WorldEnvironment);
         const error = jest.spyOn(console, 'error').mockImplementation(() => {});
         game.openRide();
         document.getElementById('riderContinueBtn').click();
-        for (let i = 0; i < 20 && game.tourSystem.menuScreen !== 'track'; i++) await flush();
-        error.mockRestore();
+        for (let i = 0; i < 20 && !document.getElementById('loadError'); i++) await flush();
 
         expect(globalThis.fetch).toHaveBeenCalledWith('world/manifest.json');
         expect(game.initializeGameWithWorld).not.toHaveBeenCalled();
-        // No loading screen left over, the leg screen up with the note on it
+        // No loading screen left over, and the card on top of the dialog stack
         expect(document.getElementById('world-loading')).toBeNull();
         expect(document.body.classList.contains('world-loading-on')).toBe(false);
-        expect(game.tourSystem.menuScreen).toBe('track');
-        expect(document.querySelector('.tour-selector-overlay').style.display).not.toBe('none');
-        const note = document.querySelector('.tour-selector-overlay .menu-notice');
-        expect(note && note.textContent).toBe(RideMode.FALLBACK_NOTE);
-        expect(game.rideMode.kind).toBe('legs');
-
-        document.getElementById('legStartBtn').click();
-        expect(game.initializeGameWithLeg).toHaveBeenCalledWith(expect.objectContaining({ id: 'mountain-dawn' }));
-
-        // Back on the rider screen the world is not offered again: the rider goes on to the legs
-        document.getElementById('backToRidersBtn').click();
+        const card = document.getElementById('loadError');
+        expect(Modals.top().element).toBe(card);
+        expect(card.querySelector('.load-error-title').textContent).toBe(RideMode.LOAD_FAIL_TITLE);
+        expect(card.querySelector('.load-error-text').textContent).toBe(RideMode.LOAD_FAIL_NOTE);
+        expect(card.querySelector('#loadMenuBtn').dataset.key).toBe('KeyM');
+        expect(card.querySelector('#loadRetryBtn').dataset.key).toBe('KeyR');
         expect(document.getElementById('riderClassicBtn')).toBeNull();
+        expect(document.body.classList.contains('load-error-on')).toBe(true);
+        expect(game.rideMode.kind).toBe('world');
+
+        // Retry loads the world again: the host still fails, so the card comes back, once
+        const calls = globalThis.fetch.mock.calls.length;
+        card.querySelector('#loadRetryBtn').click();
+        expect(document.getElementById('loadError')).toBeNull();
+        for (let i = 0; i < 20 && !document.getElementById('loadError'); i++) await flush();
+        error.mockRestore();
+        expect(globalThis.fetch.mock.calls.length).toBeGreaterThan(calls);
+        expect(document.querySelectorAll('#loadError')).toHaveLength(1);
+        expect(game.initializeGameWithWorld).not.toHaveBeenCalled();
     });
 });

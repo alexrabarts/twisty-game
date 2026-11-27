@@ -7,12 +7,11 @@
 //     rider, bike and outfit chosen (the showcase's bike is the tour system's choice after each step);
 //   - the map (RIDE): its parts meet nowhere and stay on screen, every row of the tour has a line with a hit area
 //     and every tour row with a line a pin, no two pins and no two place names meet, nor a pin and a name; a closed
-//     leg does not ride; the arrow keys step the legs (wide windows);
-//   - no GPU memory is left behind: the renderer's geometry and texture counts at the menu are the same after a
-//     classic leg ridden and left, twice (the second and third menus).
+//     leg does not ride; the arrow keys step the legs (wide windows).
+// A ride goes back to the menu on a fresh page (Game.returnToMenu), so no menu holds what a ride left behind.
 // With --out <dir> it saves a picture of each screen, the map with a leg hovered among them.
 //
-//   node tools/home-check.mjs [--out <dir>] [--only 1024x640,1440x900,phone] [--chrome <path>] [--gpu] [--no-dispose]
+//   node tools/home-check.mjs [--out <dir>] [--only 1024x640,1440x900,phone] [--chrome <path>] [--gpu]
 //
 // Chrome: --chrome <path>, else TWISTY_CHROME, else puppeteer's own. Never lets a page reach production.
 // Exit: 0 every check held, 1 a check failed, 2 no Chrome.
@@ -39,7 +38,6 @@ const option = name => {
 const outDir = option('out');
 const only = option('only') ? option('only').split(',') : Object.keys(SIZES);
 const gpu = argv.includes('--gpu');
-const dispose = !argv.includes('--no-dispose');
 if (outDir) mkdirSync(outDir, { recursive: true });
 
 function chromePath() {
@@ -288,27 +286,6 @@ async function run(browser, port, name) {
     await pause(400);
     if (await page.evaluate(() => !!document.getElementById('world-legs'))) failures.push('map: Back left the map open');
 
-    // GPU memory across menus: a classic leg ridden and left, three times; the second and third menus hold the same
-    if (dispose && wide && name === only.find(n => SIZES[n] && !SIZES[n].hasTouch)) {
-        const counts = [];
-        for (let round = 0; round < 3; round++) {
-            await page.click('#riderClassicBtn');
-            await pause(500);
-            await page.click('#legStartBtn');
-            await page.waitForFunction('window.game.environment && !window.game.environment.isWorld && window.game.vehicle && !window.game.showcaseMode', { timeout: 120000, polling: 250 });
-            await pause(1500);
-            await page.evaluate(() => window.game.returnToMenu());
-            // (a player back from a leg lands on the classic leg screen: back to the rider)
-            await page.waitForFunction('window.game.showcaseMode && document.querySelector("#backToRidersBtn") && getComputedStyle(document.querySelector(".tour-selector-overlay")).display !== "none"', { timeout: 60000, polling: 250 });
-            await page.click('#backToRidersBtn');
-            await page.waitForFunction('window.game.showcaseBikes', { timeout: 60000, polling: 250 });
-            await settle();
-            counts.push(await page.evaluate(() => ({ ...window.game.renderer.info.memory })));
-        }
-        if (counts[1].geometries !== counts[2].geometries || counts[1].textures !== counts[2].textures) failures.push(`dispose: the menu's GPU memory grew: ${counts.map(c => `${c.geometries} geometries, ${c.textures} textures`).join(' -> ')}`);
-        process.stderr.write(`      menu GPU memory after each leg: ${counts.map(c => `${c.geometries}/${c.textures}`).join(', ')} (geometries/textures)\n`);
-        check('home after legs', await page.evaluate(riderCheck));
-    }
     return [...failures, ...errors.map(e => `page error: ${e}`)];
 }
 

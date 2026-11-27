@@ -24,7 +24,7 @@
                 </div>
                 <div class="hud-meta">
                     <span id="hudProgressKm" class="hud-km"></span>
-                    <!-- The classic legs: a pip for each gate -->
+                    <!-- Free roam: a pip for each gate -->
                     <span class="hud-gates" id="hudGates" aria-label="Checkpoints passed"><span id="hudGatePips"></span><b id="hudGateCount" class="hud-count">0/5</b></span>
                     <span class="hud-style"><span id="scoreLabel">STYLE</span> <span id="score">0</span></span>
                     <span id="comboDisplay" class="hud-combo"></span>
@@ -168,10 +168,8 @@
     <script src="js/virtualcontrols.js"></script>
     <script src="js/input.js"></script>
     <script src="js/particles.js"></script>
-    <script src="js/terrain.js"></script>
-    <script src="js/course.js"></script>
     <script src="js/race.js"></script>
-    <!-- What the page rides (the world or the legs): the one reader of ?world -->
+    <!-- What the page rides (a world or the hill ride): the one reader of ?world -->
     <script src="js/ridemode.js"></script>
     <script src="js/gamemodes.js"></script>
     <script src="js/tours.js"></script>
@@ -180,7 +178,6 @@
     <script src="js/weather.js"></script>
     <script src="js/atmosphere.js"></script>
     <script src="js/world/route.js"></script>
-    <script src="js/world/legroute.js"></script>
     <script src="js/world/physics.js"></script>
     <script src="js/world/tour.js"></script>
     <script src="js/world/data.js"></script>
@@ -225,13 +222,9 @@
     <script src="js/world/environment.js"></script>
     <script src="js/vehicle.js"></script>
     <script src="js/contactshadow.js"></script>
-    <script src="js/environment.js"></script>
     <script src="js/sceneassets.js"></script>
     <script src="js/bikemodels.js"></script>
     <script src="js/carmodels.js"></script>
-    <script src="js/treemodels.js"></script>
-    <script src="js/cones.js"></script>
-    <script src="js/rockfalls.js"></script>
     <script src="js/traffic.js"></script>
     <!-- The hill ride (RideMode kind 'hill'): its lane, bicycle, drawing, music, and its time and board -->
     <script src="js/hill/lane.js"></script>

@@ -1,45 +1,12 @@
-// Dev helper, not loaded by the game. Paste into the console or inject with
+// Dev helper, not loaded by the game. Paste into the console of a world ride (`/?world=tremola`) or inject with
 //   const s = document.createElement('script'); s.src = 'tools/autopilot.js'; document.head.appendChild(s);
-// then call twistyDev.start('mountain-dawn') and twistyDev.autopilot({ speed: 25 }).
+// then call twistyDev.autopilot({ speed: 25 }).
 window.twistyDev = {
-    start(legId) {
-        const game = window.game;
-        if (game.vehicle) game.cleanupCurrentLeg();
-        game.tourSystem.selectLeg(legId);
-        game.initializeGameWithLeg(game.tourSystem.getCurrentLeg());
-        const dashboard = document.querySelector('.dashboard');
-        if (dashboard) dashboard.style.opacity = '1';
-    },
-
-    // Rides the leg: heading error -> target lean -> steering input
+    // Rides the world's route (worldPilot)
     autopilot(options = {}) {
         const game = window.game;
         const ap = Object.assign({ speed: 25, lookahead: 2, yawGain: 1.6, kp: 4, kd: 1.2, lane: 0, on: true }, options);
-        const wrap = a => Math.atan2(Math.sin(a), Math.cos(a));
-        const input = game.input;
-        if (game.environment && game.environment.isWorld) {
-            this.worldPilot(game, ap, input);
-            this.ap = ap;
-            return ap;
-        }
-        input.getSteeringInput = () => {
-            const v = game.vehicle;
-            const env = game.environment;
-            if (!ap.on || !v || !env || !env.route) return 0;
-            const route = env.route;
-            // `lookahead` counts route units (20 m on a leg) ahead of the bike
-            const ahead = Math.min((v.routeS || 0) + ap.lookahead * route.unitM, route.length);
-            const t = route.sample(ahead, this.aim || (this.aim = {}));
-            const tx = t.x + Math.cos(t.heading) * ap.lane;
-            const tz = t.z - Math.sin(t.heading) * ap.lane;
-            const err = wrap(Math.atan2(tx - v.position.x, tz - v.position.z) - v.yawAngle);
-            const yawRate = Math.max(-1.2, Math.min(1.2, err * ap.yawGain));
-            const targetLean = Math.max(-0.75, Math.min(0.75, -Math.atan(yawRate * Math.max(v.speed, 5) / 9.81)));
-            return Math.max(-1, Math.min(1, (v.leanAngle - targetLean) * ap.kp + v.leanVelocity * ap.kd));
-        };
-        input.getThrottleInput = () => (ap.on && game.vehicle && game.vehicle.speed < ap.speed ? 1 : 0);
-        input.getBrakeInput = () => (ap.on && game.vehicle && game.vehicle.speed > ap.speed + 4 ? 1 : 0);
-        input.getWheelieInput = () => 0;
+        this.worldPilot(game, ap, game.input);
         this.ap = ap;
         return ap;
     },
@@ -210,7 +177,7 @@ window.twistyDev = {
     },
 
     // Stop the live animation loop so frames only happen when step() runs.
-    // Call it in the same synchronous turn as start(): any frame in between
+    // Call it in the same synchronous turn as the ride's start: any frame in between
     // would advance the ride by wall-clock time and make runs differ.
     freeze() {
         const game = window.game;
@@ -224,7 +191,7 @@ window.twistyDev = {
             this.ticks = 0;
             this.frozen = true;
         }
-        // start() builds a new vehicle for each leg, so count its updates here
+        // Each ride builds a new vehicle, so count its updates here
         const vehicle = game.vehicle;
         if (vehicle && !vehicle.tickCounted) {
             const update = vehicle.update.bind(vehicle);
@@ -272,7 +239,7 @@ window.twistyDev = {
         return this.ticks;
     },
 
-    // `segment` is in route units: 20 m segments on a leg
+    // `segment` is in route units (route.unitM)
     teleport(segment) {
         const game = window.game;
         const route = game.environment.route;
@@ -285,7 +252,5 @@ window.twistyDev = {
         v.findNearestRoadSegment();
         // A world takes the new place as the start of its progress, as a resume does
         if (game.worldRun) game.worldRun.reset(route.fromUnits(segment));
-        // A converted leg draws the window round the bike's new place at once
-        if (game.environment.sections) game.environment.ensureWindow(segment, { sync: true });
     }
 };

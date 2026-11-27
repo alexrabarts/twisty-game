@@ -1,15 +1,14 @@
 /**
  * @jest-environment node
  */
-// A rider of the touring crew rides at the pace of its own traits (CHARACTERS `traits`, Traffic.PACES): on a leg the
-// mean of its country and mountain traits, in a world its trait for the kind of road it is on (WorldRoute.kindAt:
-// hairpin, mountain, country), which blends along the road. Every rule reads CHARACTERS and the route, so a new
+// A rider of the touring crew rides at the pace of its own traits (CHARACTERS `traits`, Traffic.PACES): in a world its
+// trait for the kind of road it is on (WorldRoute.kindAt: hairpin, mountain, country), which blends along the road. Every rule reads CHARACTERS and the route, so a new
 // character with traits and a new world are held with no line added here.
 // Real classes on real three r150 and the real Tremola slice, read from disk.
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { describe, test, expect, beforeAll } from '@jest/globals';
-import { loadGame, buildEnvironment } from '../helpers/load-game.js';
+import { loadGame } from '../helpers/load-game.js';
 import { diskFetch } from '../helpers/world-fetch.js';
 import { decodeWorld } from '../../tools/world/encode.mjs';
 import { rideSamples } from '../../tools/world/stations.mjs';
@@ -86,46 +85,15 @@ describe('the pace of a trait', () => {
     });
 });
 
-describe('the crew on a leg', () => {
-    test.each(CHARACTERS.map(c => c.id))('with %s as the player, each of the others starts at the pace of its own traits, with one draw a rider', (id) => {
-        const player = CHARACTERS.find(c => c.id === id);
-        const random = Math.random;
-        let draws = 0, traffic, before;
-        try {
-            const { env, scene } = buildEnvironment(game, 1);
-            // Each draw is its own number, so a rider's share of its spread says which draw it was
-            Math.random = () => ++draws / 1e6;
-            traffic = quietly(() => new game.Traffic(scene, env, player.name));
-            // The crew alone, made again on the same traffic: its own draws
-            traffic.motorcycles.length = 0;
-            before = draws;
-            quietly(() => traffic.initializeMotorcycles());
-        } finally {
-            Math.random = random;
-        }
-        const crew = Traffic.crewOf(player.name);
-        // The paces take the first draws, one a rider in the crew's order, as before the traits; the start takes one
-        // more a rider (tests/unit/traffic.test.js pins the starts), and the rest are the drawn bike's
-        expect(traffic.motorcycles.map(bike => bike.pace.luck)).toEqual(crew.map((c, i) => (before + i + 1) / 1e6));
-        expect(Traffic.prototype.initializeMotorcycles.toString().match(/Math\.random/g).length).toBe(2);
-        expect(traffic.motorcycles.map(bike => bike.riderName)).toEqual(crew.map(c => c.name));
-        traffic.motorcycles.forEach((bike, i) => {
-            const pace = Traffic.paceOf((crew[i].traits.country + crew[i].traits.mountain) / 2);
-            expect(bike.baseSpeed).toBeCloseTo(pace.speed + bike.pace.luck * pace.spread, 9);
-            expect(bike.skill).toBe(Traffic.skillOf((crew[i].traits.country + crew[i].traits.mountain) / 2));
-        });
-        // The start order is the crew's as it was: the first of them furthest up the road
-        const starts = traffic.motorcycles.map(bike => bike.currentSegment);
-        expect(starts).toEqual([...starts].sort((a, b) => b - a));
-    });
-
-    test('nothing of the pace draws from Math.random after the start', () => {
-        const { env, scene } = buildEnvironment(game, 1);
-        const AIMotorcycle = quietly(() => new game.Traffic(scene, env)).motorcycles[0].constructor;
+describe('the pace draws', () => {
+    test('nothing of the pace draws from Math.random after the start', async () => {
+        const { fetchFn } = diskFetch();
+        const env = await quietly(() => WorldEnvironment.load(new THREE.Scene(), { id: 'tremola', fetchFn, models: null, digest: async () => '0' }));
+        const AIMotorcycle = quietly(() => new Traffic(new THREE.Scene(), env)).motorcycles[0].constructor;
         for (const source of [AIMotorcycle.prototype.takePace, Traffic.paceOf, Traffic.skillOf, Traffic.roadTrait, WorldRoute.prototype.kindAt, WorldRoute.prototype.buildKinds, WorldRoute.prototype.blendAlong, Vehicle.traitOf, Vehicle.statsOf]) {
             expect(source.toString()).not.toContain('Math.random');
         }
-    });
+    }, 120000);
 });
 
 describe('the kind of road, measured from a route', () => {

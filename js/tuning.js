@@ -7,8 +7,8 @@
 // scaled and nothing is copied: Tuning.view returns the object it was given and Tuning.field the number it was given,
 // so the ride is the same to the last bit.
 //
-// A row: `id`, `label` (12 letters or so: the panel's column is narrow, and `hint` says the rest), `hint`, `group`, `min`, `max`, `step`, `world` (true when only a world ride reads it) and `scales`,
-// the numbers it multiplies, each { on, field, inverse }:
+// A row: `id`, `label` (12 letters or so: the panel's column is narrow, and `hint` says the rest), `hint`, `group`,
+// `min`, `max`, `step` and `scales`, the numbers it multiplies, each { on, field, inverse }:
 //   on 'world'   a field of WorldPhysics, a path for a nested one ('steerKeys.keyS'). Vehicle.worldPhysics is
 //                Tuning.view('world', ...), so a row over a WorldPhysics field needs no other code
 //   on 'bar'     a field of Vehicle.BAR, on 'body' of Vehicle.BODY (the same way: Tuning.view)
@@ -24,33 +24,33 @@ const Tuning = {
 
     PARAMS: [
         { id: 'steerRate', label: 'Lean rate', hint: 'How fast a held steer key leans the bike', group: 'Steering', min: 0.5, max: 2, step: 0.01, scales: [{ on: 'world', field: 'leanRate' }, { on: 'bike', field: 'steeringForce' }] },
-        { id: 'steerFast', label: 'Steer fast', hint: 'The speed from which the lean rate falls: more keeps the steering at speed', group: 'Steering', min: 0.5, max: 2, step: 0.01, world: true, scales: [{ on: 'world', field: 'steerSpeed' }] },
-        { id: 'steerSlow', label: 'Steer slow', hint: 'The turn at walking pace: more is a tighter full lock', group: 'Steering', min: 0.5, max: 1.5, step: 0.01, world: true, scales: [{ on: 'world', field: 'lockRadius', inverse: true }] },
-        { id: 'pickUp', label: 'Pick-up', hint: 'How much quicker the bike is picked up than laid down', group: 'Steering', min: 0.5, max: 1.5, step: 0.01, world: true, scales: [{ on: 'world', field: 'pickUpBoost' }] },
-        { id: 'selfRight', label: 'Self-righting', hint: 'How fast the bike stands up with the keys let go', group: 'Steering', min: 0, max: 2, step: 0.01, world: true, scales: [{ on: 'world', field: 'selfRighting' }] },
+        { id: 'steerFast', label: 'Steer fast', hint: 'The speed from which the lean rate falls: more keeps the steering at speed', group: 'Steering', min: 0.5, max: 2, step: 0.01, scales: [{ on: 'world', field: 'steerSpeed' }] },
+        { id: 'steerSlow', label: 'Steer slow', hint: 'The turn at walking pace: more is a tighter full lock', group: 'Steering', min: 0.5, max: 1.5, step: 0.01, scales: [{ on: 'world', field: 'lockRadius', inverse: true }] },
+        { id: 'pickUp', label: 'Pick-up', hint: 'How much quicker the bike is picked up than laid down', group: 'Steering', min: 0.5, max: 1.5, step: 0.01, scales: [{ on: 'world', field: 'pickUpBoost' }] },
+        { id: 'selfRight', label: 'Self-righting', hint: 'How fast the bike stands up with the keys let go', group: 'Steering', min: 0, max: 2, step: 0.01, scales: [{ on: 'world', field: 'selfRighting' }] },
         { id: 'leanMax', label: 'Max lean', hint: 'The most lean the bike holds (the lowside limit moves with it)', group: 'Steering', min: 0.6, max: 1.3, step: 0.01, scales: [{ on: 'world', field: 'leanCapDeg' }, { on: 'bike', field: 'maxLeanAngle' }] },
-        { id: 'steerKey', label: 'Key ease', hint: 'The ramp of a steer key, in time: more is slower', group: 'Steering', min: 0.25, max: 3, step: 0.01, world: true, scales: [{ on: 'world', field: 'steerKeys.keyS' }, { on: 'world', field: 'steerKeys.featherS' }] },
+        { id: 'steerKey', label: 'Key ease', hint: 'The ramp of a steer key, in time: more is slower', group: 'Steering', min: 0.25, max: 3, step: 0.01, scales: [{ on: 'world', field: 'steerKeys.keyS' }, { on: 'world', field: 'steerKeys.featherS' }] },
 
         { id: 'brake', label: 'Brake force', hint: 'The brake, front and rear as one', group: 'Brakes', min: 0.5, max: 1.5, step: 0.01, scales: [{ on: 'bike', field: 'brakeForce' }] },
-        { id: 'brakeLean', label: 'Brake leaned', hint: 'The share of the brake that is left at full lean', group: 'Brakes', min: 0.5, max: 2, step: 0.01, world: true, scales: [{ on: 'world', field: 'trailBrakeFloor' }] },
-        { id: 'engineBrake', label: 'Engine brake', hint: 'The engine braking with the throttle closed', group: 'Brakes', min: 0, max: 2, step: 0.01, world: true, scales: [{ on: 'world', field: 'engineBrake' }, { on: 'world', field: 'engineBrakeMax' }] },
+        { id: 'brakeLean', label: 'Brake leaned', hint: 'The share of the brake that is left at full lean', group: 'Brakes', min: 0.5, max: 2, step: 0.01, scales: [{ on: 'world', field: 'trailBrakeFloor' }] },
+        { id: 'engineBrake', label: 'Engine brake', hint: 'The engine braking with the throttle closed', group: 'Brakes', min: 0, max: 2, step: 0.01, scales: [{ on: 'world', field: 'engineBrake' }, { on: 'world', field: 'engineBrakeMax' }] },
 
         { id: 'accel', label: 'Acceleration', hint: 'The pull of the engine', group: 'Engine', min: 0.5, max: 1.5, step: 0.01, scales: [{ on: 'bike', field: 'acceleration' }] },
         { id: 'topSpeed', label: 'Top speed', hint: 'The top speed', group: 'Engine', min: 0.5, max: 1.5, step: 0.01, scales: [{ on: 'bike', field: 'maxSpeed' }] },
-        { id: 'throttle', label: 'Throttle', hint: 'How fast the twist grip opens: more is a sharper throttle', group: 'Engine', min: 0.5, max: 2, step: 0.01, world: true, scales: [{ on: 'world', field: 'throttleRiseS', inverse: true }] },
+        { id: 'throttle', label: 'Throttle', hint: 'How fast the twist grip opens: more is a sharper throttle', group: 'Engine', min: 0.5, max: 2, step: 0.01, scales: [{ on: 'world', field: 'throttleRiseS', inverse: true }] },
 
         { id: 'gripDry', label: 'Grip dry', hint: 'The grip of the lean on a dry road', group: 'Grip', min: 0.5, max: 1.5, step: 0.01, scales: [{ on: 'grip', field: 'dry' }] },
         { id: 'gripWet', label: 'Grip wet', hint: 'The grip of the lean in rain or snow', group: 'Grip', min: 0.5, max: 1.5, step: 0.01, scales: [{ on: 'grip', field: 'wet' }] },
-        { id: 'lowside', label: 'Lowside room', hint: 'How far over the grip the lean may ask before the bike lowsides', group: 'Grip', min: 0.9, max: 1.3, step: 0.01, world: true, scales: [{ on: 'world', field: 'lowsideMargin' }] },
+        { id: 'lowside', label: 'Lowside room', hint: 'How far over the grip the lean may ask before the bike lowsides', group: 'Grip', min: 0.9, max: 1.3, step: 0.01, scales: [{ on: 'world', field: 'lowsideMargin' }] },
 
-        { id: 'assist', label: 'Assist', hint: 'The hairpin assist: the line, the edge and the advised braking', group: 'Assist', min: 0, max: 2, step: 0.01, world: true, scales: [{ on: 'world', field: 'lineStrength' }, { on: 'world', field: 'edgeLeanRate' }, { on: 'world', field: 'adviceBrake' }] },
+        { id: 'assist', label: 'Assist', hint: 'The hairpin assist: the line, the edge and the advised braking', group: 'Assist', min: 0, max: 2, step: 0.01, scales: [{ on: 'world', field: 'lineStrength' }, { on: 'world', field: 'edgeLeanRate' }, { on: 'world', field: 'adviceBrake' }] },
         // Up to 1.2 only: 1 + extra must stay under lowsideMargin (WorldPhysics.edgeLean)
-        { id: 'edgeLean', label: 'Edge lean', hint: 'The extra lean a bike gets when it runs wide, near the outside edge of its turn', group: 'Assist', min: 0, max: 1.2, step: 0.01, world: true, scales: [{ on: 'world', field: 'edgeLean.extra' }] },
+        { id: 'edgeLean', label: 'Edge lean', hint: 'The extra lean a bike gets when it runs wide, near the outside edge of its turn', group: 'Assist', min: 0, max: 1.2, step: 0.01, scales: [{ on: 'world', field: 'edgeLean.extra' }] },
 
         { id: 'wheeliePop', label: 'Wheelie pop', hint: 'How hard the wheelie key lifts the front', group: 'Wheelie', min: 0.5, max: 1.5, step: 0.01, scales: [{ on: 'bike', field: 'wheeliePopMult' }] },
         { id: 'wheelieLift', label: 'Wheelie lift', hint: 'How much the throttle holds the front up', group: 'Wheelie', min: 0.5, max: 1.5, step: 0.01, scales: [{ on: 'bike', field: 'wheelieThrottleMult' }] },
 
-        { id: 'offroadPace', label: 'Off-road pace', hint: 'The pace on the land beside the road', group: 'Off-road', min: 0.5, max: 2, step: 0.01, world: true, scales: [{ on: 'world', field: 'landCapSpeed' }, { on: 'world', field: 'offroad.landCapSpeed' }, { on: 'world', field: 'offroad.top.landCapSpeed' }] },
+        { id: 'offroadPace', label: 'Off-road pace', hint: 'The pace on the land beside the road', group: 'Off-road', min: 0.5, max: 2, step: 0.01, scales: [{ on: 'world', field: 'landCapSpeed' }, { on: 'world', field: 'offroad.landCapSpeed' }, { on: 'world', field: 'offroad.top.landCapSpeed' }] },
 
         { id: 'bar', label: 'Steering bar', hint: 'The counter-steer of the drawn handlebar (drawn only)', group: 'Drawn', min: 0, max: 2, step: 0.01, scales: [{ on: 'bar', field: 'counter' }, { on: 'bar', field: 'counterMax' }, { on: 'bar', field: 'intoMax' }] },
         { id: 'body', label: 'Body lean', hint: 'How far the drawn rider leans off the bike (drawn only)', group: 'Drawn', min: 0, max: 2, step: 0.01, scales: [{ on: 'body', field: 'roll' }, { on: 'body', field: 'shift' }] },
@@ -277,7 +277,7 @@ const Tuning = {
     }
 };
 
-Tuning.PARAMS = Object.freeze(Tuning.PARAMS.map(row => Object.freeze({ world: false, ...row, scales: Object.freeze(row.scales.map(Object.freeze)) })));
+Tuning.PARAMS = Object.freeze(Tuning.PARAMS.map(row => Object.freeze({ ...row, scales: Object.freeze(row.scales.map(Object.freeze)) })));
 Tuning.byId = Object.freeze(Object.fromEntries(Tuning.PARAMS.map(row => [row.id, row])));
 // 'on.field' -> the rows that scale it
 Tuning.targets = {};

@@ -1,14 +1,13 @@
 // A restart: +5 s on the clock, the run stays valid, and the systems it
-// touches are put back without a random draw in the traffic. A leg restarts
-// from its save checkpoint, from its crash card; a world ride opens no card:
-// the fall plays, the call-out says why, and the game puts the bike back where
-// it last was on the road (Game.beginWorldCrash, restartInPlace). Game's own
-// methods run against a plain object; the real RockfallSystem and Traffic run
-// on a real environment. tests/unit/world-restart.test.js rides the real
-// slice.
+// touches are put back without a random draw in the traffic. A world ride opens
+// no card: the fall plays, the call-out says why, and the game puts the bike
+// back where it last was on the road (Game.beginWorldCrash, restartInPlace).
+// Game's own methods run against a plain object; the real Traffic runs on the
+// real Tremola slice. tests/unit/world-restart.test.js rides the slice.
 import { describe, test, expect, beforeAll, afterAll, beforeEach, afterEach, jest } from '@jest/globals';
 import { readFileSync } from 'node:fs';
-import { loadGame, buildEnvironment } from '../helpers/load-game.js';
+import { loadGame } from '../helpers/load-game.js';
+import { diskFetch } from '../helpers/world-fetch.js';
 
 const source = readFileSync(new URL('../../js/main.js', import.meta.url), 'utf8');
 // The dialog stack every box of the game opens on (window.Modals)
@@ -17,10 +16,8 @@ const classSource = source.slice(0, source.indexOf('Game.RESTART_CLEAR_SEGMENTS 
 const callouts = [];
 // How long each call-out was asked to stay up (ms), in the order of `callouts`
 const shown = [];
-const Game = new Function('showCallout', 'TourSystem', 'Course', `${classSource}\nreturn Game;`)(
-    (text, tone, ms) => { const item = [text, tone]; callouts.push(item); shown.push(ms); return item; },
-    { boardId: leg => `${leg.id}-v${leg.trackVersion || 2}` },
-    { boardTable: () => ({ 'long-v3': { gates: 14, segments: 700 } }) }
+const Game = new Function('showCallout', `${classSource}\nreturn Game;`)(
+    (text, tone, ms) => { const item = [text, tone]; callouts.push(item); shown.push(ms); return item; }
 );
 
 const vector = (x = 0, z = 0) => ({
@@ -57,8 +54,6 @@ function fakeGame() {
             routeS: 321 * 20
         },
         environment: { route: { toUnits: s => s / 20 } },
-        cones: { reset: jest.fn() },
-        rockfalls: { reset: jest.fn() },
         traffic: { clearAround: jest.fn() },
         leaderboardService: { recordRestart: jest.fn(), cancelSession: jest.fn() },
         addScore(points) { this.score += points; },
@@ -114,103 +109,25 @@ describe('the clock of a run', () => {
     });
 });
 
-describe('restartFromCheckpoint', () => {
-    beforeEach(() => { callouts.length = 0; });
-
-    test('puts the bike on the gate on a rolling start at 15 m/s', () => {
-        const game = fakeGame();
-        game.restartFromCheckpoint();
-        expect(game.vehicle.speed).toBe(15);
-        expect([game.vehicle.position.x, game.vehicle.position.z]).toEqual([50, 60]);
-        expect(game.vehicle.yawAngle).toBe(1.5);
-        expect(game.vehicle.distanceTraveled).toBe(123);
-    });
-
-    test('keeps the leaderboard run valid: no cancel, one restart recorded', () => {
-        const game = fakeGame();
-        game.restartFromCheckpoint();
-        expect(game.leaderboardService.cancelSession).not.toHaveBeenCalled();
-        expect(game.leaderboardService.recordRestart).toHaveBeenCalledTimes(1);
-    });
-
-    test('resets cones and rocks, and moves cars within 6 segments of the rider', () => {
-        const game = fakeGame();
-        game.restartFromCheckpoint();
-        expect(game.cones.reset).toHaveBeenCalledTimes(1);
-        expect(game.rockfalls.reset).toHaveBeenCalledTimes(1);
-        expect(game.traffic.clearAround).toHaveBeenCalledWith(321, 6);
-    });
-
-    test('costs style score, never below zero, and says what it cost in time', () => {
-        const game = fakeGame();
-        game.score = 200;
-        game.restartFromCheckpoint();
-        expect(game.score).toBe(0);
-        expect(callouts[0][0]).toBe('Back to checkpoint +5 s');
-    });
-
-    test('does nothing once finished or before the first gate', () => {
-        const finished = fakeGame();
-        finished.finished = true;
-        finished.restartFromCheckpoint();
-        expect(finished.penaltyMs).toBe(0);
-        const early = fakeGame();
-        early.lastCheckpointPosition = null;
-        early.restartFromCheckpoint();
-        expect([early.penaltyMs, early.restarts]).toEqual([0, 0]);
-    });
-});
-
-describe('which time a board ranks', () => {
-    const game = fakeGame();
-    game.environment = { checkpoints: new Array(14).fill({}) };
-    game.checkpointTimes = new Array(14).fill(0).map((_, i) => (i + 1) * 1000);
-    game.finishTime = 20000.4;
-
-    test('a table board ranks the finish line and expects protocol 2 with its built gate count', () => {
-        const leg = { id: 'long', trackVersion: 3 };
-        expect(game.isTableBoard(leg)).toBe(true);
-        expect(game.boardTimeMs(leg)).toBe(20000);
-        expect(game.leaderboardExpectation(leg)).toEqual({ protocol: 2, gates: 14 });
-    });
-
-    test('a board on the shared course ranks the last gate and expects protocol 1', () => {
-        const leg = { id: 'valley-run', trackVersion: 2 };
-        expect(game.isTableBoard(leg)).toBe(false);
-        expect(game.boardTimeMs(leg)).toBe(14000);
-        expect(game.leaderboardExpectation(leg)).toEqual({ protocol: 1, gates: 14 });
-    });
-});
-
-describe('what a restart does to the leg', () => {
+describe('what a restart does to the traffic', () => {
     let game;
     let env;
-    beforeAll(() => {
+    beforeAll(async () => {
         game = loadGame();
         const quiet = console.log;
         console.log = () => {};
         try {
-            ({ env } = buildEnvironment(game, 4));
+            env = await game.WorldEnvironment.load(new game.THREE.Scene(), { id: 'tremola', fetchFn: diskFetch().fetchFn, models: null, digest: async () => '0' });
         } finally {
             console.log = quiet;
         }
-    });
-
-    test('RockfallSystem.reset removes every live rock and schedules the next fall', () => {
-        const scene = new game.THREE.Scene();
-        const rocks = new game.RockfallSystem(scene, env);
-        rocks.triggerFall({ routeS: 332 * 20 });
-        expect(rocks.rocks.length).toBeGreaterThan(0);
-        const meshes = rocks.rocks.map(rock => rock.mesh);
-        rocks.nextFallIn = 0;
-        rocks.reset();
-        expect(rocks.rocks).toEqual([]);
-        meshes.forEach(mesh => expect(scene.children).not.toContain(mesh));
-        expect(rocks.nextFallIn).toBeGreaterThan(0);
-    });
+    }, 120000);
 
     test('Traffic.clearAround moves a car within 6 segments ahead of the rider, by a fixed rule', () => {
-        const traffic = new game.Traffic(new game.THREE.Scene(), env);
+        const quiet = console.log;
+        console.log = () => {};
+        let traffic;
+        try { traffic = new game.Traffic(new game.THREE.Scene(), env); } finally { console.log = quiet; }
         const [car] = traffic.cars;
         const far = car.currentSegment + 40;
         const draw = jest.spyOn(Math, 'random');
@@ -315,16 +232,7 @@ describe('a world ride is not thrown away in one key press', () => {
         expect(go).not.toHaveBeenCalled();
     });
 
-    test('a world restart starts no leaderboard session, even after a leg was played in the page life', () => {
-        const game = worldGame();
-        game.leaderboardService.startRun = jest.fn();
-        game.tourSystem = { getCurrentLeg: () => ({ id: 'long' }) };
-        game.restartLeaderboardSession();
-        expect(game.leaderboardService.cancelSession).toHaveBeenCalledTimes(1);
-        expect(game.leaderboardService.startRun).not.toHaveBeenCalled();
-    });
-
-    test('a world finish records nothing on a board, even with a leg session still active', () => {
+    test('a world finish records nothing on a board, even with a session active', () => {
         const game = worldGame();
         game.leaderboardService = { isActive: () => true, protocol: 2, recordFinish: jest.fn(() => Promise.resolve()) };
         game.vehicle.finished = false;
@@ -600,30 +508,10 @@ describe('a world crash restarts in place by itself', () => {
     });
 
     test('C restarts in place while riding, before any gate is passed; R while riding restarts nothing', () => {
-        expect(source).toMatch(/if \(this\.lastCheckpointPosition \|\| \(this\.environment && this\.environment\.isWorld\)\) \{\s+this\.restartFromCheckpoint\(\);/);
+        expect(source).toMatch(/if \(this\.input\.checkCheckpointRestart\(\)\) this\.restartFromCheckpoint\(\);/);
         // R is read only while a card that offers it is open (InputHandler.menuActive), and a world crash opens none
         const input = readFileSync(new URL('../../js/input.js', import.meta.url), 'utf8');
         expect(input).toMatch(/event\.code === 'KeyR' && this\.menuActive/);
-    });
-
-    test('a leg keeps its crash card, with its checkpoint action after a gate only', () => {
-        const card = (game) => {
-            game.input = { setMenuActive: jest.fn() };
-            game.pauseRace = jest.fn();
-            const quiet = console.log;
-            console.log = () => {};
-            try { game.showCrashNotification('Hit a rock'); } finally { console.log = quiet; }
-            return document.getElementById('crashNotification');
-        };
-        const game = fakeGame();
-        const box = card(game);
-        expect([...box.querySelectorAll('.run-buttons button')].map(b => b.textContent)).toEqual(['Checkpoint (+5 s)', 'Restart', 'Menu']);
-        expect(Modals.top().element).toBe(box);
-        Modals.reset();
-        document.body.innerHTML = '';
-        const early = fakeGame();
-        early.lastCheckpointPosition = null;
-        expect([...card(early).querySelectorAll('.run-buttons button')].map(b => b.textContent)).toEqual(['Restart', 'Menu']);
     });
 
     test('Restart leg is on the pause panel of a world ride, on R, and asks before it restarts the leg', () => {
@@ -644,11 +532,11 @@ describe('a world crash restarts in place by itself', () => {
         document.getElementById('worldConfirmYes').click();
         expect(game.restartLeg).toHaveBeenCalledTimes(1);
         expect(document.getElementById('worldConfirm')).toBeNull();
-        // A leg's pause panel has none (its crash card offers the restart)
+        // A pause panel given no restart shows none, and the game always gives it one
         Modals.reset();
         document.body.innerHTML = '';
         expect(WorldCredits.showPause(null, jest.fn(), jest.fn()).querySelector('[data-restart]')).toBeNull();
-        expect(source).toMatch(/this\.environment\.isWorld \? \(\) => this\.restartFromPause\(\) : null/);
+        expect(source).toMatch(/\(\) => this\.leaveToMenu\(\), \(\) => this\.restartFromPause\(\)/);
     });
 
     test('the finish screens count restarts, not checkpoint restarts', () => {

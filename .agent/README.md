@@ -14,7 +14,7 @@ Notes for people and AI agents who work on this repo.
   - [hill.md](system/hill.md) - the hill ride: a short descent of a cobbled village lane on a delivery bicycle, opened by an address key; its lane, push-bike physics, legs-out pose, village and brass-band music.
   - [leaderboard.md](system/leaderboard.md) - checkpoint restart, which time a board ranks, the server handshake and store.
 - `sop/` - procedures.
-  - [play-testing.md](sop/play-testing.md) - how to ride a leg with the dev autopilot.
+  - [play-testing.md](sop/play-testing.md) - how to ride a world with the dev autopilot, and the world probes.
   - [photo-match.md](sop/photo-match.md) - how to match the game against the owner's photos, round by round, and size an import to cover them.
 
 Add a file when you learn something that the code does not show. Keep each file short.

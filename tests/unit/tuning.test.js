@@ -78,30 +78,34 @@ function leanAfter(speed, steer, seconds, from = 0, weather = null) {
 
 const WET = { surfaceGrip: 1, weatherPhysics: () => ({ lateralFriction: 0.7, brakeForce: 0.8, acceleration: 0.9 }), getPhysicsMultipliers: () => ({ lateralFriction: 0.7, brakeForce: 0.8, acceleration: 0.9 }) };
 
-// The Game class alone, with the tuning it reads, for the chase camera of a classic leg
+// The Game class alone, with the tuning it reads, for the chase camera of a world ride
 const mainSource = readFileSync(new URL('../../js/main.js', import.meta.url), 'utf8');
 const classSource = mainSource.slice(0, mainSource.indexOf('Game.RESTART_CLEAR_SEGMENTS = 6;') + 'Game.RESTART_CLEAR_SEGMENTS = 6;'.length);
 const Game = new Function('THREE', 'WorldCamera', 'showCallout', 'TourSystem', 'Course', 'Tuning', `${classSource}\nreturn Game;`)(
     THREE, WorldCamera, () => {}, {}, {}, Tuning
 );
 
-// The chase camera of a leg behind a bike that stands leaned at `lean`: how far it is from the bike, and how far to
-// the side
+// The chase camera of a world ride on a straight road behind a bike that stands leaned at `lean`: how far it is from
+// the bike, and how far to the side
 function chase(lean) {
     const offset = new THREE.Vector3(0, 3, -6);
     const mode = { name: 'Near chase', type: 'near', offset, lerpFactor: 0.10 };
+    const route = new WorldRoute(samplesOf(straight(400, { y: 100 })), {});
+    const ground = { groundY: () => 100 };
     const vehicle = {
         position: new THREE.Vector3(0, 100, 40), velocity: new THREE.Vector3(), speed: 0, maxSpeed: 60, leanAngle: lean, yawAngle: 0,
         comfortShake: 0, isWheelie: false, isJumping: false, fallingOffCliff: false, crashed: false, projection: { s: 40, index: 10 }, routeS: 40
     };
+    const worldCamera = new WorldCamera(route, ground);
+    worldCamera.reset(0);
     const made = Object.create(Game.prototype);
     Object.assign(made, {
         camera: new THREE.PerspectiveCamera(75, 16 / 9, 0.1, 2000), vehicle, cameraModes: [mode], cameraMode: 0, cameraIntroActive: false,
-        environment: { isWorld: false }, baseCameraOffset: offset.clone(), cameraOffset: offset.clone(),
+        environment: { isWorld: true, route, ground }, worldCamera, baseCameraOffset: offset.clone(), cameraOffset: offset.clone(),
         currentCameraPos: new THREE.Vector3(0, 103, 34), currentLookTarget: new THREE.Vector3(0, 101, 40),
         tempMatrix: new THREE.Matrix4(), tempVector: new THREE.Vector3(), tempUpVector: new THREE.Vector3(),
         cameraLerpFactor: 0.10, cameraLateralOffset: 0, previousYawAngle: 0, currentCameraBanking: 0, currentFOV: 75,
-        tunnelRoofY: () => null, updateShadowCamera() {}
+        updateShadowCamera() {}
     });
     for (let i = 0; i < 600; i++) made.updateCamera(DT);
     const eye = made.currentCameraPos;
@@ -287,12 +291,6 @@ describe('the table', () => {
         }
     });
 
-    test('a row marked as a world ride only scales nothing a classic leg reads', () => {
-        for (const row of Tuning.PARAMS) {
-            const legs = row.scales.some(target => target.on !== 'world');
-            expect(row.world).toBe(!legs);
-        }
-    });
 });
 
 describe('every row moves something real, the right way', () => {
@@ -324,8 +322,8 @@ describe('every row moves something real, the right way', () => {
         expect(MEASURES.gripDry.of()).toBe(dry);
     });
 
-    test('a classic leg reads the rows that are not a world ride only', () => {
-        // The legacy steering and speed, on a bike with no world under it
+    test('a bike with no world under it reads the steering and speed rows', () => {
+        // The bike's own steering and speed, with no world physics (js/vehicle.js keeps them)
         const leg = (id, m, run) => {
             Tuning.start({ debug: true });
             if (m !== 1) Tuning.set(id, m);
@@ -430,7 +428,7 @@ describe('every multiplier at 1 is the ride without the tuning', () => {
         });
     }
 
-    test('a classic leg\'s steering and speed, the same way', () => {
+    test('a bike\'s own steering and speed, with no world under it, the same way', () => {
         const leg = (GameSet) => {
             const v = bike(GameSet);
             v.speed = 20;
@@ -573,30 +571,6 @@ describe('a tuned ride keeps no time', () => {
         made.watchTuning();
         expect(made.environment.trusted).toBe(true);
         expect(shown).toEqual([false, true, false]);
-    });
-
-    test('a classic leg loses its leaderboard session, and a restart starts none', () => {
-        Tuning.start({ debug: true });
-        const calls = [];
-        const service = { active: true, isActive() { return this.active; }, cancelSession() { this.active = false; calls.push('cancel'); }, startRun() { calls.push('start'); return Promise.resolve(true); } };
-        const made = Object.create(Game.prototype);
-        Object.assign(made, {
-            hud: { setTuned() {} }, environment: { isWorld: false }, leaderboardService: service,
-            tourSystem: { getCurrentLeg: () => ({ id: 'leg' }) }, leaderboardExpectation: () => ({})
-        });
-        made.beginTunedRide();
-        made.watchTuning();
-        expect(calls).toEqual([]);
-        Tuning.set('brake', 0.9);
-        made.watchTuning();
-        expect(calls).toEqual(['cancel']);
-        Tuning.reset();
-        // A session that a reply in flight opened after the cancel is closed as well
-        service.active = true;
-        made.watchTuning();
-        expect(calls).toEqual(['cancel', 'cancel']);
-        made.restartLeaderboardSession();
-        expect(calls).toEqual(['cancel', 'cancel', 'cancel']);
     });
 
     test('outside debug mode nothing is flagged and nothing is cancelled', () => {

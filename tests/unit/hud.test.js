@@ -249,7 +249,7 @@ describe('Hud', () => {
         hud.setGates(0, 5);
         hud.showProgress([0.25, 0.5]);
         expect(box.hidden).toBe(false);
-        // The pips of the classic legs are out of sight: the checkpoints are shown once
+        // The pips (free roam's) are out of sight: the checkpoints are shown once
         expect(pips.hidden).toBe(true);
         expect(document.querySelectorAll('#hudProgressMarks i')).toHaveLength(2);
         expect(document.querySelector('#hudProgressMarks i').style.left).toBe('25.00%');

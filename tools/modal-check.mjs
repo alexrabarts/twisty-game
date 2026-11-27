@@ -1,6 +1,6 @@
 #!/usr/bin/env node
-// Browser proof for the game's dialogs (crash, finish, pause, the world ride's confirm, credits, settings, best times,
-// the name entry and the menu). Opens them in every reachable sequence with real clicks, taps and key presses, and after each
+// Browser proof for the game's dialogs (finish, pause, the world ride's confirm, credits, settings, the error card of a
+// world that does not load, and the menu). Opens them in every reachable sequence with real clicks, taps and key presses, and after each
 // step checks the one rule every dialog keeps (js/modals.js):
 //   - exactly one dialog is interactive, and it is the one the step opened (the others are hidden or inert)
 //   - every button of that dialog is the element under its own centre (document.elementFromPoint), so a click lands
@@ -9,9 +9,9 @@
 //
 //   node tools/modal-check.mjs [--only name,name] [--variant desktop|touch|both] [--out <dir>] [--jobs N] [--chrome <path>] [--gpu] [--port N]
 //
-// The menu sequences start on the plain page (no query), as a player does: choosing a rider rides the world, Classic
-// legs rides a leg, and a world whose data does not load hands over to the legs (menu-world-fallback answers every
-// world/ request with a 404). --gpu renders on the machine's GPU at full resolution, for screenshots worth looking at.
+// The menu sequences start on the plain page (no query), as a player does: choosing a rider rides the world, and a world
+// whose data does not load shows the error card with Retry and Back to menu (menu-world-error answers every world/
+// request with a 404). --gpu renders on the machine's GPU at full resolution, for screenshots worth looking at.
 //
 // Chrome: --chrome <path>, else TWISTY_CHROME, else PUPPETEER_EXECUTABLE_PATH, else puppeteer's own.
 // Never lets a page reach production: cloudfunctions.net, firebasedatabase.app and firebaseio.com are aborted.
@@ -45,7 +45,7 @@ if (outDir) mkdirSync(outDir, { recursive: true });
 
 // The dialogs the game had before js/modals.js, by selector; anything opened through Modals carries data-modal and
 // is found too, so a dialog added later is held to the same rule without a change here
-const KNOWN = ['#crashNotification', '#finishBanner', '#worldConfirm', '#world-pause', '#world-credits', '#settings', '#leaderboardViewer', '#leaderboardEntryOverlay', '.tour-selector-overlay'];
+const KNOWN = ['#finishBanner', '#worldConfirm', '#world-pause', '#world-credits', '#settings', '#loadError', '#leaderboardEntryOverlay', '.tour-selector-overlay'];
 
 // What a step expects: the dialog on top by its id (or first class), 'none' for the ride with no dialog, and nav for
 // a page load (a world goes to the menu by leaving ?world)
@@ -54,7 +54,6 @@ const MENU = 'tour-selector-overlay';
 // Each sequence starts on a fresh page. `key` steps are keyboard-only: on the touch variant a key step with `tap` taps
 // that button instead (so the sequence goes on from the same state), and one without is skipped;
 // `eval` steps stand in for what the game does on its own (a crash, a finish).
-const crash = { eval: () => { game.vehicle.crashed = true; game.showCrashNotification(); }, top: 'crashNotification' };
 // A world ride has no crash dialog: the fall plays and the game restarts the rider in place (Game.beginWorldCrash)
 const worldCrash = { eval: () => { game.vehicle.crashed = true; game.showCrashNotification(); }, top: 'none' };
 // P on a keyboard; a touch screen has only its pause button to tap
@@ -90,19 +89,20 @@ const creditShown = () => {
     const text = (document.querySelector('#world-credits .world-credits-credit') || {}).textContent || '';
     return /swisstopo/.test(text) ? [] : [`the credits panel shows ${JSON.stringify(text)}`];
 };
-const legScreen = () => (getComputedStyle(document.querySelector('.track-select-screen')).display === 'none' ? ['the leg screen is not shown'] : []);
 // Each check runs in the page, so it names nothing from this file
-const fallbackShown = () => {
+// The error card of a world that does not load: its title and text, Retry and Back to menu, and nothing else in charge
+// (no loading screen, no world, no ride)
+const loadErrorShown = () => {
     const problems = [];
-    if (getComputedStyle(document.querySelector('.track-select-screen')).display === 'none') problems.push('the leg screen is not shown');
-    const note = document.querySelector('.tour-selector-overlay .menu-notice');
-    if (!note || !/could not load/.test(note.textContent)) problems.push('no note on the menu');
+    const card = document.getElementById('loadError');
+    if (!card) return ['no error card'];
+    if (card.querySelector('.load-error-title').textContent !== RideMode.LOAD_FAIL_TITLE) problems.push('the card has no title');
+    if (card.querySelector('.load-error-text').textContent !== RideMode.LOAD_FAIL_NOTE) problems.push('the card does not say the world could not load');
+    if (!card.querySelector('#loadRetryBtn') || !card.querySelector('#loadMenuBtn')) problems.push('the card has no Retry or no Back to menu');
     if (document.getElementById('world-loading')) problems.push('the loading screen is left over');
+    if (game.environment) problems.push('a world is left built');
+    if (game.vehicle) problems.push('a ride started');
     return problems;
-};
-const legRide = () => {
-    const env = game.environment;
-    return env && env.constructor.name === 'Environment' && !env.isWorld ? [] : [`the environment is ${env && env.constructor.name}, not a leg's Environment`];
 };
 // The rider mode (js/ridermodes.js): the mode in force, the HUD's tag and every control on the page say `id`
 const modeIs = (id) => {
@@ -293,7 +293,7 @@ const SEQUENCES = [
         { key: 'Digit2', top: 'none' }
     ] },
 
-    // The menu of the legs: credits and best times over it
+    // The menu: credits and the settings over it
     { name: 'menu-credits', page: 'menu', steps: [
         { top: MENU },
         { click: '.character-select-screen [data-credits]', top: 'world-credits' },
@@ -311,14 +311,6 @@ const SEQUENCES = [
         { click: '#settings [data-settings-default]', top: 'settings', check: presetCheck('auto') },
         { click: '#settings [data-settings-close]', top: MENU }
     ] },
-    { name: 'menu-best-times', page: 'menu', steps: [
-        { click: '#riderClassicBtn', top: MENU, check: legScreen },
-        { click: '#legLeaderboardBtn', top: 'leaderboardViewer' },
-        { key: 'Escape', tap: '#leaderboardViewerClose', top: MENU, focus: '#legLeaderboardBtn' },
-        { click: '#legLeaderboardBtn', top: 'leaderboardViewer' },
-        { click: '#leaderboardViewerClose', top: MENU }
-    ] },
-
     // The rider mode on the menu: free, by a click or H, and Enter still rides (the focus goes back to RIDE)
     { name: 'menu-rider-mode', page: 'menu', steps: [
         { top: MENU, check: modeCheck('road') },
@@ -326,12 +318,6 @@ const SEQUENCES = [
         { key: 'KeyH', tap: '#riderModeRow [data-mode="rain"]', top: MENU, check: modeCheck('rain') },
         { click: '#riderModeRow [data-mode="road"]', top: MENU, check: modeCheck('road') }
     ] },
-    { name: 'leg-pause-rider-mode', page: 'leg', steps: [
-        { eval: () => { game.vehicle.speed = 0; game.pauseRace(); }, top: 'world-pause' },
-        { click: '#world-pause [data-mode="rain"]', top: 'world-pause', check: modeCheck('rain') },
-        { click: '#world-pause [data-menu]', top: MENU, check: modeCheck('rain') }
-    ] },
-
     // The plain page: a rider chosen with real clicks rides the world, as ?world=tremola does, to its finish card
     { name: 'menu-world-ride', page: 'menu', steps: [
         { top: MENU },
@@ -347,11 +333,6 @@ const SEQUENCES = [
         { ...finish, check: () => (document.querySelector('#finishBanner .finish-title') || {}).textContent === 'STAGE COMPLETE' ? [] : ['the finish is not the world\'s card'] },
         { click: '#finishBanner [data-menu]', top: MENU, nav: true }
     ] },
-    // Classic legs on the same menu rides a leg
-    { name: 'menu-classic-leg', page: 'menu', steps: [
-        { click: '#riderClassicBtn', top: MENU, check: legScreen },
-        { click: '#legStartBtn', ready: 'window.game && window.game.environment && !window.game.environment.isWorld && window.game.vehicle', top: 'none', check: legRide }
-    ] },
     // The map goes back to the rider screen with Back (Escape); a leg not built stays on the map
     { name: 'menu-world-legs-back', page: 'menu', steps: [
         { click: '#riderContinueBtn', top: 'world-legs', check: legsListed },
@@ -360,44 +341,14 @@ const SEQUENCES = [
         { click: '#riderContinueBtn', top: 'world-legs', check: legsListed },
         { click: '#world-legs .map-back', top: MENU }
     ] },
-    // A host that does not serve the world: the legs take over with the note, and a leg rides (RIDE on the map)
-    { name: 'menu-world-fallback', page: 'menu', noWorld: true, steps: [
+    // A host that does not serve the world: the error card, no ride. Retry loads it again (the card again: the host
+    // still serves nothing), R is Retry, and Back to menu goes to the plain page
+    { name: 'menu-world-error', page: 'menu', noWorld: true, steps: [
         { click: '#riderContinueBtn', top: 'world-legs' },
-        { click: '#world-legs .map-ride', ready: "document.querySelector('.tour-selector-overlay .menu-notice')", top: MENU, check: fallbackShown },
-        { click: '#legStartBtn', ready: 'window.game && window.game.environment && !window.game.environment.isWorld && window.game.vehicle', top: 'none', check: legRide }
-    ] },
-
-    // A leg, for comparison: no confirm, the menu is one press away
-    { name: 'leg-crash-menu', page: 'leg', steps: [
-        crash,
-        { click: '#menuCrashBtn', top: MENU }
-    ] },
-    { name: 'leg-crash-key', page: 'leg', steps: [
-        crash,
-        { key: 'KeyP', top: 'world-pause' },
-        { key: 'Escape', top: 'crashNotification' },
-        { key: 'KeyM', top: MENU }
-    ] },
-    { name: 'leg-pause-menu', page: 'leg', steps: [
-        pause,
-        { click: '#world-pause [data-credits]', top: 'world-credits' },
-        { click: '#world-credits button', top: 'world-pause' },
-        { click: '#world-pause [data-menu]', top: MENU }
-    ] },
-    { name: 'leg-finish-name', page: 'leg', board: true, steps: [
-        finish,
-        { click: '#nextLegBtn', top: 'leaderboardEntryOverlay', focus: '#leaderboardNameInput' },
-        { type: 'ABCD', top: 'leaderboardEntryOverlay' },
-        { click: '#leaderboardCancelBtn', top: 'none' }
-    ] },
-    { name: 'leg-finish-name-key', page: 'leg', board: true, steps: [
-        finish,
-        { key: 'KeyN', top: 'leaderboardEntryOverlay', focus: '#leaderboardNameInput' },
-        { key: 'Escape', top: 'none' }
-    ] },
-    { name: 'leg-finish-menu', page: 'leg', steps: [
-        finish,
-        { click: '#returnToMenuBtn', top: MENU }
+        { click: '#world-legs .map-ride', ready: "document.getElementById('loadError')", top: 'loadError', focus: '#loadRetryBtn', check: loadErrorShown },
+        { click: '#loadRetryBtn', ready: "document.getElementById('loadError') && !document.getElementById('world-loading')", top: 'loadError', check: loadErrorShown },
+        { key: 'KeyR', tap: '#loadRetryBtn', ready: "document.getElementById('loadError') && !document.getElementById('world-loading')", top: 'loadError', check: loadErrorShown },
+        { click: '#loadMenuBtn', top: MENU, nav: true }
     ] }
 ];
 
@@ -457,23 +408,7 @@ async function openPage(browser, port, kind, variant, errors, noWorld = false) {
     // The rule is about the DOM over the canvas: a quarter-resolution canvas keeps a software renderer quick
     if (!gpu) await page.evaluate(() => { window.game.adaptResolution = () => {}; window.game.renderer.setPixelRatio(0.25); });
     if (variant === 'touch') await page.evaluate(() => document.body.classList.add('touch'));
-    if (kind === 'leg') {
-        await page.addScriptTag({ path: join(root, 'tools/autopilot.js') });
-        await page.evaluate(() => twistyDev.start('mountain-dawn'));
-        await settle(page, 20);
-    }
     return page;
-}
-
-// A board that is always open and answers a submit at once, so the name entry shows without a network
-async function openBoard(page) {
-    await page.evaluate(() => {
-        const service = game.leaderboardService;
-        service.isActive = () => true;
-        service.cancelSession = () => {};
-        service.submitRun = async () => ({ success: true, rank: 1, flagged: false });
-        service.nameRule = () => ({ min: 4, max: 4 });
-    });
 }
 
 // A few frames of the live loop, or 3 s when frames do not come
@@ -586,7 +521,6 @@ async function runSequence(port, sequence, variant) {
         }
     }
     try {
-        if (sequence.board) await openBoard(page);
         for (let index = 0; index < sequence.steps.length; index++) {
             let step = sequence.steps[index];
             if (step.key && step.tap && variant === 'touch') step = { ...step, key: undefined, click: step.tap };

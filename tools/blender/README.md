@@ -150,7 +150,7 @@ Rules for a change to a car:
 
 `tree_kit.py` is the modelling kit. A plant is one mesh with no texture: its colour is in the vertex colours (bark, the green from a dark underside to a light crown, snow) with the occlusion baked on top. A leaf or bark photo tiled over a thousand trees would show its repeat; the variety comes from the shapes and from the turn, the size and the tint the game gives each tree. A conifer is a trunk and a stack of boughs, each a skirt whose rim runs out to tips and back into notches. A broadleaf crown is lobes melted into one skin (voxel remesh), roughened and cut down to its triangles, so no triangle is spent inside it.
 
-`js/treemodels.js` swaps them in. `Environment.createForest` still builds the procedural forest, two instanced meshes tagged `userData.plant`; when a file arrives each instance moves, with its matrix and its tint unchanged, to the instanced mesh of the shape a hash of its position picks. A leg draws its trees in six calls (three shapes to a kind; three on the winter leg, which has conifers only), where the procedural forest took two. A roadside bush keeps its mesh and its seat and takes a modelled shape, turned by the same hash.
+A world draws the trees of `alpine.glb` and the shrubs of `shrubs.glb` at three levels each, and the bushes of `bush.glb` where a world has no shrubs file (`js/world/scenery.js`, `js/world/vegetation.js`). `conifer.glb` and `broadleaf.glb` were the old procedural legs' trees: the game no longer reads them.
 
 Rules for a change to a plant:
 
@@ -159,12 +159,10 @@ Rules for a change to a plant:
 - Keep each tree at or under 220 triangles and each bush under 80 (`TREE_BUDGET`, `BUSH_BUDGET`). Storm-valley draws 1,173 trees: at 220 each they take 258,000 of the leg's 450,000 triangles. The scripts and `tests/unit/treemodels.test.js` fail above these.
 - A bush is modelled like the ball it replaces: centred on its origin, about a metre in radius, reaching 0.3 below it.
 - The vertex colours are the plant's own colours, written linear (16 bits a channel, as the exporter writes them). The game multiplies a tree by its instance tint and a bush by one of two tones (`BUSH_TONES`); the snow variants of a bush are not tinted.
-- A new shape needs its node name and its share in `SHAPES` in `js/treemodels.js`. A conifer needs its `_snow` twin.
 - A species is written once, in `tree_species.py`, from one layout (its heights, its spread, its lobes), and each level is made from that layout: the outline stays the same when the game swaps one level for the next. `tree_conifer.py` and `tree_broadleaf.py` write the mid level for the legs, `tree_alpine.py` all three for a world. A world's species needs its row in `Scenery.SPECIES` (`js/world/scenery.js`). `tests/unit/treemodels.test.js` holds each level's budget, that the mid level is the legs' shape, and that a level's height and spread stay within a fifth and three tenths of the mid level's.
 - Set `TWISTY_PREVIEW=<directory>` to render the plants of a file in a row after the export.
-- High-pass keeps the procedural trees (`KEPT` in `js/treemodels.js`): the frozen golden binds that leg's mesh count, triangle count and vertices.
 
-Check: `npm test` (`tests/unit/treemodels.test.js`) and `node tools/terrain-check.mjs budget`, which reports each leg's trees under `assets.trees`.
+Check: `npm test` (`tests/unit/tree-files.test.js`, `tests/unit/world-vegetation.test.js`).
 
 ## Village
 
@@ -181,30 +179,11 @@ Check: `npm test` (`tests/unit/treemodels.test.js`) and `node tools/terrain-chec
 - **Points.** `<house>:left` and `<house>:right` are the ends of a house's front, `<wall>:end` the end of a wall section, `lamp_post:light` where the lantern's light is. The game lays garden wall from one house's end to the next and bakes the lamplight from the lanterns.
 - **Size.** The ground behind the fronts climbs 7 m at once (`streetSide` in `js/terrain.js`). A house must stand above that to show a roof, and a wall section must be over 7 m high to cover the bank. A house is at most 9000 triangles and a prop 1200, and both files together at most 800 KB (712 KB now); the scripts and `tests/unit/villagemodels.test.js` fail above these.
 - **Colour space.** The colours are sRGB in the file, as the game writes its own, and `js/sceneassets.js` decodes them. glTF's rule for `COLOR_0` is linear; a byte of linear colour has too few steps in dark timber.
-- Set `TWISTY_PREVIEW=<directory>` to render each model after the export. Look at the result in the game with `node tools/village-shots.mjs` (`.agent/sop/play-testing.md`).
+- Set `TWISTY_PREVIEW=<directory>` to render each model after the export.
 
 ## Format
 
 Plain glTF binary with WebP textures (`EXT_texture_webp`), at most 1024 px. Not Draco or KTX2: in three r150 `GLTFLoader`, `DRACOLoader` and `KTX2Loader` exist only as ES modules that import `three` by bare name, which this script-tag page cannot resolve without an import map in `index.html` and a second copy of three. `js/sceneassets.js` reads the subset the exporter writes: one primitive per material, a node translation, one scale for all three axes on a mesh node, but no rotation, and no interleaving. The bike files have no textures, except the baked maps of a detailed bike ("Baked maps"), whose texture coordinates are normalised unsigned shorts. `bike_kit.py` rewrites them after the export with the occlusion (`COLOR_0`) as bytes and the normals as signed bytes padded to four (`KHR_mesh_quantization`), which takes a third off each file. The village files carry no normals (every face is flat, and the game works them out) and their positions are whole millimetres in signed shorts, with the millimetre as the node's scale, which took `houses.glb` from 818 KB to 649 KB. With about 1.5 MB for the leg, the geometry is a small share and a Draco decoder would cost more than it saves.
-
-## Rock face detail
-
-The wall of a leg keeps its shape and its vertex colours (strata bands, gullies, moss and water stains). `js/sceneassets.js` works the detail into them in the ribbon material's shader (`rockShader`), and never lays it as a wallpaper: a photo tiled along the gorge showed the same blocks every few metres, at any distance.
-
-- The detail is read at a level distance and world height, so its beds are level on a leaning wall and round a spur. A wall takes the distance along the road, a face that crosses the road (a spur's flank and end) the distance out from it, a near-level facet both (`faceUVs` stores the two in the ribbon's UVs).
-- The face is cut into irregular patches, each reading the tile at its own shift, blended into the next. The patch number climbs along and up the wall and never comes back.
-- The bedding planes are drawn from world height in the shader (`BED`), not held in the tile: one may lie in each 0.9 m of height and about a third do, each open along some stretches of the wall and closed along others. So beds run from thin ledges to faces several metres thick. Beds held in the tile came out as even courses, and with its joints read as a built wall.
-- The detail is faint from the saddle and plain only within a few metres (`FADE`), so the facets and the vertex colours stay what the wall is. The same tile, read several times larger (`COARSE`), comes in with distance. Slow noises vary the stone's brightness and warmth a little.
-- Cost on foggy-gorge: six texture reads a fragment, two before. Measured with `tools/terrain-check.mjs frametime`, interleaved with the photo version: about 2.4 to 2.8 ms a frame on an Apple M5, 196 to 226 ms in SwiftShader.
-
-To give another leg's wall the same treatment, add `rockFace: { map, normalMap, tile, tint }` to its entry in `LEGS`, naming the same two files: `tile` is the metres one copy covers, `tint` the stone the vertex colours shade.  An entry names only the parts the leg has: one with `rockFace` alone gets no rocks or portals. Not high-pass: it is bound to the frozen golden (`.agent/system/world.md`, "Golden bindings").
-
-## Adding a leg
-
-1. Tag the procedural meshes to replace in `js/environment.js` with `userData.dressing` (`{ kind: 'rock' | 'debris', radius }`, or the portal's frame).
-2. Write the leg's scripts here, writing into `assets/<leg>/`.
-3. Add the leg to `LEGS` in `js/sceneassets.js`.
-4. Check: `npm test` (`tests/unit/sceneassets.test.js`), and `node tools/terrain-check.mjs budget,frametime --legs <leg>`. The budget probe waits for the assets and reports their bytes; it fails over 800 meshes, 450000 triangles or 1400 instances, and on any rock that floats.
 
 ## Sources and licences
 

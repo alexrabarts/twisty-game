@@ -1,9 +1,8 @@
 /**
  * Atmosphere track
- * What the sky, light, fog and weather do along a leg, as plain data with no
- * scene access. A leg is a list of parts, each with one look; the track blends
- * two neighbouring looks over a zone centred on their boundary. An unconverted
- * leg is a track of one part, so every leg takes the same path.
+ * What the sky, light, fog and weather do along a ride, as plain data with no
+ * scene access. A ride is a list of parts, each with one look; the track blends
+ * two neighbouring looks over a zone centred on their boundary (forWorld).
  *
  * A part is { startSegment, endSegment, look } with
  *   look = { timeOfDay, weather, weatherIntensity, fogDensity, heightFog,
@@ -15,7 +14,7 @@
  * light and the weather and still be a valid look.
  */
 
-// A blend zone is this many segments (300 m) wide, centred on a part boundary
+// A blend zone is this many units (1.5 km of a world's track) wide, centred on a part boundary
 const ATMOSPHERE_BLEND_SEGMENTS = 15;
 
 // Metres in one unit of a world's track
@@ -73,52 +72,6 @@ class AtmosphereTrack {
             baseY: inherited('baseY'),
             shadowSpan: inherited('shadowSpan')
         };
-    }
-
-    // The lowest road height over route units [start, end], the base of the height fog
-    static lowestRoadHeight(route, start, end) {
-        return route.heightRange(route.fromUnits(start), route.fromUnits(end)).min;
-    }
-
-    // `leg` is a tours.js entry, `config` its Terrain.legConfig, `environment`
-    // the built Environment (its route gives the part base heights).
-    // A converted leg carries `config.parts`; any other leg is one part.
-    static forLeg(leg, config, environment) {
-        const route = environment.route;
-        const render = config.render || {};
-        if (config.parts) {
-            // A course part spans [from, to) in the leg's own numbering; a track part spans [start, end]
-            const spans = config.parts.map(part => ({ start: part.startSegment ?? part.from, end: part.endSegment ?? part.to - 1 }));
-            return AtmosphereTrack.build(config.parts.map((part, n) => ({
-                startSegment: spans[n].start,
-                endSegment: spans[n].end,
-                look: {
-                    timeOfDay: part.timeOfDay || leg.timeOfDay,
-                    weather: part.weather,
-                    weatherIntensity: part.weatherIntensity,
-                    fogDensity: config.look.fogDensity,
-                    baseY: AtmosphereTrack.lowestRoadHeight(route, spans[n].start, spans[n].end),
-                    shadowSpan: render.shadowSpan,
-                    ...part.look
-                }
-            })));
-        }
-        const atmosphere = config.atmosphere || {};
-        return AtmosphereTrack.build([{
-            startSegment: leg.startSegment,
-            endSegment: leg.endSegment,
-            look: {
-                timeOfDay: leg.timeOfDay,
-                weather: leg.weather,
-                weatherIntensity: leg.weatherIntensity,
-                fogDensity: config.look.fogDensity,
-                heightFog: atmosphere.heightFog || null,
-                shafts: atmosphere.shafts || 0,
-                ring: render.ringRise ? [render.ringRise[0], render.ringRise[1]] : render.ring !== undefined ? render.ring : 1,
-                baseY: AtmosphereTrack.lowestRoadHeight(route, leg.startSegment, leg.endSegment),
-                shadowSpan: render.shadowSpan
-            }
-        }]);
     }
 
     // Metres in one unit of a world's track

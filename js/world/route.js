@@ -1,6 +1,5 @@
 // The route contract: what the game asks of "the road the rider follows".
-// A leg answers it from its road path of 20 m segments (LegRoute,
-// js/world/legroute.js); the world answers it from mapped road samples.
+// The world answers it from mapped road samples (WorldRoute).
 // No THREE and no DOM, so it loads in the node harness.
 //
 // Progress is one metric quantity, `s` (metres along the route). Code that
@@ -105,7 +104,7 @@ class Route {
 
 // A route over evenly spaced samples {x, y, z, heading, width}. It holds the
 // continuity projection and the contract's simple answers, and is the base the
-// world route builds on; LegRoute keeps the legacy vertex picker instead.
+// world route builds on.
 class PolylineRoute extends Route {
     constructor(points, spacingM, options = {}) {
         super();
@@ -237,11 +236,11 @@ class PolylineRoute extends Route {
 }
 
 // The Ground interface: what the physics and the scenery ask of the land
-// round the road. LegGround (js/world/legroute.js) answers from the terrain
-// model of a leg; the world answers from its height tiles. No THREE and no DOM.
+// round the road. The world answers from its height tiles (WorldGround). No
+// THREE and no DOM.
 //
 // A `hint` is the window the answer is searched in: {start, end}, the
-// vehicle's segment search range on a leg. A `loc` is a located point
+// vehicle's segment search range. A `loc` is a located point
 // (index, lateral, roadY, along), filled by locate() and groundY() so that a
 // caller needing the side or the road height does not search twice.
 class Ground {

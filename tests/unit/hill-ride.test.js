@@ -49,7 +49,7 @@ describe('the address', () => {
         const key = RideMode.HILL_KEY;
         expect(RideMode.resolve(`?${key}`)).toEqual({ kind: 'hill', world: null, direct: true });
         expect(RideMode.resolve(`?world=tremola&${key}`)).toEqual({ kind: 'hill', world: null, direct: true });
-        expect(RideMode.resolve('?legs')).toEqual({ kind: 'legs', world: null, direct: false });
+        expect(RideMode.resolve('?legs')).toEqual({ kind: 'world', world: 'tremola', direct: false });
         expect(RideMode.resolve('')).toEqual({ kind: 'world', world: 'tremola', direct: false });
     });
 

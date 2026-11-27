@@ -10,15 +10,13 @@
 class TuningPanel {
     static get KEY() { return 'KeyT'; }
 
-    // options: `world()` says whether the ride is a world ride (the rows only a world reads are dimmed on a leg);
-    // `clipboard()` returns the clipboard to write to (navigator.clipboard by default); `quality`, when given, adds the
+    // options: `clipboard()` returns the clipboard to write to (navigator.clipboard by default); `quality`, when given, adds the
     // graphics row: { levels: [label], get() (the fixed level, null for Auto), level() (the level in force), set(level
     // or null) } (Game.qualityControl). It is not a multiplier: it is not in the copied text and marks no ride tuned
     constructor(doc, tuning, options = {}) {
         this.doc = doc;
         this.tuning = tuning;
         this.quality = options.quality || null;
-        this.world = options.world || (() => true);
         this.clipboard = options.clipboard || (() => (typeof navigator !== 'undefined' ? navigator.clipboard : null));
         this.rows = {};
         this.build();
@@ -112,9 +110,8 @@ class TuningPanel {
     buildRow(row) {
         const el = this.make('div', 'tuning-row');
         el.dataset.id = row.id;
-        if (row.world) el.dataset.world = '1';
         const label = this.make('span', 'tuning-label', row.label);
-        label.title = `${row.hint}. ` + row.scales.map(target => `${target.on}.${target.field}${target.inverse ? ' (divided)' : ''}`).join(', ') + (row.world ? ' · a world ride only' : '');
+        label.title = `${row.hint}. ` + row.scales.map(target => `${target.on}.${target.field}${target.inverse ? ' (divided)' : ''}`).join(', ');
         const less = this.make('button', 'tuning-step', '−');
         const more = this.make('button', 'tuning-step', '+');
         less.type = more.type = 'button';
@@ -220,7 +217,6 @@ class TuningPanel {
             else el.dataset.changed = '1';
         }
         this.text.value = this.tuning.text();
-        this.el.dataset.ride = this.world() ? 'world' : 'legs';
         if (this.quality && this.qualityValue) {
             const fixed = this.quality.get();
             const levels = this.quality.levels;

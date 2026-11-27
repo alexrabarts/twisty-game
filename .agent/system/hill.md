@@ -4,7 +4,7 @@ The hill ride is a short ride of its own. The address key `RideMode.HILL_KEY` (j
 
 A boy pushes a heavy delivery bicycle on foot up the top of a steep cobbled lane through a stone village to the bakery's cart, where his basket fills with loaves. The ride then holds on the opening shot, and he rides down. On the way down he throws bread at the doors that wait for it (see "The day"). Near the bottom the camera stops and the bicycle rolls on round the last curve and out of sight. The picture fades to a loaf on a board, the band plays its last chord, and the end card shows the time, the best and the board.
 
-The ride is timed, but no clock shows during the ride. The time shows only on the end card (see "The time and the board"). The classic legs and the world are not touched. If its model does not load, the classic legs open with `RideMode.HILL_FAIL_NOTE`.
+The ride is timed, but no clock shows during the ride. The time shows only on the end card (see "The time and the board"). The world is not touched. If its model does not load, the error card opens with `RideMode.HILL_FAIL_NOTE`, and its Retry loads the page again (`Game.showLoadError`).
 
 The owner gave key frames of the scene he had in mind. The frames are private and stay out of the repo. Only shapes, sizes, colour numbers and camera places come from them. No bread brand, logo or wordmark is on any model or text. The frame plate on the bicycle is blank, and the loaves are plain.
 

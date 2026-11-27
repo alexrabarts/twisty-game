@@ -18,8 +18,8 @@ class WeatherSystem {
         this.systems = {};
         // The lowest road height of the part; setMix sets it
         this.baseY = 0;
-        // The road's own grip on the leg (Terrain.LEGS[i].grip), under the
-        // weather's: the tour's later legs have colder, dirtier tarmac
+        // The road's own grip under the weather's: the vehicle sets it from the
+        // world's surface (Vehicle.worldSurfaceGrip)
         this.surfaceGrip = 1;
         // The clear-weather fog density; setMix replaces it with the sampled part's
         this.originalFogDensity = scene.fog ? scene.fog.density : 0.0008;

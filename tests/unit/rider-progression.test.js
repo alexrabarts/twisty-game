@@ -1,7 +1,8 @@
 /**
- * One progression for the whole game: a finished leg counts toward the riders whether it is a leg of the world's tour
- * or a classic leg, each leg once. A world finish records its leg in the store that opens the next one (WorldLegs),
- * opens the rider's next bike, and its card shows the classic finish's UNLOCKED panel. Only a real finish counts.
+ * One progression for the whole game: a finished leg of the world's tour counts toward the riders, each leg once. A
+ * world finish records its leg in the store that opens the next one (WorldLegs), opens the rider's next bike, and its
+ * card shows the UNLOCKED panel. Only a real finish counts. A save from before 2026-11-27 keeps what its old
+ * procedural legs earned: its riders, and its finished old legs in the count.
  */
 
 import { jest } from '@jest/globals';
@@ -22,7 +23,8 @@ const Game = new Function('showCallout', `${classSource}\nreturn Game;`)(() => {
 
 // The first two built legs of the tour, in ride order
 const [leg1, leg2] = WorldTour.built();
-const CLASSIC = ['mountain-dawn', 'valley-run', 'coastal-descent', 'foggy-gorge', 'high-pass', 'storm-valley'];
+// The old procedural legs a save from before 2026-11-27 can hold in twistyProgress `completedLegs`
+const OLD = ['mountain-dawn', 'valley-run', 'coastal-descent', 'foggy-gorge', 'high-pass', 'storm-valley'];
 
 const fresh = () => {
     localStorage.clear();
@@ -33,7 +35,7 @@ const fresh = () => {
 
 afterEach(() => Modals.reset());
 
-describe('a finished leg counts toward the riders, from the tour or the classic legs', () => {
+describe('a finished leg of the tour counts toward the riders', () => {
     test('a player who rides only the tour opens Lucy with leg 1, and leg 2 with it', () => {
         const tour = fresh();
         expect(tour.isCharacterUnlocked('lucy')).toBe(false);
@@ -46,44 +48,44 @@ describe('a finished leg counts toward the riders, from the tour or the classic 
         // In the store that opens the next leg, so the menu and the riders agree
         expect(WorldLegs.finished()).toEqual([leg1.id]);
         expect(WorldLegs.isOpen(leg2.id)).toBe(true);
-        expect(TourSystem.finishFlow(unlocks, false).primary).toBe('choose-rider');
         // Kept for the next visit
         expect(new TourSystem().isCharacterUnlocked('lucy')).toBe(true);
     });
 
-    test('the thresholds open the riders in order: Tim, Lucy, Shane, Guy, Steve, Alex', () => {
+    test('the thresholds open the riders in order on the tour\'s legs alone: Tim, Lucy, Shane, Guy, Steve, Alex', () => {
         const tour = fresh();
-        const opened = [];
         const ids = WorldTour.built().map(l => l.id);
-        // Tour legs first, then classic legs to make up the count
-        const legs = [...ids, ...CLASSIC].slice(0, 7);
-        legs.forEach(id => {
-            const unlocks = ids.includes(id) ? tour.markWorldLegFinished(id) : tour.markLegCompleted(id);
-            opened.push(unlocks.characters.map(c => c.id).join(','));
-        });
+        expect(ids.length).toBeGreaterThanOrEqual(7);
+        const opened = ids.slice(0, 7).map(id => tour.markWorldLegFinished(id).characters.map(c => c.id).join(','));
         expect(opened).toEqual(['lucy', 'shane', 'guy', '', 'steve', '', 'alex']);
         expect(tour.legsFinished()).toBe(7);
+        expect(TourSystem.RIDER_UNLOCKS).toEqual({ tim: 0, lucy: 1, shane: 2, guy: 3, steve: 5, alex: 7 });
     });
 
-    test('a classic and a tour mix counts each leg once', () => {
+    test('a leg finished again counts nothing more', () => {
         const tour = fresh();
-        tour.markLegCompleted('mountain-dawn');
         tour.markWorldLegFinished(leg1.id);
+        tour.markWorldLegFinished(leg2.id);
         expect(tour.legsFinished()).toBe(2);
         expect(tour.isCharacterUnlocked('shane')).toBe(true);
-        // A leg finished again counts nothing more, from either side
         expect(tour.markWorldLegFinished(leg1.id).characters).toEqual([]);
-        expect(tour.markLegCompleted('mountain-dawn').characters).toEqual([]);
         expect(tour.legsFinished()).toBe(2);
         expect(tour.isCharacterUnlocked('guy')).toBe(false);
         expect(tour.unlockProgressText()).toBe("1 more leg to unlock Guy's Retro scrambler");
     });
 
-    test('the menu\'s locked rider reads the count of both', () => {
+    test('the menu\'s locked rider reads the count', () => {
         const tour = fresh();
         tour.markWorldLegFinished(leg1.id);
-        tour.showRiderSelector('shane');
+        tour.createMenu(document.body, () => {});
+        while (tour.riderDisplayOrder()[tour.riderFocusIndex].id !== 'shane') document.getElementById('riderNextBtn').click();
         expect(document.getElementById('riderInfoCard').textContent).toContain('Finish 1 more leg to unlock (1/2 legs finished)');
+    });
+
+    test('nothing finishes an old procedural leg any more', () => {
+        const tour = fresh();
+        expect(tour.markLegCompleted).toBeUndefined();
+        expect(tour.legs).toBeUndefined();
     });
 
     test('debug mode opens everything and saves nothing', () => {
@@ -91,7 +93,6 @@ describe('a finished leg counts toward the riders, from the tour or the classic 
         WorldLegs.cached = null;
         const debug = new TourSystem({ unlockAll: true });
         expect(debug.markWorldLegFinished(leg1.id)).toMatchObject({ characters: [], legs: [] });
-        expect(debug.markLegCompleted('mountain-dawn').characters).toEqual([]);
         expect(localStorage.getItem(WorldLegs.STORE)).toBeNull();
         expect(localStorage.getItem('twistyProgress')).toBeNull();
     });
@@ -101,8 +102,8 @@ describe('migration', () => {
     test('a save from before keeps every rider the old thresholds gave it, and none locks again', () => {
         localStorage.clear();
         WorldLegs.cached = null;
-        // Six classic legs opened Steve under the old table (6); the new one asks seven
-        localStorage.setItem('twistyProgress', JSON.stringify({ completedLegs: CLASSIC }));
+        // Six old legs opened Steve under the old table (6); the new one asks seven
+        localStorage.setItem('twistyProgress', JSON.stringify({ completedLegs: OLD }));
         const tour = new TourSystem();
         expect(CHARACTERS.every(c => tour.isCharacterUnlocked(c.id))).toBe(true);
         // The earned riders are written with the next finish and read back from then on
@@ -111,15 +112,28 @@ describe('migration', () => {
         expect(CHARACTERS.every(c => new TourSystem().isCharacterUnlocked(c.id))).toBe(true);
     });
 
-    test('a saved classic completion still counts toward the new thresholds', () => {
+    test('a saved old leg still counts toward the new thresholds, and is kept with the next save', () => {
         localStorage.clear();
         WorldLegs.cached = null;
         localStorage.setItem('twistyProgress', JSON.stringify({ completedLegs: ['mountain-dawn'] }));
         const tour = new TourSystem();
-        // Lucy needed three classic legs before; one is enough now
+        // Lucy needed three old legs before; one is enough now
         expect(tour.isCharacterUnlocked('lucy')).toBe(true);
         expect(tour.isCharacterUnlocked('shane')).toBe(false);
         expect(tour.markWorldLegFinished(leg1.id).characters.map(c => c.id)).toEqual(['shane']);
+        expect(tour.legsFinished()).toBe(2);
+        expect(JSON.parse(localStorage.getItem('twistyProgress')).completedLegs).toEqual(['mountain-dawn']);
+        expect(new TourSystem().legsFinished()).toBe(2);
+    });
+
+    test('an old leg and a tour leg of the same save each count once', () => {
+        localStorage.clear();
+        WorldLegs.cached = null;
+        localStorage.setItem('twistyProgress', JSON.stringify({ completedLegs: ['mountain-dawn', 'mountain-dawn', 'valley-run'], riders: ['tim', 'shane'] }));
+        const tour = new TourSystem();
+        tour.markWorldLegFinished(leg1.id);
+        expect(tour.legsFinished()).toBe(3);
+        expect(tour.isCharacterUnlocked('guy')).toBe(true);
     });
 
     test('an earned rider stays open when the count it was earned by is gone', () => {
@@ -184,7 +198,7 @@ describe('a world finish records the leg and the bike, and its card shows them',
         const game = worldGame(tour, { stage: { id: leg2.id, from: 0 } });
         game.worldUnlocks = game.recordWorldFinish();
         expect(game.worldUnlocks.characters.map(c => c.id)).toEqual(['shane']);
-        tour.markLegCompleted('mountain-dawn');
+        tour.markWorldLegFinished(WorldTour.built()[2].id);
         game.worldUnlocks = { legs: [], characters: [] };
         game.showWorldFinish();
         expect(document.querySelector('#finishBanner .unlock-panel')).toBeNull();

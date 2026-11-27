@@ -10,7 +10,7 @@ import { describe, test, expect } from '@jest/globals';
 import { readFileSync, readdirSync } from 'node:fs';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
-import { loadGame, buildEnvironment } from '../helpers/load-game.js';
+import { loadGame } from '../helpers/load-game.js';
 import { DT, bikeAt, poseOf, crashAndWatch } from '../helpers/rider-fall.js';
 
 const REPO = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..', '..');
@@ -344,42 +344,5 @@ describe('the restart puts the rider back as he rode', () => {
             v.updateMesh();
             expect(poseOf(v)).toEqual(before);
         }
-    });
-});
-
-describe('a classic leg', () => {
-    test('a crash on a leg draws the same fall: too much lean is a lowside, and the restart puts the rider back', () => {
-        const { env } = buildEnvironment(game, 0);
-        const v = new Vehicle(env.scene, null, game.CHARACTERS[0], undefined, { model: false });
-        const point = env.roadPath[30];
-        v.environment = env;
-        v.position.set(point.x, point.y, point.z);
-        v.yawAngle = point.heading;
-        v.findNearestRoadSegment();
-        v.updateMesh();
-        const before = poseOf(v);
-        v.speed = 25;
-        v.update(DT, 0, 0.5, 0, 0);
-        // The leg's own crash: leaned past the bike's limit
-        v.leanAngle = v.maxLeanAngle + 0.1;
-        v.update(DT, 0, 0.5, 0, 0);
-        expect(v.crashed).toBe(true);
-        expect(v.crashWhy).toBe('grip');
-        expect(v.riderFall.on).toBe(true);
-        expect(v.riderFall.kind).toBe('lowside');
-        const seat = v.rider.getWorldPosition(new THREE.Vector3());
-        for (let i = 0; i < 90; i++) v.update(DT, 0, 0, 0, 0);
-        const lying = v.rider.getWorldPosition(new THREE.Vector3());
-        // He has come down off the seat onto the road and gone on along it
-        expect(seat.y - lying.y).toBeGreaterThan(0.3);
-        expect(lying.y - v.surfaceAt(lying.x, lying.z)).toBeGreaterThan(0.05);
-        expect(lying.y - v.surfaceAt(lying.x, lying.z)).toBeLessThan(0.5);
-        expect(Math.hypot(lying.x - seat.x, lying.z - seat.z)).toBeGreaterThan(5);
-        v.reset();
-        v.position.set(point.x, point.y, point.z);
-        v.yawAngle = point.heading;
-        v.findNearestRoadSegment();
-        v.updateMesh();
-        expect(poseOf(v)).toEqual(before);
     });
 });

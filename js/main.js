@@ -144,11 +144,9 @@ class Game {
         // Create tour system
         console.log('Creating tour system...');
         this.tourSystem = new TourSystem({ unlockAll: Game.debugEnabled(window.location.search) });
-        this.tourSystem.onViewLeaderboard = (legId) => this.showLeaderboardViewer(legId);
         this.tourSystem.onRiderShowcase = (id) => this.showcaseBikes ? this.focusRiderShowcase(id) : this.startRiderShowcase(id);
         this.tourSystem.onRiderShowcaseStart = (id) => this.startRiderShowcase(id);
         this.tourSystem.onBikeShowcase = (id) => this.changeShowcaseBike(id);
-        this.tourSystem.onTrackShowcase = (legIndex) => this.startTrackPreview(legIndex);
         this.tourSystem.riderTier = (id) => this.riderTier(id);
 
         // Initialize leaderboard service
@@ -199,7 +197,6 @@ class Game {
 
         // High score tracking
         this.highScore = parseInt(localStorage.getItem('motorcycleHighScore') || '0');
-        this.bestTime = parseFloat(localStorage.getItem('motorcycleBestTime') || '999999');
 
         // Finish state
         this.finished = false;
@@ -237,13 +234,12 @@ class Game {
             }
         });
 
-        // What the page rides is read from the URL in one place (js/ridemode.js); a page without it has the legs
-        this.rideMode = typeof RideMode !== 'undefined' ? RideMode.resolve(window.location.search) : { kind: 'legs', world: null, direct: false };
+        // What the page rides is read from the URL in one place (js/ridemode.js)
+        this.rideMode = RideMode.resolve(window.location.search);
         this.openRide();
     }
 
-    // A world named in the URL starts at once. Otherwise the menu opens: choosing a rider starts the world (the
-    // default) or, under ?legs, goes on to the leg screen; Classic legs on the rider screen goes to the leg screen
+    // A world named in the URL starts at once. Otherwise the menu opens, and choosing a rider starts the world
     openRide() {
         const mode = this.rideMode;
         if (mode.kind === 'hill') {
@@ -254,26 +250,23 @@ class Game {
             this.startWorld(mode.world);
             return;
         }
-        this.tourSystem.onWorldSelected = mode.kind === 'world' ? () => this.chooseWorld() : null;
-        this.tourSystem.createLegSelector(document.body, (leg) => {
-            console.log('Leg selected:', leg.name);
-            this.initializeGameWithLeg(leg);
-        });
+        this.tourSystem.createMenu(document.body, () => this.chooseWorld());
     }
 
-    // The hill ride (js/hill/ride.js): a ride of its own on this page, with no menu and no clock on screen; its time and board show on its end card. One that cannot
-    // start (its model did not load) hands over to the legs, as a world that cannot load does
+    // The hill ride (js/hill/ride.js): a ride of its own on this page, with no menu and no clock on screen; its time
+    // and board show on its end card. One that cannot start (its model did not load) shows the error card, as a world
+    // that cannot load does; Retry loads the page again
     startHill() {
         this.hill = new HillRide(this);
         this.hill.start().catch(error => {
             if (this.hill) this.hill.running = false;
             document.body.classList.remove('hill-on');
-            this.fallBackToLegs(error, RideMode.HILL_FAIL_NOTE);
+            this.showLoadError(error, RideMode.HILL_FAIL_NOTE, () => window.location.reload());
         });
     }
 
-    // The menu's world: a leg ridden on this page has left its systems built, so the world starts on a fresh page
-    // (the rider and bike are kept in localStorage); a page that has ridden nothing starts it here
+    // The menu's world: a ride on this page has left its systems built, so the world starts on a fresh page (the
+    // rider and bike are kept in localStorage); a page that has ridden nothing starts it here
     chooseWorld() {
         // With more than one world leg the menu asks which, on the map of the tour (WorldMap: the next open leg chosen)
         if (typeof WorldMap !== 'undefined' && WorldLegs.LIST.length > 1 && !this.rideMode.legPicked) {
@@ -285,7 +278,7 @@ class Game {
                     this.rideMode = { ...this.rideMode, world: id, legPicked: true };
                     this.chooseWorld();
                 },
-                onBack: () => { this.tourSystem.legSelectorActive = true; }
+                onBack: () => { this.tourSystem.menuActive = true; }
             });
             return;
         }
@@ -297,11 +290,11 @@ class Game {
     }
 
     // Loads the world's ride layer, then builds the game round it (WorldEnvironment.load). A world that cannot load
-    // hands over to the legs (fallBackToLegs)
+    // shows the error card (showLoadError), whose Retry loads it again
     async startWorld(id) {
         this.endMenuShowcase();
         this.removeRunOverlays();
-        this.tourSystem.hideLegSelector();
+        this.tourSystem.hideMenu();
         // A dimmed screen with the note in a panel: the last frame of the menu (the rider on the stage) stays drawn
         // behind it, and plain text over that could not be read
         const screen = document.createElement('div');
@@ -333,23 +326,23 @@ class Game {
             if (typeof BikeModels !== 'undefined' && BikeModels.preloadCrew) await BikeModels.preloadCrew();
             await this.initializeGameWithWorld(environment);
         } catch (error) {
-            this.fallBackToLegs(error);
+            this.showLoadError(error, RideMode.LOAD_FAIL_NOTE, () => this.startWorld(id));
             return;
         }
         screen.remove();
         document.body.classList.remove('world-loading-on');
     }
 
-    // The world's data did not load (a fetch error, a status other than 200, data not in the world format: the live
-    // host is not yet proven to serve world/*.bin). The legs take over with a note on the leg screen, and the rider
-    // screen stops offering the world for the rest of the page
-    fallBackToLegs(error, notice = RideMode.FALLBACK_NOTE) {
-        console.error('Failed to load the world; the classic legs take over:', error);
-        const note = document.getElementById('world-loading');
-        if (note) note.remove();
+    // A ride that could not load: the world's data (a fetch error, a status other than 200, data not in the world
+    // format), the land during a ride, or the hill ride. A card on the dialog stack (js/modals.js) says so, with Retry
+    // (`retry`, after a world built part-way is torn down) and Back to menu (the plain page). Nothing else takes over
+    showLoadError(error, note, retry) {
+        console.error('The ride could not load:', error);
+        const loading = document.getElementById('world-loading');
+        if (loading) loading.remove();
         document.body.classList.remove('world-loading-on');
-        // A world built part-way is torn down, so nothing keyed off isWorld sees it
-        if (this.environment && this.environment.isWorld) {
+        // A world built part-way is torn down, so nothing keyed off the environment sees it
+        if (this.environment) {
             try {
                 this.cleanupCurrentLeg();
             } catch (cleanup) {
@@ -357,17 +350,52 @@ class Game {
             }
             this.environment = null;
         }
-        this.rideMode = { kind: 'legs', world: null, direct: false };
-        this.tourSystem.onWorldSelected = null;
-        this.tourSystem.createLegSelector(document.body, (leg) => this.initializeGameWithLeg(leg));
-        this.tourSystem.showTrackScreen();
-        this.tourSystem.showNotice(notice);
+        const old = document.getElementById('loadError');
+        if (old) Modals.close(old);
+        const card = document.createElement('div');
+        card.id = 'loadError';
+        card.className = 'run-card load-error-card';
+        card.setAttribute('role', 'alertdialog');
+        card.setAttribute('aria-label', RideMode.LOAD_FAIL_TITLE);
+        const title = document.createElement('div');
+        title.className = 'load-error-title';
+        title.textContent = RideMode.LOAD_FAIL_TITLE;
+        const text = document.createElement('div');
+        text.className = 'load-error-text';
+        text.textContent = note;
+        const buttons = document.createElement('div');
+        buttons.className = 'run-buttons';
+        buttons.innerHTML = `
+            <button id="loadRetryBtn" class="btn btn-primary" data-key="KeyR"><u>R</u>etry</button>
+            <button id="loadMenuBtn" class="btn" data-key="KeyM" data-menu>Back to <u>m</u>enu</button>`;
+        card.append(title, text, buttons);
+        // No ride is up: no HUD under the card
+        document.body.classList.add('load-error-on');
+        Modals.open(card);
+        card.querySelector('#loadRetryBtn').addEventListener('click', () => {
+            Modals.close(card);
+            document.body.classList.remove('load-error-on');
+            retry();
+        });
+        card.querySelector('#loadMenuBtn').addEventListener('click', () => {
+            Modals.close(card);
+            window.location.assign(window.location.pathname);
+        });
+        return card;
+    }
+
+    // A world ride whose land stopped loading (watchLand): the error card, whose Retry starts the same world again.
+    // The name is older than the card, from when the old procedural legs took over here:
+    // tests/unit/world-tile-retry.test.js holds it
+    fallBackToLegs(error, note) {
+        const id = this.rideMode && this.rideMode.world;
+        this.showLoadError(error, note, () => this.startWorld(id));
     }
 
     // The land round the bike in a world ride (WorldStreamer.landState), once a frame: the rider is told while land near
     // the bike is still loading (the far land is drawn there meanwhile, and the road over it), the bike is held while
     // its own tile has no data, and land that never comes ends the ride the way a world that cannot load at the start
-    // does: the classic legs take over with a note. A ride that has finished is left alone
+    // does: the error card, whose Retry starts the world again. A ride that has finished is left alone
     watchLand() {
         const environment = this.environment, vehicle = this.vehicle;
         if (!environment || !environment.isWorld || !environment.streamer || !vehicle || this.finished) {
@@ -402,8 +430,8 @@ class Game {
         this.landNote = null;
     }
 
-    // The game on a world: no cones or rockfalls are built (they are leg systems), traffic rides the
-    // route, and the atmosphere track runs along the whole ride in 100 m units (R5).
+    // The game on a world: traffic rides the route, and the atmosphere track runs along the whole ride in 100 m
+    // units (R5).
     async initializeGameWithWorld(environment) {
         this.beginTunedRide();
         this.selectedCharacter = this.tourSystem.getSelectedCharacter ? this.tourSystem.getSelectedCharacter() : null;
@@ -422,10 +450,8 @@ class Game {
         };
         this.environment.applyLandscapeConfig(this.environment.config.look);
         this.applyShadowBox(this.environment.config.render);
-        this.cones = null;
-        this.rockfalls = null;
         this.particles = new ParticleSystem(this.scene);
-        // The far land stands up to 40 km away (FarLand); a leg keeps its 5 km
+        // The far land stands up to 40 km away (FarLand)
         this.camera.far = WorldEnvironment.FAR_PLANE_M;
         this.camera.updateProjectionMatrix();
         // (the stage's own sky, measured on its photos: WorldLooks.viewOf)
@@ -658,154 +684,6 @@ class Game {
         return list;
     }
 
-    initializeGameWithLeg(leg) {
-        this.beginTunedRide();
-        // Tear down any menu showcase (bikes / preview environment / RAF loop)
-        this.endMenuShowcase();
-
-        // No banner from an earlier run may sit over the new leg
-        this.removeRunOverlays();
-
-        // Hide tour selector
-        this.tourSystem.hideLegSelector();
-
-        // Resolve the selected rider before building anything that needs it
-        this.selectedCharacter = this.tourSystem.getSelectedCharacter ? this.tourSystem.getSelectedCharacter() : null;
-
-        console.log('Creating environment...');
-        try {
-            // Create environment with lazy generation for the selected leg
-            const legIndex = this.tourSystem.getCurrentLegIndex();
-            this.environment = new Environment(this.scene, leg.startSegment, leg.endSegment, legIndex);
-            console.log('Environment created successfully');
-
-            // The landscape's fog density is written first: the weather system reads it
-            this.environment.applyLandscapeConfig(this.environment.config.look);
-            this.applyShadowBox(this.environment.config.render);
-
-            // The light, sky, fog and weather of the leg, from the track
-            this.atmosphereTrack = AtmosphereTrack.forLeg(leg, this.environment.config, this.environment);
-            console.log('Initializing weather system...');
-            if (typeof WeatherSystem !== 'undefined') {
-                if (this.weatherSystem) this.weatherSystem.dispose();
-                // A leg of several looks draws its weather from a seeded stream: the same
-                // for every rider, and apart from the stream that cones and traffic read
-                const random = this.atmosphereTrack.parts.length > 1
-                    ? AtmosphereTrack.seededRandom(TourSystem.boardId(leg))
-                    : Math.random;
-                this.weatherSystem = new WeatherSystem(this.scene, this.camera, random);
-                this.weatherSystem.surfaceGrip = this.environment.config.grip ?? 1;
-                this.weatherSystem.prepare(this.atmosphereTrack.weatherTypes());
-            } else {
-                console.warn('WeatherSystem class not found');
-            }
-            this.snapAtmosphere(this.atmosphereTrack, leg.startSegment, {
-                environment: this.environment,
-                weatherSystem: this.weatherSystem || null
-            });
-        } catch (error) {
-            console.error('Failed to create environment:', error);
-            throw error;
-        }
-
-        console.log('Creating cones course...');
-        this.cones = new Cones(this.scene, this.environment, (points) => {
-            this.addScore(points);
-            this.showConeHitNotification(points);
-            this.soundManager.playConeHitSound();
-        });
-
-        console.log('Creating rockfall hazards...');
-        this.rockfalls = (typeof RockfallSystem !== 'undefined')
-            ? new RockfallSystem(this.scene, this.environment)
-            : null;
-
-        console.log('Creating traffic...');
-        this.traffic = new Traffic(this.scene, this.environment, this.selectedCharacter ? this.selectedCharacter.name : null);
-
-        console.log('Creating particle system...');
-        this.particles = new ParticleSystem(this.scene);
-
-        console.log('Creating vehicle...');
-        this.vehicle = new Vehicle(this.scene, (points) => this.addScore(points), this.selectedCharacter, this.selectedBike(), { outfit: this.selectedOutfit() });
-        this.vehicle.environment = this.environment; // Pass environment reference for elevation
-
-        // Connect weather system to vehicle
-        if (this.weatherSystem) {
-            this.vehicle.setWeatherSystem(this.weatherSystem);
-        }
-
-        // Initialize vehicle at leg start position
-        if (this.environment.route && this.environment.route.unitCount > 0) {
-            const startPos = this.tourSystem.getStartingPosition(this.environment.route);
-            this.vehicle.position.x = startPos.x;
-            this.vehicle.position.y = startPos.y;
-            this.vehicle.position.z = startPos.z;
-            this.vehicle.yawAngle = startPos.heading;
-
-            // Initialize segment tracking to match the actual spawn point
-            // (getStartingPosition spawns a few segments into the leg)
-            this.vehicle.findNearestRoadSegment();
-
-            console.log(`Starting at segment ${leg.startSegment}: position (${startPos.x.toFixed(1)}, ${startPos.y.toFixed(1)}, ${startPos.z.toFixed(1)})`);
-
-            // Initialize camera in follow position behind bike
-            const normalCameraOffset = this.baseCameraOffset.clone();
-            normalCameraOffset.applyEuler(new THREE.Euler(0, this.vehicle.yawAngle, 0));
-            const normalCameraPos = this.vehicle.position.clone().add(normalCameraOffset);
-
-            // Position camera in follow position
-            this.camera.position.set(normalCameraPos.x, normalCameraPos.y, normalCameraPos.z);
-            this.cameraIntroStartPos.copy(normalCameraPos);
-            this.cameraIntroEndPos.copy(normalCameraPos);
-            this.currentCameraPos.copy(normalCameraPos);
-        }
-
-        // Reset game state for new leg
-        this.resetRunState();
-
-        // Tag the new scene's textures and vertex colours before the first
-        // frame (the periodic scan would show it washed out for a moment)
-        this.graphics.fixColorSpaces();
-
-        // Every shader a converted leg will need, compiled with the bike in the scene
-        this.prewarmCourse();
-
-        // Classify the freshly built scene for distance culling
-        this.setupPerformanceCulling();
-
-        // Start the new leg's loop with a clean timestep accumulator
-        this.accumulatedTime = 0;
-        if (this.clock) {
-            this.clock.getDelta();
-        }
-        // The first second after a scene build is slow; do not let the
-        // adaptive resolution read it as the steady frame rate
-        this.lastTime = performance.now();
-        this.frameCount = 0;
-        // Shaders compile during the first seconds of a leg; frame rates
-        // measured then say nothing about the steady state
-        this.adaptGraceUntil = performance.now() + 4000;
-
-        // Start leaderboard session (a tuned ride keeps none: markTuned)
-        if (this.leaderboardService && !this.rideTuned) {
-            this.leaderboardService.startRun(TourSystem.boardId(leg), this.leaderboardExpectation(leg)).then(result => {
-                if (result === true) {
-                    console.log('Leaderboard session started for leg:', leg.id);
-                } else if (result.error) {
-                    console.warn('Leaderboard session start failed:', result.message);
-                }
-            }).catch(error => {
-                console.error('Failed to start leaderboard session:', error);
-            });
-        }
-        this.loadSplitReferences(leg);
-
-        console.log('Starting animation loop...');
-        // Delay first frame to ensure renderer is fully initialized
-        this.animationFrameId = requestAnimationFrame(() => this.animate());
-    }
-
     // The quality ladder (js/quality.js, .agent/system/graphics.md): one table of graphics levels, the level chosen
     // at the start from the device and then stepped by the frame time. A caller fixes a level or releases it to the
     // frame time with this.quality.fix and this.quality.release (the tuning panel of debug mode does, and a graphics
@@ -959,32 +837,6 @@ class Game {
         if (quality.sample(now - last, work, now)) this.showQuality();
     }
 
-    // A converted leg draws new kinds of ground, water and dressing part by
-    // part. Every shader it will need is compiled now, at the leg start,
-    // from a sample of each part, not on the frame a part first comes into view.
-    prewarmCourse() {
-        const env = this.environment;
-        if (!env || !env.sections || !this.graphics || !this.graphics.renderer) return;
-        const putAway = env.warmSections();
-        // Weather particles, a hidden floor or a light switched on later down
-        // the road each change a program: everything is shown for one compile,
-        // and the scene as it stands is compiled too
-        const hidden = [];
-        try {
-            this.graphics.renderer.compile(this.scene, this.camera);
-            this.scene.traverse(object => {
-                if (!object.visible) {
-                    hidden.push(object);
-                    object.visible = true;
-                }
-            });
-            this.graphics.renderer.compile(this.scene, this.camera);
-        } finally {
-            hidden.forEach(object => { object.visible = false; });
-            putAway();
-        }
-    }
-
     // The weather down the ride changes programs when it comes: its particles are new ones, and the headlight it
     // switches on is a light every lit material is compiled for. Both are compiled now, not on the frame it starts
     // to rain
@@ -1110,7 +962,7 @@ class Game {
     // large scenery gets distance-culled - fog hides the far course anyway,
     // but without culling every rock/tree/post still costs a draw call
     // Cull at the distance where fog has fully swallowed the scenery. The fog
-    // changes along a leg of several looks, so this is read again as it does.
+    // changes along a ride of several looks, so this is read again as it does.
     updateCullDistance() {
         const fogDensity = this.scene.fog ? this.scene.fog.density : 0.0018;
         const cullMax = this.environment && this.environment.config ? this.environment.config.render.cullMax : 600;
@@ -1124,11 +976,6 @@ class Game {
 
         this.scene.traverse(obj => {
             if (!obj.isMesh) return;
-
-            // A converted leg's sections are classified as each is built (classifySection)
-            for (let p = obj.parent; p; p = p.parent) {
-                if (p.userData && p.userData.section !== undefined) return;
-            }
 
             // The sky dome is a unit sphere at the origin drawn at infinity;
             // by its bounds it looks like a small prop far from the player
@@ -1158,33 +1005,7 @@ class Game {
         this.updateCullDistance();
         this.lastCullTime = 0;
 
-        if (env && env.sections) {
-            env.sections.forEach(section => section.state === 'built' && this.classifySection(section));
-            // Sections built later are classified when they are ready
-            env.sectionListeners = env.sectionListeners.filter(listener => listener.owner !== 'culling');
-            // A section built during the ride has its colours decoded before it is drawn
-            env.sectionListeners.push({ owner: 'culling', ready: section => {
-                this.graphics.fixColorSpaces(section.group);
-                this.classifySection(section);
-            } });
-        }
-
         console.log(`Performance culling: ${this.cullableMeshes.length} cullable meshes, distance ${this.cullDistance.toFixed(0)}`);
-    }
-
-    // The cullable meshes of one section of a converted leg, by the rule of
-    // setupPerformanceCulling; updatePerformanceCulling walks the visible ones
-    classifySection(section) {
-        section.cullable = [];
-        section.group.traverse(obj => {
-            if (!obj.isMesh || obj.userData.skipCulling) return;
-            if (!obj.geometry.boundingSphere) obj.geometry.computeBoundingSphere();
-            if (!obj.geometry.boundingSphere) return;
-            const scale = Math.max(Math.abs(obj.scale.x), Math.abs(obj.scale.y), Math.abs(obj.scale.z)) || 1;
-            const radius = obj.geometry.boundingSphere.radius * scale;
-            if (radius < 1.2) obj.castShadow = false;
-            if (radius < 40) section.cullable.push(obj);
-        });
     }
 
     updatePerformanceCulling() {
@@ -1205,10 +1026,6 @@ class Game {
             mesh.visible = (dx * dx + dz * dz) < maxDistSq;
         };
         this.cullableMeshes.forEach(cull);
-        // A converted leg: only the sections in the drawn window
-        if (this.environment && this.environment.sections) {
-            this.environment.visibleSections().forEach(section => section.cullable && section.cullable.forEach(cull));
-        }
     }
 
     // Free GPU resources (geometries, materials, textures) for a removed subtree.
@@ -1270,13 +1087,11 @@ class Game {
         }
         this.firstInputAt = NaN;
         if (this.hud) {
-            const leg = this.tourSystem && this.tourSystem.getCurrentLeg();
-            const index = leg ? this.tourSystem.getCurrentLegIndex() : -1;
             const world = this.environment && this.environment.isWorld;
-            this.hud.startRun(world ? HudRules.stageLabel(1, this.worldStageCount(), this.worldStageName(0)) : leg ? `Leg ${index + 1} · ${leg.name}` : '');
+            this.hud.startRun(world ? HudRules.stageLabel(1, this.worldStageCount(), this.worldStageName(0)) : '');
             this.shownWorldStage = null;
             this.shownWorldGates = null;
-            // (before the count: a world's count stands on its progress bar, a leg's on its pips)
+            // (before the count: the count stands on the progress bar)
             if (world && !this.freeRoam) this.showWorldStage();
             else this.hud.hideProgress();
             this.hud.setGates(0, this.gateTotal());
@@ -1295,25 +1110,8 @@ class Game {
         return performance.now();
     }
 
-    // A converted leg has a row in the server's table of boards (js/course.js):
-    // protocol 2, the finish-line time ranks. Every other leg is protocol 1.
-    isTableBoard(leg) {
-        return Object.prototype.hasOwnProperty.call(Course.boardTable(), TourSystem.boardId(leg));
-    }
-
-    // What the built leg expects of the server before a time is sent
-    leaderboardExpectation(leg) {
-        return { protocol: this.isTableBoard(leg) ? 2 : 1, gates: this.gateTotal() };
-    }
-
-    // The time the online board ranks: the finish line on a converted leg,
-    // the last gate on the others
-    boardTimeMs(leg) {
-        return this.isTableBoard(leg) ? Math.round(this.finishTime) : this.checkpointTimes[this.gateTotal() - 1];
-    }
-
     removeRunOverlays() {
-        ['finishBanner', 'crashNotification'].forEach(id => {
+        ['finishBanner'].forEach(id => {
             const element = document.getElementById(id);
             if (element) Modals.close(element);
         });
@@ -1388,7 +1186,7 @@ class Game {
         // The pause panel holds Resume, Menu and the data credits (js/world/credits.js); it is the way to the menu
         // in the middle of a ride
         if (panel && this.hud) this.hud.recallHint(true);
-        if (panel && this.environment && typeof WorldCredits !== 'undefined') WorldCredits.showPause(this.environment, () => this.resumeRace(), () => this.leaveToMenu(), this.environment.isWorld ? () => this.restartFromPause() : null, this.vehicle ? this.vehicle.speed : 0, this.freeRoam && typeof FastTravel !== 'undefined' ? () => this.openTravel() : null, this.freeRoam && typeof PhotoMode !== 'undefined' ? () => this.openPhoto() : null);
+        if (panel && this.environment && typeof WorldCredits !== 'undefined') WorldCredits.showPause(this.environment, () => this.resumeRace(), () => this.leaveToMenu(), () => this.restartFromPause(), this.vehicle ? this.vehicle.speed : 0, this.freeRoam && typeof FastTravel !== 'undefined' ? () => this.openTravel() : null, this.freeRoam && typeof PhotoMode !== 'undefined' ? () => this.openPhoto() : null);
     }
 
     // Restart leg from the pause panel of a world ride (a world crash opens no card to offer it): it asks first, and
@@ -1400,10 +1198,9 @@ class Game {
         });
     }
 
-    // Menu from the pause panel: a world ride asks first (confirmWorldLeave), a leg goes
+    // Menu from the pause panel: it asks first (confirmWorldLeave)
     leaveToMenu() {
-        if (this.environment && this.environment.isWorld) this.confirmWorldLeave(Game.WORLD_MENU_ASK, () => this.returnToMenu());
-        else this.returnToMenu();
+        this.confirmWorldLeave(Game.WORLD_MENU_ASK, () => this.returnToMenu());
     }
 
     resumeRace() {
@@ -1426,14 +1223,14 @@ class Game {
             : 'Restart the tour from Altdorf? Your ride so far is lost.';
     }
 
-    // Put the bike back on the start line of the current leg
+    // Put the bike back on the start line of the ride
     restartLeg() {
         this.closeWorldConfirm();
         this.removeRunOverlays();
 
         this.vehicle.reset();
         if (this.environment.route && this.environment.route.unitCount > 0) {
-            const startPos = this.environment.isWorld ? this.environment.startPosition() : this.tourSystem.getStartingPosition(this.environment.route);
+            const startPos = this.environment.startPosition();
             this.vehicle.position.set(startPos.x, startPos.y, startPos.z);
             this.vehicle.yawAngle = startPos.heading;
             // Re-sync segment tracking with the teleported position so the
@@ -1441,21 +1238,17 @@ class Game {
             this.vehicle.findNearestRoadSegment();
             this.vehicle.updateMesh();
         }
-        if (this.cones) this.cones.reset();
         if (this.traffic && this.traffic.reset) {
             this.traffic.reset();
         }
         this.resetRunState();
-        if (this.environment.isWorld) {
-            // Free roam rides again from its own start (the menu's Start at), the crew (made again) behind it (travelTo)
-            if (this.freeRoam && this.roam) {
-                if (this.traffic && this.traffic.group) this.traffic.group.playerPlace = null;
-                this.travelTo(FreeRoam.startFor(this.environment, (this.rideMode && this.rideMode.start) || GameModes.startAt), false);
-            }
-            this.armWorldStart();
-            this.environment.guide.reset();
+        // Free roam rides again from its own start (the menu's Start at), the crew (made again) behind it (travelTo)
+        if (this.freeRoam && this.roam) {
+            if (this.traffic && this.traffic.group) this.traffic.group.playerPlace = null;
+            this.travelTo(FreeRoam.startFor(this.environment, (this.rideMode && this.rideMode.start) || GameModes.startAt), false);
         }
-        this.restartLeaderboardSession();
+        this.armWorldStart();
+        this.environment.guide.reset();
 
         const dashboard = document.querySelector('.dashboard');
         if (dashboard) {
@@ -1463,7 +1256,7 @@ class Game {
         }
     }
 
-    // Scene objects that outlive a leg: camera, lights and the sky dome
+    // Scene objects that outlive a ride: camera, lights and the sky dome
     persistentSceneObjects() {
         const keep = new Set([
             this.camera,
@@ -1496,7 +1289,7 @@ class Game {
         this.paused = false;
 
         // A world owns DOM beside the scene (the guide and its map) and the streamer's buffers
-        if (this.environment && this.environment.isWorld) {
+        if (this.environment) {
             this.environment.dispose();
             this.camera.far = 5000;
             this.camera.updateProjectionMatrix();
@@ -1516,12 +1309,6 @@ class Game {
         // Drop stale cull references from the removed scene
         this.cullableMeshes = null;
 
-        // Tear down rockfall hazards
-        if (this.rockfalls) {
-            this.rockfalls.dispose();
-            this.rockfalls = null;
-        }
-
         // Reset game state
         this.finished = false;
         this.score = 0;
@@ -1530,120 +1317,14 @@ class Game {
         this.combo = 0;
         this.comboMultiplier = 1;
 
-        console.log('Cleaned up current leg');
+        console.log('Cleaned up the ride');
     }
 
-    // options.riderId opens the rider screen on that rider (a new unlock)
-    // instead of the track screen
-    returnToMenu(options = {}) {
+    // The menu is the page without ?world: a ride goes back to it on a fresh page. A world starts no leaderboard
+    // session, so there is none to cancel
+    returnToMenu() {
         console.log('Returning to menu...');
-
-        // A world has no leg menu: it goes back to the page without ?world. It starts no session, so there is
-        // none to cancel
-        if (this.environment && this.environment.isWorld) {
-            window.location.assign(window.location.pathname);
-            return;
-        }
-
-        // Remove finish banner if exists
-        const finishBanner = document.getElementById('finishBanner');
-        if (finishBanner) {
-            Modals.close(finishBanner);
-        }
-
-        // Remove crash notification if exists
-        const crashNotification = document.getElementById('crashNotification');
-        if (crashNotification) {
-            Modals.close(crashNotification);
-        }
-
-        // Cleanup current leg
-        this.cleanupCurrentLeg();
-
-        // Show leg selector
-        if (options.riderId) {
-            this.tourSystem.showRiderSelector(options.riderId);
-        } else {
-            this.tourSystem.showLegSelector();
-        }
-
-        // Hide dashboard
-        const dashboard = document.querySelector('.dashboard');
-        if (dashboard) {
-            dashboard.style.opacity = '0';
-        }
-
-        console.log('Returned to menu');
-    }
-
-    startNextLeg() {
-        const nextLeg = this.tourSystem.getNextLeg();
-        if (!nextLeg) {
-            console.error('No next leg available');
-            return;
-        }
-
-        // Make it the tour's current leg - getStartingPosition() and
-        // getCurrentLegIndex() read tourSystem.currentLeg, and a stale value
-        // spawns the bike at the previous leg's start, off the new leg's road
-        this.tourSystem.selectLeg(nextLeg.id);
-
-        console.log(`Starting next leg: ${nextLeg.name}`);
-
-        // Remove finish banner
-        const finishBanner = document.getElementById('finishBanner');
-        if (finishBanner) {
-            Modals.close(finishBanner);
-        }
-
-        // Cleanup current leg
-        this.cleanupCurrentLeg();
-
-        // Initialize next leg
-        this.initializeGameWithLeg(nextLeg);
-
-        // Show dashboard
-        const dashboard = document.querySelector('.dashboard');
-        if (dashboard) {
-            dashboard.style.opacity = '1';
-        }
-
-        console.log('Next leg started');
-    }
-
-    startFirstLeg() {
-        const firstLeg = this.tourSystem.getFirstLeg();
-        if (!firstLeg) {
-            console.error('No first leg available');
-            return;
-        }
-
-        // Select it so getStartingPosition()/getCurrentLegIndex() match the
-        // leg being initialized (restarting the tour from leg 8 otherwise
-        // spawns the bike at leg 8's start on leg 1's road)
-        this.tourSystem.selectLeg(firstLeg.id);
-
-        console.log(`Starting first leg: ${firstLeg.name}`);
-
-        // Remove finish banner
-        const finishBanner = document.getElementById('finishBanner');
-        if (finishBanner) {
-            Modals.close(finishBanner);
-        }
-
-        // Cleanup current leg
-        this.cleanupCurrentLeg();
-
-        // Initialize first leg
-        this.initializeGameWithLeg(firstLeg);
-
-        // Show dashboard
-        const dashboard = document.querySelector('.dashboard');
-        if (dashboard) {
-            dashboard.style.opacity = '1';
-        }
-
-        console.log('First leg started (tour restart)');
+        window.location.assign(window.location.pathname);
     }
 
     isWebGLAvailable() {
@@ -1845,7 +1526,7 @@ class Game {
         const hazy = weatherType === 'fog';
         // A world's rain cloud hides the sun more: at a quarter it still put a glint on the wet road
         const direct = overcast ? (world ? Game.WORLD_OVERCAST_SUN : 0.25) : hazy ? 0.6 : 1;
-        // A world rider switches the headlight on in rain or snow, by day too; a leg keeps the time's own
+        // A world rider switches the headlight on in rain or snow, by day too; with no world (the menu) the time's own
         const headlight = Math.max(config.headlight || 0, world && overcast ? Game.WORLD_OVERCAST_HEADLIGHT : 0);
         const values = {
             key: timeKey,
@@ -1932,8 +1613,7 @@ class Game {
     }
 
     // Write the atmosphere at a segment all at once: no blending in time, a
-    // forced bake of the reflections. For a leg start, a restart, the menu
-    // preview and the rider showcase. `target` names what the snap may write
+    // forced bake of the reflections. For a ride's start and a restart. `target` names what the snap may write
     // beyond the light and sky: { environment, weatherSystem }, either of
     // which may be null. With no weather system nothing is written to the
     // particles or the scene fog density.
@@ -1952,8 +1632,7 @@ class Game {
         const track = this.atmosphereTrack;
         if (!track || !this.vehicle) return;
         const scratch = this.atmosphereSample || (this.atmosphereSample = {});
-        const route = this.environment.route;
-        const sample = track.sample(this.environment.isWorld ? this.vehicle.routeS / AtmosphereTrack.WORLD_UNIT_M : route.toUnits(this.vehicle.routeS || 0), scratch);
+        const sample = track.sample(this.vehicle.routeS / AtmosphereTrack.WORLD_UNIT_M, scratch);
         const written = this.atmosphereWritten;
         const settled = sample.t === 0 && written && written.t === 0 && written.a === sample.a;
 
@@ -1973,29 +1652,14 @@ class Game {
         this.applySectionLook(this.atmosphereLook);
     }
 
-    // Where progress s sits on the atmosphere track: route units on a leg, 100 m units in a world
+    // Where progress s sits on the atmosphere track: 100 m units
     atmosphereUnit(s) {
-        return this.environment.isWorld ? s / AtmosphereTrack.WORLD_UNIT_M : this.environment.route.toUnits(s);
+        return s / AtmosphereTrack.WORLD_UNIT_M;
     }
 
-    // Where the bike is along the road, in fractional segments: the segment it
-    // is nearest to, and how far it has passed along the line to the next
+    // Where the bike is along the road on the atmosphere track: its projection's s, else its progress
     roadPosition() {
-        const route = this.environment && this.environment.route;
-        if (this.environment.isWorld) return this.atmosphereUnit(this.vehicle.projection.s ?? this.vehicle.routeS ?? 0);
-        const at = this.vehicle.position;
-        const segment = route ? route.toUnits(this.vehicle.routeS || 0) : 0;
-        if (!route || !at) return segment;
-        for (const start of [segment, segment - 1]) {
-            const from = route.pointAtUnit(start);
-            const to = route.pointAtUnit(start + 1);
-            if (!from || !to) continue;
-            const dx = to.x - from.x;
-            const dz = to.z - from.z;
-            const along = ((at.x - from.x) * dx + (at.z - from.z) * dz) / (dx * dx + dz * dz);
-            if (along >= 0 && along <= 1) return start + along;
-        }
-        return segment;
+        return this.atmosphereUnit(this.vehicle.projection.s ?? this.vehicle.routeS ?? 0);
     }
 
     // The sample's look in the scene: the sky, light, fog, road surface and particles
@@ -2045,7 +1709,7 @@ class Game {
         const from = environment.resolveRoadSurface(a.weather, a.weatherIntensity);
         const to = environment.resolveRoadSurface(b.weather, b.weatherIntensity);
         const out = this.roadBlend || (this.roadBlend = {});
-        // Every value the environment's surface has: a leg's roughness, metalness, reflection and colour, a world's wetness
+        // Every value the environment's surface has (a world's wetness; a colour is blended as one)
         for (const key in from) out[key] = key === 'color' ? AtmosphereTrack.lerpHex(from.color, to.color, t) : from[key] + (to[key] - from[key]) * t;
         return out;
     }
@@ -2516,8 +2180,9 @@ class Game {
 
     // What the world camera reads of the bike and the view mode (WorldCamera.update): the bike's smooth road
     // position, so nothing the camera reads from the route steps where the polyline turns. The carving swing is the
-    // legs' chase camera's (the lean shift with its lagged lateral term, and the look point pushed into the corner),
-    // with the same gains and lerps; WorldCamera applies it in its own boom frame and scales it down near the land.
+    // old procedural legs' chase camera's (the lean shift with its lagged lateral term, and the look point pushed into
+    // the corner), with the same gains and lerps; WorldCamera applies it in its own boom frame and scales it down near
+    // the land (tests/unit/world-camera-swing.test.js).
     worldCameraInput(vehiclePos, mode, follow) {
         const input = this.worldInput || (this.worldInput = { offset: {} });
         const v = this.vehicle;
@@ -2592,7 +2257,7 @@ class Game {
             this.hud.setSpeed(this.vehicle.getSpeed(), this.vehicle.maxSpeed * 2.237);
             this.hud.setGear(this.gearbox);
             this.hud.update(this.raceElapsed(), this.firstInputAt);
-            if (this.environment.isWorld) this.updateWorldHud();
+            this.updateWorldHud();
         }
 
         // Peripheral motion blur ramps in above ~45% of max speed
@@ -2704,12 +2369,12 @@ class Game {
     }
 
     // A finish counts toward the riders, the bikes and the legs only when it is a real one (Game.progressCounts):
-    // not in debug mode (TourSystem `unlockAll` saves nothing), not in free roam, not tuned, and on a world not
-    // after the debug skip, the free-fly camera or a read of `?worldData` (WorldEnvironment submitAllowed)
+    // not in debug mode (TourSystem `unlockAll` saves nothing), not in free roam, not tuned, and not after the debug
+    // skip, the free-fly camera or a read of `?worldData` (WorldEnvironment submitAllowed)
     progressCounts() {
         if (this.rideTuned || this.freeRoam) return false;
         const env = this.environment;
-        return !(env && env.isWorld) || !!env.submitAllowed;
+        return !env || !!env.submitAllowed;
     }
 
     // A world leg finished: the leg in the store that opens the next (TourSystem.markWorldLegFinished) and the
@@ -2722,7 +2387,7 @@ class Game {
         return bike ? { ...unlocks, bikes: [bike] } : unlocks;
     }
 
-    // The unlock block of a world finish card: the classic finish's panel (buildUnlockPanel), and until the next rider
+    // The unlock block of a world finish card: the unlock panel (buildUnlockPanel), and until the next rider
     // is in hand, how far away it is
     worldUnlockBlock() {
         const unlocks = this.worldUnlocks;
@@ -2760,274 +2425,16 @@ class Game {
     }
 
     showFinishScreen() {
-        if (this.environment && this.environment.isWorld) {
-            this.showWorldFinish();
-            return;
-        }
-        // Calculate final score with finish bonus
-        const distance = this.vehicle.getDistanceTraveled();
-        const timeSeconds = this.finishTime / 1000;
-        const averageSpeed = distance / timeSeconds * 3.6 * 0.621371; // mph
-        
-        // Calculate final position
-        let finalPosition = 1;
-        if (this.traffic && this.traffic.motorcycles) {
-            // Track progress, not world Z: half the course runs toward -Z
-            const playerProgress = Math.floor(this.environment.route.toUnits(this.vehicle.routeS || 0)) + (this.vehicle.segmentProgress || 0);
-            this.traffic.motorcycles.forEach(bike => {
-                const bikeProgress = Math.floor(bike.currentSegment || 0) + (bike.segmentProgress || 0);
-                if (bikeProgress > playerProgress) {
-                    finalPosition++;
-                }
-            });
-        }
-        const totalRacers = this.traffic ? this.traffic.motorcycles.length + 1 : 1;
-        const positionSuffix = finalPosition === 1 ? 'st' : finalPosition === 2 ? 'nd' : finalPosition === 3 ? 'rd' : 'th';
-        
-        // Add finish bonus to current score
-        const finishBonus = 1000 * this.comboMultiplier;
-        this.addScore(finishBonus);
-        
-        const totalScore = this.score;
-
-        const positionColor = finalPosition === 1 ? 'var(--c-gold)' : finalPosition === 2 ? '#d4dbe4' : finalPosition === 3 ? '#e09a5a' : 'var(--c-text)';
-
-        const isLastLeg = this.tourSystem.isLastLeg();
-        const titleText = isLastLeg ? 'TOUR COMPLETE!' : 'LEG COMPLETE!';
-
-        // Record progression: completing a leg unlocks the next leg and,
-        // at milestones, new riders. A tuned ride records nothing (progressCounts)
-        const finishedLeg = this.tourSystem.getCurrentLeg();
-        const counts = this.progressCounts();
-        let unlocks = { legs: [], characters: [] };
-        if (counts && finishedLeg && this.tourSystem.markLegCompleted) {
-            unlocks = this.tourSystem.markLegCompleted(finishedLeg.id);
-        }
-        // A ride finished on the rider's best open bike opens their next one (TourSystem.markRideFinished)
-        const newBike = counts && this.selectedCharacter && this.tourSystem.markRideFinished
-            ? this.tourSystem.markRideFinished(this.selectedCharacter.id, this.selectedBike()) : null;
-        if (newBike) unlocks = { ...unlocks, bikes: [newBike] };
-        const flow = TourSystem.finishFlow(unlocks, isLastLeg);
-
-        // Time is what ranks a run: compare it with the personal best (per
-        // board) and the record. Best splits are rewritten only by a full run
-        // that beat the best time.
-        const bestTimeKey = finishedLeg ? this.bestTimeKey(finishedLeg) : 'motorcycleBestTime';
-        const previousBest = parseFloat(localStorage.getItem(bestTimeKey) || '999999');
-        const previousBestMs = previousBest < 999999 ? previousBest * 1000 : NaN;
-        const boardMs = finishedLeg ? this.boardTimeMs(finishedLeg) : this.checkpointTimes[this.gateTotal() - 1];
-        const result = RaceTiming.finish(this.finishTime, previousBestMs, boardMs, this.record);
-        this.bestTime = previousBest;
-        if (result.isBest) {
-            this.bestTime = timeSeconds;
-            localStorage.setItem(bestTimeKey, timeSeconds.toString());
-            if (finishedLeg) {
-                RaceTiming.saveSplitsIfBest(localStorage, this.bestSplitsKey(finishedLeg), this.checkpointTimes, true, this.gateTotal());
-            }
-        }
-
-        const finishBanner = document.createElement('div');
-        finishBanner.id = 'finishBanner';
-        finishBanner.className = 'finish-banner';
-
-        const deltaSpan = ms => `<span class="delta-${RaceTiming.deltaClass(ms)}">${RaceTiming.formatDelta(ms)}</span>`;
-        const pbLine = result.pbDelta === null
-            ? `<div class="finish-best-badge">${UiIcons.svg('trophy')} FIRST BEST TIME SET</div>`
-            : result.isBest
-                ? `<div class="finish-best-badge">${UiIcons.svg('trophy')} NEW PERSONAL BEST ${deltaSpan(result.pbDelta)}</div>`
-                : `<div class="finish-delta">${deltaSpan(result.pbDelta)} <small>vs your best ${RaceTiming.formatTime(previousBestMs)}</small></div>`;
-        const escape = text => String(text).replace(/[&<>"']/g, c => `&#${c.charCodeAt(0)};`);
-        let recordLine = '';
-        const tableBoard = finishedLeg ? this.isTableBoard(finishedLeg) : false;
-        if (this.record && result.recordDelta !== null) {
-            // The board ranks the time to the last gate on the shared course
-            // and the finish-line time on a converted leg, so that is what is compared
-            recordLine = `<div class="finish-delta">${deltaSpan(result.recordDelta)} <small>vs record ${RaceTiming.formatTime(this.record.totalTime)} (${escape(this.record.playerName)})</small></div>`
-                + (tableBoard ? '' : `<div class="finish-board">Leaderboard time (to the last gate) ${RaceTiming.formatTime(result.boardTime)}</div>`);
-        } else if (this.record) {
-            recordLine = `<div class="finish-delta"><small>Record ${RaceTiming.formatTime(this.record.totalTime)} (${escape(this.record.playerName)})</small></div>`;
-        }
-
-        if (this.restarts > 0) {
-            recordLine += `<div class="finish-board">${this.restarts} ${this.restarts === 1 ? 'restart' : 'restarts'}, +${this.restarts * Game.RESTART_PENALTY_MS / 1000} s in your time</div>`;
-        }
-        if (this.leaderboardService && this.leaderboardService.unsupported) {
-            recordLine += '<div class="finish-board">Time saved on this device. Online board opens soon.</div>';
-        }
-
-        const unlockPanel = this.buildUnlockPanel(unlocks);
-        // Until the next bike is in hand, say how far away it is
-        const progress = flow.riders.length > 0 ? '' : this.tourSystem.unlockProgressText();
-        // `key`: the KeyboardEvent.code that presses it (js/modals.js)
-        const button = (id, cls, label, key = '') => `<button id="${id}" class="finish-btn ${cls}"${key ? ` data-key="${key}"` : ''}>${label}</button>`;
-        const tourButton = isLastLeg
-            ? button('restartTourBtn', flow.primary === 'restart-tour' ? 'primary' : 'secondary', 'RESTART TOUR')
-            : button('nextLegBtn', flow.primary === 'next-leg' ? 'primary' : 'secondary', '<u>N</u>EXT LEG →', 'KeyN');
-        const chooseButton = flow.primary === 'choose-rider'
-            ? button('chooseRiderBtn', 'primary', 'CHOOSE YOUR NEW BIKE →')
-            : '';
-
-        // Two blocks so a short landscape screen can put them side by side
-        finishBanner.innerHTML = `
-            <div class="finish-main">
-                <div class="finish-title">${titleText}</div>
-                <div class="finish-time-label">YOUR TIME</div>
-                <div class="finish-time">${RaceTiming.formatTime(this.finishTime)}</div>
-                <div class="finish-deltas">
-                    ${pbLine}
-                    ${recordLine}
-                </div>
-                <div class="finish-meta">
-                    <span style="color: ${positionColor};">${finalPosition}${positionSuffix}</span> of ${totalRacers} racers
-                    · ${HudRules.number(distance)} m · ${HudRules.number(averageSpeed, { digits: 1 })} mph avg
-                </div>
-                <div class="finish-style">Style bonus <strong>${HudRules.number(totalScore)}</strong> pts</div>
-            </div>
-            <div class="finish-side">
-                ${unlockPanel}
-                ${progress ? `<div class="finish-progress">${UiIcons.svg('unlock')} ${progress}</div>` : ''}
-                <div class="finish-buttons">
-                    ${chooseButton}
-                    ${tourButton}
-                    ${button('restartLegBtn', 'secondary', '<u>R</u>ESTART LEG', 'KeyR')}
-                    ${button('returnToMenuBtn', 'secondary', '<u>M</u>ENU', 'KeyM')}
-                </div>
-            </div>
-        `;
-
-        // The results card owns the screen: no HUD or touch controls behind it
-        if (this.hud) this.hud.clearTransient();
-        document.body.classList.add('run-over');
-        // Enter takes the default action: the stack focuses the primary button
-        Modals.open(finishBanner);
-
-        // Enable R key for restart
-        if (this.input) {
-            this.input.setMenuActive(true);
-        }
-
-        // Store whether leaderboard is active for later
-        const shouldShowLeaderboard = this.leaderboardService && this.leaderboardService.isActive();
-
-        // Add event listeners to buttons
-        document.getElementById('restartLegBtn').addEventListener('click', () => {
-            Modals.close(finishBanner);
-            // Disable R key when menu is closed
-            if (this.input) {
-                this.input.setMenuActive(false);
-            }
-
-            this.restartLeg();
-        });
-
-        document.getElementById('returnToMenuBtn').addEventListener('click', () => {
-            // Disable R key when menu is closed
-            if (this.input) {
-                this.input.setMenuActive(false);
-            }
-
-            // Cancel leaderboard session if active (returning to menu without submitting)
-            if (shouldShowLeaderboard) {
-                this.leaderboardService.cancelSession();
-            }
-
-            this.returnToMenu();
-        });
-
-        // Add event listener for next leg button (if not last leg)
-        if (!isLastLeg) {
-            const nextLegBtn = document.getElementById('nextLegBtn');
-            if (nextLegBtn) {
-                nextLegBtn.addEventListener('click', () => {
-                    // Disable R key when menu is closed
-                    if (this.input) {
-                        this.input.setMenuActive(false);
-                    }
-
-                    // Hide finish banner first
-                    Modals.close(finishBanner);
-
-                    // Show leaderboard entry if active, otherwise go straight to next leg
-                    if (shouldShowLeaderboard) {
-                        this.showLeaderboardEntryUI(() => {
-                            // Callback after leaderboard submission or cancel
-                            this.startNextLeg();
-                        });
-                    } else {
-                        this.startNextLeg();
-                    }
-                });
-            }
-        }
-
-        // A new bike: the default action takes the player to the rider screen
-        // with it focused, after the name entry when a run is submittable
-        const chooseRiderBtn = document.getElementById('chooseRiderBtn');
-        if (chooseRiderBtn) {
-            chooseRiderBtn.addEventListener('click', () => {
-                if (this.input) {
-                    this.input.setMenuActive(false);
-                }
-                Modals.close(finishBanner);
-                const open = () => this.returnToMenu({ riderId: flow.riders[0] });
-                if (shouldShowLeaderboard) {
-                    this.showLeaderboardEntryUI(open);
-                } else {
-                    open();
-                }
-            });
-        }
-
-
-        // Add event listener for restart tour button (if last leg)
-        if (isLastLeg) {
-            const restartTourBtn = document.getElementById('restartTourBtn');
-            if (restartTourBtn) {
-                restartTourBtn.addEventListener('click', () => {
-                    // Disable R key when menu is closed
-                    if (this.input) {
-                        this.input.setMenuActive(false);
-                    }
-
-                    // Hide finish banner first
-                    Modals.close(finishBanner);
-
-                    // Show leaderboard entry if active, otherwise go straight to first leg
-                    if (shouldShowLeaderboard) {
-                        this.showLeaderboardEntryUI(() => {
-                            // Callback after leaderboard submission or cancel
-                            this.startFirstLeg();
-                        });
-                    } else {
-                        this.startFirstLeg();
-                    }
-                });
-            }
-        }
-
-        // Update high score if this score is better
-        if (totalScore > this.highScore) {
-            this.highScore = totalScore;
-            localStorage.setItem('motorcycleHighScore', this.highScore.toString());
-        }
-
-        console.log(`COURSE FINISHED! Distance: ${distance.toFixed(0)}m, Time: ${timeSeconds.toFixed(1)}s, Score: ${totalScore}`);
+        this.showWorldFinish();
     }
 
     // The unlock moment on the finish screen: one card per unlocked leg or
-    // bike, with the bike drawn in its own colour and the leg in its light
+    // bike, with the bike drawn in its own colour
     buildUnlockPanel(unlocks) {
         const legs = (unlocks && unlocks.legs) || [];
         const characters = (unlocks && unlocks.characters) || [];
         const bikes = (unlocks && unlocks.bikes) || [];
         if (legs.length === 0 && characters.length === 0 && bikes.length === 0) return '';
-        const skies = {
-            dawn: ['#f6a96b', '#5b6fa8'],
-            golden: ['#f7c548', '#c86b28'],
-            twilight: ['#c86b9c', '#2b2f63'],
-            night: ['#26305c', '#070a1c'],
-            storm: ['#59677a', '#1e2530']
-        };
         // A new rider comes with their first bike; a rider's next bike is a card of the same kind
         const riderCards = [
             ...characters.map(c => ({ paint: parseInt(c.bikeColor), name: c.name, sub: c.bikeLabel })),
@@ -3051,7 +2458,7 @@ class Game {
                 </div>`;
         });
         const legCards = legs.map(leg => {
-            const sky = skies[leg.timeOfDay] || ['#4a9eff', '#1a2a4a'];
+            const sky = Game.UNLOCK_LEG_SKY;
             return `
                 <div class="unlock-card unlock-leg" style="--sky-top: ${sky[0]}; --sky-bottom: ${sky[1]};">
                     <div class="unlock-leg-art" aria-hidden="true"></div>
@@ -3095,89 +2502,9 @@ class Game {
         if (crash.s >= rule.mostS || (crash.s >= rule.leastS && crash.stillS >= rule.stillS)) this.restartFromCheckpoint('crash');
     }
 
-    // cause: what the rider hit, when the game knows it
+    // cause: what the rider hit, when the game knows it. A crash opens no card (beginWorldCrash)
     showCrashNotification(cause) {
-        if (this.environment && this.environment.isWorld) {
-            this.beginWorldCrash(cause);
-            return;
-        }
-        // A card over the upper half: the crashed bike stays in view below it
-        const crashNotification = document.createElement('div');
-        crashNotification.id = 'crashNotification';
-        crashNotification.className = 'run-card crash-card';
-        crashNotification.setAttribute('role', 'alertdialog');
-        crashNotification.setAttribute('aria-label', 'Crashed');
-        // After a gate the primary action is the save checkpoint; R still restarts the leg
-        const hasCheckpoint = !!this.lastCheckpointPosition;
-        const tip = hasCheckpoint
-            ? `<div class="crash-tip"><span class="kbd">C</span> back to the last checkpoint, +${Game.RESTART_PENALTY_MS / 1000} s</div>`
-            : '';
-        const checkpointButton = hasCheckpoint
-            ? `<button id="checkpointCrashBtn" class="btn btn-primary" data-key="KeyC"><u>C</u>heckpoint (+${Game.RESTART_PENALTY_MS / 1000} s)</button>`
-            : '';
-        crashNotification.innerHTML = `
-            <div class="crash-title">CRASHED</div>
-            <div class="crash-sub">${cause || 'Better luck next time!'}</div>
-            ${tip}
-            <div class="run-buttons">
-                ${checkpointButton}
-                <button id="restartCrashBtn" class="btn${hasCheckpoint ? '' : ' btn-primary'}" data-key="KeyR"><u>R</u>estart</button>
-                <button id="menuCrashBtn" class="btn" data-key="KeyM" data-menu><u>M</u>enu</button>
-            </div>
-        `;
-
-        if (this.hud) this.hud.clearTransient();
-        // A crash is not dismissed with Escape: the run waits on one of its buttons. P still pauses over it.
-        Modals.open(crashNotification, {
-            onKey: (event) => {
-                if (event.code !== 'KeyP' || event.repeat) return false;
-                this.pauseRace();
-                return true;
-            }
-        });
-
-        // Enable R key for restart
-        if (this.input) {
-            this.input.setMenuActive(true);
-        }
-
-        // Add event listeners to buttons
-        crashNotification.querySelector('#restartCrashBtn').addEventListener('click', () => {
-            const go = () => {
-                Modals.close(crashNotification);
-                // Disable R key when menu is closed
-                if (this.input) {
-                    this.input.setMenuActive(false);
-                }
-                this.restartLeg();
-            };
-            if (this.environment.isWorld) this.confirmWorldLeave(this.worldRestartAsk(), go);
-            else go();
-        });
-
-        const checkpointBtn = crashNotification.querySelector('#checkpointCrashBtn');
-        if (checkpointBtn) {
-            checkpointBtn.addEventListener('click', () => {
-                if (this.input) {
-                    this.input.setMenuActive(false);
-                }
-                this.restartFromCheckpoint('crash');
-            });
-        }
-
-        crashNotification.querySelector('#menuCrashBtn').addEventListener('click', () => {
-            const go = () => {
-                // Disable R key when menu is closed
-                if (this.input) {
-                    this.input.setMenuActive(false);
-                }
-                this.returnToMenu();
-            };
-            if (this.environment.isWorld) this.confirmWorldLeave(Game.WORLD_MENU_ASK, go);
-            else go();
-        });
-
-        console.log('Crash notification displayed');
+        this.beginWorldCrash(cause);
     }
 
     showLeaderboardEntryUI(onComplete) {
@@ -3305,136 +2632,9 @@ class Game {
         errorCloseBtn.addEventListener('click', errorCloseHandler);
     }
 
-    // Read-only leaderboard viewer, reachable from the leg-selector menu
-    // Local best times are kept per board, so a leg whose course changed
-    // starts a new record instead of inheriting one set on the old road
-    bestTimeKey(leg) {
-        return `motorcycleBestTime_${TourSystem.boardId(leg)}`;
-    }
-
-    bestSplitsKey(leg) {
-        return RaceTiming.splitsKey(TourSystem.boardId(leg));
-    }
-
-    // What the splits compare against: the local best splits now, and the
-    // online record once it arrives. The start never waits on the network,
-    // and a failed fetch only means no record comparison this run.
-    loadSplitReferences(leg) {
-        this.bestSplits = RaceTiming.loadSplits(localStorage, this.bestSplitsKey(leg), this.gateTotal());
-        this.record = null;
-        if (!this.leaderboardService) return;
-        const board = TourSystem.boardId(leg);
-        this.recordBoard = board;
-        this.leaderboardService.fetchLeaderboard(board, 10).then(result => {
-            // A leg change while the fetch was in flight makes this stale
-            if (this.recordBoard !== board) return;
-            if (result && result.success) {
-                this.record = RaceTiming.pickRecord(result.entries, this.gateTotal());
-            } else {
-                console.warn('Record unavailable for', board, result && result.error);
-            }
-        }).catch(error => console.warn('Record fetch failed for', board, error));
-    }
-
-    async showLeaderboardViewer(legId) {
-        const leg = this.tourSystem.getLegById(legId);
-        const legName = leg ? leg.name : legId;
-
-        // Remove any existing viewer
-        const existing = document.getElementById('leaderboardViewer');
-        if (existing) Modals.close(existing);
-
-        const overlay = document.createElement('div');
-        overlay.id = 'leaderboardViewer';
-        overlay.className = 'lb-viewer';
-
-        const panel = document.createElement('div');
-        panel.className = 'lb-panel';
-        const safeLegName = String(legName).replace(/[&<>"']/g, c => `&#${c.charCodeAt(0)};`);
-        panel.innerHTML = `
-            <h2 class="lb-title">${UiIcons.svg('trophy')} Best times</h2>
-            <div class="lb-leg">${safeLegName}</div>
-            <div id="leaderboardViewerBody" class="lb-body">Loading…</div>
-            <button id="leaderboardViewerClose" class="lb-close" data-key="Escape">Close</button>
-        `;
-        overlay.appendChild(panel);
-        Modals.open(overlay);
-
-        const close = () => Modals.close(overlay);
-        panel.querySelector('#leaderboardViewerClose').addEventListener('click', close);
-        overlay.addEventListener('click', (e) => {
-            if (e.target === overlay) close();
-        });
-
-        const body = panel.querySelector('#leaderboardViewerBody');
-
-        // Local best time always shows, even offline
-        const localBest = parseFloat(localStorage.getItem(this.bestTimeKey(legId)) || 'NaN');
-        const localBestHtml = Number.isFinite(localBest)
-            ? `<div class="lb-best">Your best: ${RaceTiming.formatTime(localBest * 1000)}</div>`
-            : '<div class="lb-best none">No personal best yet</div>';
-
-        if (!this.leaderboardService) {
-            body.innerHTML = localBestHtml +
-                '<div class="lb-note">Online leaderboard unavailable<br>(no connection to the leaderboard service)</div>';
-            return;
-        }
-
-        try {
-            const result = await this.leaderboardService.fetchLeaderboard(TourSystem.boardId(legId), 10);
-            if (result.success && result.entries && result.entries.length > 0) {
-                const rows = result.entries.map((entry, i) => {
-                    const rank = entry.rank !== undefined ? entry.rank : i + 1;
-                    const medal = `${rank}.`;
-                    const time = LeaderboardService.formatTime(entry.totalTime);
-                    const flag = entry.flagged ? ' ⚠' : '';
-                    // A restarted run shows its count beside the time
-                    const restarts = entry.restarts > 0 ? ` <small>${entry.restarts}R</small>` : '';
-                    return `<tr>
-                        <td class="lb-rank">${medal}</td>
-                        <td class="lb-name">${String(entry.playerName).replace(/[&<>"']/g, c => `&#${c.charCodeAt(0)};`)}</td>
-                        <td class="lb-time">${time}${restarts}${flag}</td>
-                    </tr>`;
-                }).join('');
-                body.innerHTML = localBestHtml +
-                    `<table class="lb-table">${rows}</table>`;
-            } else if (result.success) {
-                body.innerHTML = localBestHtml +
-                    '<div class="lb-note">No times posted yet - be the first!</div>';
-            } else {
-                body.innerHTML = localBestHtml +
-                    '<div class="lb-note">Could not load the online leaderboard</div>';
-            }
-        } catch (error) {
-            console.error('Leaderboard viewer error:', error);
-            body.innerHTML = localBestHtml +
-                '<div class="lb-note">Could not load the online leaderboard</div>';
-        }
-    }
-
-    // A full restart invalidates the current leaderboard run; start a fresh
-    // session so the new attempt is submittable
-    restartLeaderboardSession() {
-        if (!this.leaderboardService) return;
-        this.leaderboardService.cancelSession();
-        // A world starts no session until its boards exist (R6): a restart there only cancels, and a leg that
-        // was played earlier in the same page life must not give it a board
-        if (this.environment && this.environment.isWorld) return;
-        const leg = this.tourSystem.getCurrentLeg();
-        // A tuned ride stays without a session until the next ride begins (markTuned)
-        if (leg && !this.rideTuned) {
-            this.leaderboardService.startRun(TourSystem.boardId(leg), this.leaderboardExpectation(leg)).then(result => {
-                if (result !== true && result.error) {
-                    console.warn('Leaderboard session restart failed:', result.message);
-                }
-            }).catch(error => console.error('Failed to restart leaderboard session:', error));
-        }
-    }
-
     // ================= Menu showcases =================
-    // Live 3D backdrops behind the menu: an orbiting camera around the
-    // character bikes (rider screen) and a flythrough of the focused leg
-    // (track screen). One RAF loop serves both; it never runs during play.
+    // A live 3D backdrop behind the menu: an orbiting camera around the
+    // character bikes. Its RAF loop never runs during play.
 
     riderDisplayOrder() {
         const unlocks = this.tourSystem.characterUnlocks || {};
@@ -3455,7 +2655,6 @@ class Game {
     // shows it at once and fetches nothing. A bike whose files are not in yet is not drawn: the stand stays empty
     // until they arrive (BikeModels.dress fetches each file once and keeps it for the page)
     startRiderShowcase(focusId) {
-        this.endTrackPreview();
 
         if (!this.showcaseBikes) {
             // Always present the riders in clear daylight, whatever leg was
@@ -3624,50 +2823,6 @@ class Game {
         this.showShowcaseBikes();
     }
 
-    startTrackPreview(legIndex) {
-        this.endRiderShowcase();
-
-        const leg = this.tourSystem.legs[legIndex];
-        if (!leg) return;
-
-        // Every leg previews in full - locked ones are gated in the UI only
-        this.endTrackPreview();
-        // A converted leg builds the two sections round its preview point only
-        const course = typeof Course !== 'undefined' ? Course.forLeg(leg.id) : null;
-        const coursePivot = course ? (course.preview && course.preview.segment !== undefined ? course.preview.segment : Math.floor(course.segments / 2)) : null;
-        this.previewEnv = new Environment(this.scene, leg.startSegment, leg.endSegment, legIndex, course ? { window: coursePivot, preview: true } : {});
-        this.previewEnv.applyLandscapeConfig(this.previewEnv.config.look);
-
-        // The look of the part that holds the orbit pivot. The fog density is the
-        // landscape's own, written above: the preview makes no weather system.
-        const route = this.previewEnv.route;
-        const track = AtmosphereTrack.forLeg(leg, this.previewEnv.config, this.previewEnv);
-        const pivotSegment = course ? coursePivot : Math.floor((leg.startSegment + Math.min(leg.endSegment, route.unitCount - 1)) / 2);
-        this.snapAtmosphere(track, track.settledSegment(pivotSegment), { environment: this.previewEnv, weatherSystem: null });
-
-        // Orbit pivot: a scenic point mid-leg, viewed close-up - tight framing
-        // keeps the low-poly scenery reading well (wide aerials don't)
-        const mid = route.pointAtUnit(pivotSegment);
-        this.previewCenter = new THREE.Vector3(mid.x, (mid.y || 0), mid.z);
-        // How far out and how high the camera stands comes from the leg: a
-        // leg with trees beside the road has no room for the default 30
-        const preview = Terrain.legConfig(leg.id).preview || { radius: 30, height: 9 };
-        this.previewRadius = preview.radius;
-        this.previewHeight = preview.height;
-        // A full circle would pass through whatever stands beside the road:
-        // the camera instead sways through an arc about the road's normal on
-        // the leg's open side (the right unless `side` is -1), at the radius
-        // and height the leg gives above.
-        this.previewBaseAngle = -mid.heading + (preview.side === -1 ? Math.PI : 0);
-
-        this.graphics.fixColorSpaces();
-
-        this.previewLeg = leg;
-        this.previewOrbitAngle = this.previewOrbitAngle || 0;
-        this.showcaseMode = 'track';
-        this.startMenuShowcaseLoop();
-    }
-
     endRiderShowcase() {
         // The fill shines from where the ride puts it (setupLighting), not from the stage
         if (this.fillLight && this.showcaseBikes) {
@@ -3691,23 +2846,6 @@ class Game {
         }
     }
 
-    endTrackPreview() {
-        if (this.previewEnv) {
-            // Remove everything the preview environment added to the scene
-            const keep = this.persistentSceneObjects();
-            // Showcase bikes/platforms survive an env teardown
-            if (this.showcaseBikes) Object.values(this.showcaseBikes).forEach(v => keep.add(v.group));
-            if (this.showcaseExtras) this.showcaseExtras.forEach(o => keep.add(o));
-
-            this.scene.children.filter(c => !keep.has(c)).forEach(obj => {
-                this.scene.remove(obj);
-                this.disposeObject(obj);
-            });
-            this.previewEnv = null;
-            this.previewLeg = null;
-        }
-    }
-
     endMenuShowcase() {
         this.showcaseMode = null;
         // The ride's camera draws the whole window again
@@ -3718,7 +2856,6 @@ class Game {
             this.menuShowcaseRAF = null;
         }
         this.endRiderShowcase();
-        this.endTrackPreview();
     }
 
     startMenuShowcaseLoop() {
@@ -3733,7 +2870,7 @@ class Game {
             this.lastShowcaseTime = now;
 
             // The menu's stage box (HomeStage): the rider is drawn in it, beside the choices; no box in view, no frame
-            const fov = this.showcaseMode === 'rider' ? Game.SHOWCASE_FOV : 55;
+            const fov = Game.SHOWCASE_FOV;
             const view = this.frameHomeStage(dt, fov);
             if (!view) return;
             if (this.showcaseMode === 'rider' && this.showcaseBikes) {
@@ -3749,21 +2886,6 @@ class Game {
                 this.lightShowcase(target, this.camera.position);
                 this.camera.up.set(0, 1, 0);
                 this.camera.lookAt(target.x, target.y + 0.7, target.z);
-            } else if (this.showcaseMode === 'track' && this.previewEnv) {
-                // Slow swaying arc over the valley side of a mid-leg viewpoint,
-                // close to the road, looking back at the course and cliff
-                this.previewOrbitAngle += dt * 0.3;
-                const sway = Math.sin(this.previewOrbitAngle) * 1.0; // ±57 degrees
-                const angle = this.previewBaseAngle + sway;
-                const c = this.previewCenter;
-                const r = this.previewRadius;
-                this.camera.position.set(
-                    c.x + Math.cos(angle) * r,
-                    c.y + this.previewHeight,
-                    c.z + Math.sin(angle) * r
-                );
-                this.camera.up.set(0, 1, 0);
-                this.camera.lookAt(c.x, c.y + 1.5, c.z);
             }
 
             this.graphics.update(dt);
@@ -3940,7 +3062,7 @@ class Game {
 
         this.watchTuning();
 
-        // A world ride eases the steer keys (SteerEase); a leg has no physics object and keeps its own smoothing
+        // A world ride eases the steer keys (SteerEase); with no physics object the keys keep their own smoothing
         const world = this.vehicle && this.vehicle.worldPhysics;
         const steeringInput = this.input.getSteeringInput(world ? world.steerKeys : null);
         const throttleInput = this.input.getThrottleInput();
@@ -3954,7 +3076,7 @@ class Game {
 
         // Check for menu return. A world ride asks first and goes on until the answer is yes.
         if (this.input.checkMenuReturn()) {
-            if (this.environment.isWorld && !this.finished) {
+            if (!this.finished) {
                 this.confirmWorldLeave(Game.WORLD_MENU_ASK, () => this.returnToMenu());
             } else {
                 // Remove finish banner if it exists
@@ -3963,52 +3085,27 @@ class Game {
                     Modals.close(finishBanner);
                 }
 
-                // Remove crash notification if it exists
-                const crashNotification = document.getElementById('crashNotification');
-                if (crashNotification) {
-                    Modals.close(crashNotification);
-                }
-
                 // Disable menu keys when menu is closed
                 if (this.input) {
                     this.input.setMenuActive(false);
                 }
 
                 this.returnToMenu();
-                // Leg state was torn down and this loop cancelled - stop this frame
+                // The page goes to the menu - stop this frame
                 return;
             }
         }
 
         // Check for reset
-        if (this.input.checkReset()) {
-            if (this.environment.isWorld) this.confirmWorldLeave(this.worldRestartAsk(), () => this.restartLeg());
-            else this.restartLeg();
-        }
-
-        // Next leg (N key): only offered by the finish banner of a non-final
-        // leg, and it must take the same path as the button (name entry)
-        if (this.input.checkNextLeg()) {
-            const nextLegBtn = document.getElementById('nextLegBtn');
-            if (nextLegBtn) {
-                nextLegBtn.click();
-                return;
-            }
-        }
+        if (this.input.checkReset()) this.confirmWorldLeave(this.worldRestartAsk(), () => this.restartLeg());
 
         // Check for sound toggle
         if (this.input.checkSoundToggle()) {
             this.soundManager.toggleSound();
         }
 
-        // Check for checkpoint restart (a world ride: the restart in place)
-        if (this.input.checkCheckpointRestart()) {
-            if (this.lastCheckpointPosition || (this.environment && this.environment.isWorld)) {
-                this.restartFromCheckpoint();
-            } else {
-                console.log('No checkpoint available for restart');
-            }
-        }
+        // Check for checkpoint restart (the restart in place)
+        if (this.input.checkCheckpointRestart()) this.restartFromCheckpoint();
         
         // Check for camera mode switch
         if (this.input.checkCameraSwitch()) this.toggleCameraView();
@@ -4038,14 +3135,14 @@ class Game {
          // Play crash sound if we just crashed (but not if finished)
         if (!wasCrashed && this.vehicle.crashed && !this.finished) {
             this.soundManager.playCrashSound();
-            // A world crash says what caused it; a leg's card keeps its own line
+            // A world crash says what caused it
             this.showCrashNotification(this.vehicle.crashCause || undefined);
         }
 
         this.sayBrush();
         this.sayFoot();
 
-        if (this.environment.isWorld) this.updateWorldCrash(deltaTime);
+        this.updateWorldCrash(deltaTime);
 
         // Show wheelie help when over halfway round the course
         if (!this.hasShownWheelieHelp && !this.vehicle.crashed && !this.finished) {
@@ -4057,21 +3154,15 @@ class Game {
 
         // Check for checkpoint passes and jump scoring
         if (!this.vehicle.crashed && !this.finished) {
-            if (this.environment.isWorld) {
-                if (this.freeRoam) this.updateFreeRoam(deltaTime);
-                else this.updateWorldRun(deltaTime);
-                this.updateRoadworks();
-            }
-            this.checkCheckpoints();
+            if (this.freeRoam) this.updateFreeRoam(deltaTime);
+            else this.updateWorldRun(deltaTime);
+            this.updateRoadworks();
             this.checkJumpScoring();
             this.checkSpeedStreak(deltaTime);
             this.checkNearMisses();
         }
 
-        // Check for finish line crossing (a world's last station is the finish: WorldRun)
-        if (!this.finished && !this.vehicle.crashed && this.environment.finishGate && !this.environment.isWorld) {
-            if (this.inGate(this.environment.finishGate, this.vehicle.position)) this.finishRun();
-        }
+        // (the last station is the finish: WorldRun, updateWorldRun)
 
         // Check if vehicle is in roadworks zone
         let inRoadworksZone = false;
@@ -4168,38 +3259,6 @@ class Game {
             }
         }
         
-        // Update rockfalls and check for rock hits
-        if (this.rockfalls) {
-            const rockHit = this.rockfalls.update(deltaTime, this.vehicle);
-            if (rockHit && rockHit.hit && !this.vehicle.crashed && !this.finished &&
-                !(rockHit.rock.settled && this.vehicle.attemptHop(rockHit.rock.radius))) {
-                this.vehicle.crashed = true;
-                this.vehicle.crashWhy = 'obstacle';
-                this.vehicle.blockRider(rockHit.rock.mesh.position.x, rockHit.rock.mesh.position.z, rockHit.rock.radius);
-                this.vehicle.crashAngle = this.vehicle.leanAngle || 0.5;
-                const rockPos = rockHit.rock.mesh.position;
-                const impactDir = new THREE.Vector3(
-                    this.vehicle.position.x - rockPos.x,
-                    0,
-                    this.vehicle.position.z - rockPos.z
-                ).normalize();
-                this.vehicle.velocity = impactDir.multiplyScalar(Math.min(this.vehicle.speed * 0.4, 7));
-                this.vehicle.velocity.y = 3;
-                this.soundManager.playCrashSound();
-                this.showCrashNotification('Hit by a rockfall');
-                console.log('CRASHED! Hit by a rockfall');
-
-                if (this.particles) {
-                    this.particles.createDustCloud(rockPos.clone(), 1.2);
-                }
-            }
-        }
-
-        // Check cone collisions
-        if (!this.vehicle.crashed && this.cones) {
-            this.cones.checkCollision(this.vehicle.position, this.vehicle.velocity, this.vehicle.speed);
-        }
-
             // Consume fixed timestep from accumulated time
             this.accumulatedTime -= this.fixedTimeStep;
         } // End of fixed timestep physics loop
@@ -4219,24 +3278,14 @@ class Game {
         this.updateCamera(rawDeltaTime);
         this.updateUI();
 
-        // Animate knocked cones (slide/tumble)
-        if (this.cones) {
-            this.cones.update(rawDeltaTime);
-        }
-
-        // A converted leg builds the world ahead of the bike, a few
-        // milliseconds a frame, and keeps the section of the last passed gate
-        if (this.environment && this.environment.sections && this.vehicle) {
-            this.environment.update(Math.floor(this.environment.route.toUnits(this.vehicle.routeS || 0)), Game.SECTION_BUDGET_MS, this.lastCheckpointSegment);
-        }
         // A world streams by place round the bike, and guides the rider
-        if (this.environment && this.environment.isWorld && this.vehicle) {
+        if (this.environment && this.vehicle) {
             // (the ride distance it streams by is the accepted progress, not the raw projection; free roam has none, and
             // streams by the nearest place on the ride as well as round the bike: Game.worldStreamS)
             this.environment.update(this.vehicle.position, this.worldStreamS(), this.worldGuideState(rawDeltaTime), Game.SECTION_BUDGET_MS, simulatedThisFrame);
             this.updateTubeAdaptation(simulatedThisFrame);
             this.watchLand();
-            // (watchLand can hand the ride to the legs a task later; the world is still here this frame)
+            // (watchLand can end the ride a task later; the world is still here this frame)
             const marmots = this.environment && this.environment.marmots;
             if (marmots) {
                 const at = this.marmotBike || (this.marmotBike = {});
@@ -4380,11 +3429,9 @@ class Game {
         this.applyAtmosphere();
         // Everything a world draws takes the haze of this frame's air, also what a build step added since the last
         // frame, before it is first drawn (js/world/landshade.js)
-        if (this.environment.isWorld) LandShade.update(this.scene, this.graphics, this.weatherSystem, this.environment.group);
-        if (this.environment.isWorld) {
-            this.budgetWindow();
-            this.watchWindow(rawDeltaTime);
-        }
+        LandShade.update(this.scene, this.graphics, this.weatherSystem, this.environment.group);
+        this.budgetWindow();
+        this.watchWindow(rawDeltaTime);
         if (this.effectLevels) Effects.frame(this);
         this.graphics.update(
             rawDeltaTime,
@@ -4392,46 +3439,6 @@ class Game {
             this.weatherSystem ? (this.weatherSystem.flash || 0) * 0.35 : 0
         );
         this.graphics.render(this.scene, this.camera);
-    }
-
-    // Whether a position is on a gate: a short band along the road, and across
-    // it every metre a bike can legally be at that gate (gate.left and
-    // gate.right, set when the gate is built). Road space comes from the
-    // gate's own position and heading. There is no segment test: the band is
-    // the only guard, and it cannot reach another stretch of road.
-    inGate(gate, position) {
-        const dx = position.x - gate.position.x;
-        const dz = position.z - gate.position.z;
-        const along = dx * Math.sin(gate.heading) + dz * Math.cos(gate.heading);
-        const across = dx * Math.cos(gate.heading) - dz * Math.sin(gate.heading);
-        return Math.abs(along) < 5 && across > -gate.left && across < gate.right;
-    }
-
-    checkCheckpoints() {
-        if (!this.environment || !this.environment.checkpoints) return;
-        // A world passes its stations by progress along the route (WorldRun), never by position
-        if (this.environment.isWorld) return;
-        
-        for (let checkpoint of this.environment.checkpoints) {
-            if (!checkpoint.passed) {
-                const dx = this.vehicle.position.x - checkpoint.position.x;
-                const dz = this.vehicle.position.z - checkpoint.position.z;
-                const distance = Math.sqrt(dx * dx + dz * dz);
-
-                // Within the 16 unit circle round the gate (a rider on the
-                // road triggers it exactly where it always did: the high-pass
-                // board is not versioned), or anywhere across the gate's band,
-                // which reaches the rideable ground
-                if (distance < checkpoint.width || this.inGate(checkpoint, this.vehicle.position)) {
-                    // Check if this is the next expected checkpoint (in order)
-                    const totalCheckpoints = this.environment.checkpoints.length;
-                    if (checkpoint.index === this.lastCheckpointIndex + 1 ||
-                        (this.lastCheckpointIndex === totalCheckpoints - 1 && checkpoint.index === 0)) {
-                        this.passCheckpoint(checkpoint);
-                    }
-                }
-            }
-        }
     }
 
     // A gate passed in order: the restart point, the split, the points and the board record
@@ -4494,18 +3501,13 @@ class Game {
         this.finished = true;
         this.vehicle.finished = true; // Prevent crashes after finishing
         this.finishTime = finishTime;
-        // A world posts to no board until R6: a session left over from a leg must not take a world time
-        const world = this.environment && this.environment.isWorld;
-        if (!world && this.leaderboardService && this.leaderboardService.isActive() && this.leaderboardService.protocol === 2) {
-            this.leaderboardService.recordFinish(Math.round(finishTime))
-                .catch(error => console.error('Failed to record finish:', error));
-        }
+        // A world posts to no board until R6
         // A finished leg that may be trusted opens the next on the menu (WorldLegs), counts toward the riders and opens
-        // the rider's next bike, as a classic leg does (recordWorldFinish); its time is the map's best when it beats it
-        this.worldUnlocks = world && !this.freeRoam ? this.recordWorldFinish() : null;
-        if (world && typeof WorldMap !== 'undefined' && this.environment.stage && !this.freeRoam && this.environment.submitAllowed && !this.rideTuned) WorldMap.recordBest(this.environment.stage.id, finishTime);
+        // the rider's next bike (recordWorldFinish); its time is the map's best when it beats it
+        this.worldUnlocks = !this.freeRoam ? this.recordWorldFinish() : null;
+        if (typeof WorldMap !== 'undefined' && this.environment.stage && !this.freeRoam && this.environment.submitAllowed && !this.rideTuned) WorldMap.recordBest(this.environment.stage.id, finishTime);
         // A leg that ends at a stop rides on into it: the stop scene (js/world/stopscene.js) shows the card in its bar
-        if (world && !this.freeRoam && this.startStopScene()) return;
+        if (!this.freeRoam && this.startStopScene()) return;
         this.showFinishScreen();
     }
 
@@ -4931,18 +3933,17 @@ class Game {
     }
     
     // The split at a gate: elapsed time first, then the gap to the personal
-    // best split and, when the backend sends them, the record split
+    // best split and the record split, when there are ones (a world keeps none yet)
     showSplit(index, elapsed, points) {
         const total = this.gateTotal();
-        const split = RaceTiming.split(index, elapsed, this.bestSplits, this.record);
+        const split = RaceTiming.split(index, elapsed, null, null);
         const delta = (ms, label) => `<span class="delta-${RaceTiming.deltaClass(ms)}">${RaceTiming.formatDelta(ms)}<small>${label}</small></span>`;
         const deltas = [];
         if (split.pbDelta !== null) deltas.push(delta(split.pbDelta, 'PB'));
         if (split.recordDelta !== null) deltas.push(delta(split.recordDelta, 'REC'));
         if (deltas.length === 0) deltas.push('<span class="delta-none">FIRST SPLIT<small>SET A BEST</small></span>');
         this.lastSplit = split;
-        // A world counts the gates of the stage being ridden (updateWorldHud)
-        if (this.hud && !(this.environment && this.environment.isWorld)) this.hud.setGates(Math.min(total, index + 1), total);
+        // (the gates counted are the stage's own: updateWorldHud)
         const shown = this.hud && this.hud.showSplit(`
             <div class="split-gate">CHECKPOINT ${index + 1}/${total}</div>
             <div class="split-time">${RaceTiming.formatTime(elapsed)}</div>
@@ -4988,10 +3989,6 @@ class Game {
         showCallout(Game.FOOT_TEXT, 'warn', Game.CALLOUT_MS.foot);
     }
 
-    showConeHitNotification(points) {
-        showCallout(`Cone hit ${HudRules.number(points, { sign: true })}`, 'warn', 1000);
-    }
-    
     onWindowResize() {
         this.camera.aspect = window.innerWidth / window.innerHeight;
         this.camera.updateProjectionMatrix();
@@ -5385,11 +4382,11 @@ class Game {
             console.warn('Tuning: no storage, the values last for this page only:', error);
         }
         Tuning.start({ debug, storage });
-        if (debug && typeof TuningPanel !== 'undefined') this.tuningPanel = new TuningPanel(document, Tuning, { world: () => !this.environment || !!this.environment.isWorld, quality: this.quality ? this.qualityControl() : null });
+        if (debug && typeof TuningPanel !== 'undefined') this.tuningPanel = new TuningPanel(document, Tuning, { quality: this.quality ? this.qualityControl() : null });
     }
 
-    // The rider mode (js/ridermodes.js): the stored choice is in force from the page's start, on a world ride and on
-    // a classic leg alike, and the HUD's tag follows every change
+    // The rider mode (js/ridermodes.js): the stored choice is in force from the page's start, and the HUD's tag
+    // follows every change
     startRiderModes() {
         if (typeof RiderModes === 'undefined') return;
         let storage = null;
@@ -5428,17 +4425,15 @@ class Game {
     }
 
     // Each frame: a ride in which a multiplier was off 1 at any moment submits no time, and stays so after Reset
-    // until the next ride begins. A world is no longer trusted, as after the debug skip (WorldEnvironment
-    // submitAllowed); a classic leg loses its leaderboard session and gets none on a restart
+    // until the next ride begins. The world is no longer trusted, as after the debug skip (WorldEnvironment
+    // submitAllowed)
     watchTuning() {
         if (typeof Tuning === 'undefined' || !Tuning.ride.tuned) return;
         if (!this.rideTuned) {
             this.rideTuned = true;
             if (this.hud) this.hud.setTuned(true);
         }
-        const environment = this.environment;
-        if (environment && environment.isWorld) environment.trusted = false;
-        else if (this.leaderboardService && this.leaderboardService.isActive()) this.leaderboardService.cancelSession();
+        if (this.environment) this.environment.trusted = false;
     }
 
     // Debug mode (`?debug` in the page's address): every rider, bike and leg is open (TourSystem `unlockAll`), and N puts the bike DEBUG_SKIP_BEFORE_M before the next station of a
@@ -5507,73 +4502,13 @@ class Game {
         this.snapAtmosphere(this.atmosphereTrack, this.atmosphereUnit(s), { environment, weatherSystem: this.weatherSystem });
     }
 
-    // Back to the last gate passed, on a rolling start. Costs 5 s and a
-    // little style; the run stays valid.
-    // `reason` is why: 'key', 'crash' (the crash banner's button), 'off-route', 'cut' (WorldRun's cut rule), 'wrong-way' or 'resume'. Every reason
-    // costs the same 5 s. A world answers it in restartInPlace: there the rider goes on where the bike was.
+    // A restart for `reason`: 'key', 'crash', 'off-route', 'cut' (WorldRun's cut rule), 'wrong-way' or 'resume'. Every
+    // reason costs the same 5 s, and the rider goes on where the bike was (restartInPlace)
     restartFromCheckpoint(reason = 'key') {
         this.closeWorldConfirm();
-        // The run is over once the line is crossed; the finish banner owns
-        // what happens next
+        // The run is over once the line is crossed; the finish banner owns what happens next
         if (this.finished) return;
-        if (this.environment && this.environment.isWorld) {
-            this.restartInPlace(reason);
-            return;
-        }
-        if (!this.lastCheckpointPosition) {
-            console.log('No checkpoint position available for restart');
-            return;
-        }
-
-        console.log('Restarting from checkpoint at:', this.lastCheckpointPosition.x.toFixed(1), this.lastCheckpointPosition.z.toFixed(1));
-
-        // Apply penalty - lose some score (never below zero)
-        const penalty = Math.min(500, this.score);
-        this.addScore(-penalty);
-
-        // Reset vehicle to checkpoint position
-        // reset() clears every crash, fall, jump and wheelie flag; a partial
-        // reset here left the bike in cliff-fall state after a C restart
-        const distanceSoFar = this.vehicle.distanceTraveled;
-        this.vehicle.reset();
-        this.vehicle.distanceTraveled = distanceSoFar;
-        this.vehicle.position.copy(this.lastCheckpointPosition);
-        this.vehicle.yawAngle = this.lastCheckpointHeading;
-        this.vehicle.speed = 15; // Reset to moderate speed
-        this.vehicle.findNearestRoadSegment();
-        this.vehicle.updateMesh();
-        // A converted leg keeps the gate's section; the window round it is built now
-        if (this.environment && this.environment.sections) this.environment.ensureWindow(Math.floor(this.environment.route.toUnits(this.vehicle.routeS)), { sync: true });
-
-        // The crash banner belongs to the crash that was just undone
-        this.removeRunOverlays();
-
-        // The clock keeps running and the penalty is in every later signed
-        // time, so the run stays valid: a restart puts the rider back on a
-        // gate it already passed, it never moves it forward
-        this.penaltyMs += Game.RESTART_PENALTY_MS;
-        this.restarts++;
-        if (this.leaderboardService) this.leaderboardService.recordRestart();
-
-        // Knocked cones go back to their home positions; a rock must not wait
-        // on the gate; no car may be on top of the rider
-        if (this.cones) this.cones.reset();
-        if (this.rockfalls) this.rockfalls.reset();
-        if (this.traffic) this.traffic.clearAround(this.environment.route.toUnits(this.vehicle.routeS), Game.RESTART_CLEAR_SEGMENTS);
-
-        // A restart can jump back across an atmosphere zone; snap the light,
-        // sky, fog and weather to the gate instead of blending from the crash
-        if (this.atmosphereTrack) {
-            this.snapAtmosphere(this.atmosphereTrack, this.environment.route.toUnits(this.vehicle.routeS), {
-                environment: this.environment,
-                weatherSystem: this.weatherSystem
-            });
-        }
-
-        // Show notification
-        showCallout(`Back to checkpoint +${Game.RESTART_PENALTY_MS / 1000} s`, 'warn', Game.CALLOUT_MS.restart);
-
-        console.log('Restarted from checkpoint with penalty');
+        this.restartInPlace(reason);
     }
 }
 
@@ -5599,6 +4534,9 @@ Game.ROAM_TEXT = { edge: 'Edge of the map: turn back', key: 'Back on the road', 
 Game.SHOWCASE_LIGHT = { fill: 0.35, rim: 0 };
 Game.SHOWCASE_FOV = 38;
 Game.SHOWCASE_TURN = 0.22;
+
+// The sky of a new leg's card on the finish screen (Game.buildUnlockPanel), top and bottom
+Game.UNLOCK_LEG_SKY = ['#4a9eff', '#1a2a4a'];
 
 // What leaving a world ride for the menu asks
 Game.WORLD_MENU_ASK = 'Leave to the menu? Your ride so far is lost.';
@@ -5633,7 +4571,7 @@ Game.WORLD_RESTART_TEXT = {
     resume: 'Back on the road'
 };
 
-// A restart (at a leg's checkpoint, in place in a world) costs this much on the clock. functions/lib/boards.js
+// A restart (in place) costs this much on the clock. functions/lib/boards.js
 // holds the same number (LONG.penaltyMs); tests/unit/board-contract.test.js
 // fails when they differ.
 Game.RESTART_PENALTY_MS = 5000;
@@ -5643,7 +4581,7 @@ Game.CAMERA_RIDE_M = 4;
 Game.RESTART_CLEAR_SEGMENTS = 6;
 // Underscores the name box shows at most: it is 250 px wide, and a placeholder longer than this only spills past it
 Game.NAME_PLACEHOLDER_MAX = 8;
-// The most a frame spends building the sections ahead on a converted leg (one step at least)
+// The most a frame spends on the world's streaming and building (one step at least)
 Game.SECTION_BUDGET_MS = 4;
 
 // Short gameplay message in the HUD's call-out stack. tone: info, good, bad, warn or gold

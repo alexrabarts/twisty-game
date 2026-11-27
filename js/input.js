@@ -94,11 +94,6 @@ class InputHandler {
                 this.menuReturnPressed = true;
             }
 
-            // Check for next leg (only when menu is active)
-            if (event.code === 'KeyN' && this.menuActive) {
-                this.nextLegPressed = true;
-            }
-
             // Check for sound toggle (only when menu is not active)
             if (event.code === 'KeyM' && !this.menuActive) {
                 this.soundTogglePressed = true;
@@ -276,14 +271,6 @@ class InputHandler {
     checkMenuReturn() {
         if (this.menuReturnPressed) {
             this.menuReturnPressed = false;
-            return true;
-        }
-        return false;
-    }
-
-    checkNextLeg() {
-        if (this.nextLegPressed) {
-            this.nextLegPressed = false;
             return true;
         }
         return false;
