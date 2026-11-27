@@ -861,6 +861,7 @@ class RoadMesh {
     // both, and clear of every other carriageway (`guard`). Returns the segments walled on both sides (no pier there)
     static get LOW_DECK_M() { return 5; }
     static get LOW_DECK_SINK_M() { return 0.8; }
+    static get LOW_DECK_MIN_M() { return 0.3; }
     static lowDeck(out, rows, from, to, groundAt, guard, ends, style, girderIn = null) {
         const D = RoadMesh.DECK_M, I = StructureBuild.BEAM_IN_M, L = RoadMesh.LOW_DECK_M, sink = RoadMesh.LOW_DECK_SINK_M;
         // (each wall's top on the deck's own corner under its edge beam, or under a girder its box's web, as
@@ -873,8 +874,10 @@ class RoadMesh {
         const under = (row, sign, m) => {
             const e = edge(row, sign), o = edge(row, -sign), len = Math.hypot(o[0] - e[0], o[2] - e[2]) || 1;
             const p = [e[0] + (o[0] - e[0]) / len * m, e[1] - D, e[2] + (o[2] - e[2]) / len * m];
+            // (where the land stands at the deck's underside or over it there is no gap to close: a wall a hand high
+            // there made steps of a few centimetres, world-structures)
             const land = groundAt(p[0], p[2]);
-            return Number.isFinite(land) && p[1] - land < L ? { p, foot: land - sink } : null;
+            return Number.isFinite(land) && p[1] - land < L && p[1] - land > RoadMesh.LOW_DECK_MIN_M ? { p, foot: land - sink } : null;
         };
         const clear = (a, b) => !guard || [a, b].every(q => guard.clear(q.p[0], q.p[2], q.foot, q.p[1], 0.1));
         const color = RoadMesh.COLORS.deck, look = style.look;
