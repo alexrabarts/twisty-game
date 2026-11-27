@@ -262,6 +262,18 @@ The ladder is one object, `game.quality`:
 
 In debug mode (`?debug`), the HUD shows the level (`Q3 High (auto)`). The tuning panel (T) has a Graphics row: − and + step through Auto and each level. A fixed level is not a tuning. The ride keeps its time. The settings dialog's presets use `fix` and `release` in the same way.
 
+## No two materials fight in the depth buffer
+
+Two faces of different materials that lie in one plane, one over the other, fight in the depth buffer: the frame shows one, then the other, as the camera moves. The digger's grille lay in the face of its body (0 mm apart) and flickered into the yellow from the far chase (the owner, 2026-11-27). A part laid on another part (a grille, a pane, a strip, a door, a lamp) must do one of these:
+
+- **Stand off its face** by more than the depth buffer can part at the distance the game shows it. The camera has a near plane of 0.25 m and a 24 bit depth buffer, so one step of depth is d² / (0.25 × 2²⁴) at d metres: 0.9 mm at 60 m, 5.4 mm at 150 m. The rule needs 3 steps (`DEPTH_STEPS`) at the farthest distance where the overlap is still 4 pixels across (`SIDE_PX`), or at the distance the model is drawn to, whichever is nearer. The check prints the stand-off each place needs (`need`).
+- **Be cut into its face.** Leave the face out where the part goes (`Roadworks.wall` cuts a door or a window out of a box's side, and `Roadworks.pane` sets the pane into the hole with its reveals). Then no face lies under the part.
+- **Sink its back into the body.** A box whose back is inside the body and whose front stands proud has no face in the body's plane.
+
+`polygonOffset` is the last choice: a model file cannot carry it, and it moves the shadow too.
+
+`tools/model-stats.mjs` holds the check (`coplanar`): it finds faces of two looks (colour, texture, emission) with parallel normals (3°), less than `MAX_GAP` (5 cm) apart and over each other by more than 1 mm², and keeps a place only when a point of the overlap can see out of the model (faces back to back count only when both are double sided; a model that stands on the ground is not seen from under it). `node tools/model-stats.mjs --model <file.glb> [--draw <m>]` prints it for each level. `tests/unit/model-coplanar.test.js` runs it over every `assets/**/*.glb` at each level and over the roadworks' procedural props, each at the distance the game draws it (`DRAW`). Its `KNOWN` table holds the places that fight today, and the table may only shrink. On 2026-11-27 it found 115 places in 39 levels: the detailed bikes (1 to 7 a level, mostly a dark metal over a steel at 0 mm), the five procedural bikes, the hatchback's vent, the tunnel portal (19 places in `portal_arch`, one of them 32 m² of dressed stone over masonry at 0 mm) and the hill ride's bicycle and cart. The roadworks' props are at 0.
+
 ## What was not checked
 
 - No real phone was used. The CPU throttle makes the CPU slower, but the GPU was a computer's GPU. A phone GPU is slower and pays more for each pixel, the samples and the shadow map. Thus the measured order of the pixel ratio, the samples and the shadow map is a lower bound of their real cost.
