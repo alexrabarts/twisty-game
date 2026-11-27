@@ -25,13 +25,13 @@ const TONE_M = 25;
 const TONE_MAX = 2;
 const ANGLE_MAX = 2;
 
-// What fails today, per folder: open samples, and the worst mean tone step and normal step of a box. Only shrinks
+// What fails, per folder: open samples, and the worst mean tone step and normal step of a box. Only shrinks
 const KNOWN = {
-    'world/': { open: 10623, tone: 9.5, angle: 17.2 },
-    'worlds/gotthard/': { open: 12398, tone: 8.3, angle: 16.2 },
-    'worlds/airolo/': { open: 10816, tone: 9.2, angle: 18 },
-    'worlds/susten/': { open: 16598, tone: 9.5, angle: 17.5 },
-    'worlds/haslital/': { open: 16405, tone: 10.1, angle: 16.5 }
+    'world/': { open: 0, tone: 0, angle: 0 },
+    'worlds/gotthard/': { open: 0, tone: 0, angle: 0 },
+    'worlds/airolo/': { open: 0, tone: 0, angle: 0 },
+    'worlds/susten/': { open: 0, tone: 0, angle: 0 },
+    'worlds/haslital/': { open: 0, tone: 0, angle: 0 }
 };
 
 // The triangles of a grid mesh hashed by plan, for the top drawn at (x, z) with its colour and normal
