@@ -15,8 +15,8 @@ const FAR = { x: 1e9, y: 0, z: 1e9 };
 // `frameS(k)` rides it as the game draws it: the k-th drawn frame lasts that many seconds, the ride steps at 60 a second
 // as many times as the frames' time holds (0, 1 or more a frame), and each drawn frame puts traffic between its last two
 // steps (Traffic.drawn) and calls `onDraw({t, alpha, traffic, riders, proxy, playerS, drawnPlayer})`, where drawnPlayer
-// (and drawnYaw) is the player's position (and heading) drawn the same way (Vehicle.applyRenderInterpolation).
-export function groupRide(game, env, { rider, seed = 11, at = null, player = null, cars = false, seconds = 600, onFrame = null, until = null, frameS = null, onDraw = null }) {
+// (and drawnYaw) is the player's position (and heading) drawn the same way (Vehicle.applyRenderInterpolation). `standing` starts the crew at rest.
+export function groupRide(game, env, { rider, seed = 11, at = null, player = null, cars = false, seconds = 600, onFrame = null, until = null, frameS = null, onDraw = null, standing = false }) {
     const { THREE, Traffic, Roadworks } = game;
     const route = env.route, works = env.roadworks;
     const sOf = v => route.fromUnits(v.currentSegment + v.segmentProgress);
@@ -38,6 +38,8 @@ export function groupRide(game, env, { rider, seed = 11, at = null, player = nul
             const order = riders.slice().sort((a, b) => a.character.place - b.character.place);
             order.forEach((bike, k) => putAt(bike, route, at[k]));
         }
+        // (the crew stands where it was put, as in a car park's bays, and moves off from there)
+        if (standing) for (const bike of riders) bike.currentSpeed = 0;
         let proxy = null, mine = null;
         if (player) {
             proxy = new AIMotorcycle(new THREE.Scene(), env, { direction: 1, speed: 0, startSegment: 0 });

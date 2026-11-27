@@ -221,6 +221,18 @@ const GROUP = {
     // past its plan drops back to backM behind the other before it swings in. The player is passed only at playerMs or
     // more and on its lane line (within bandM of it)
     pass: { lookM: 35, gainMs: 6, gainMinMs: 2, roomM: 25, slackM: 60, backM: 3, apartM: 120, curveMax: 0.012, hairpinMax: 0.02, stepM: 5, carMs: 12, sightM: 60, swingM: 2.2, inM: 16, acrossM: 0.4, clearM: 5, yield: 0.9, letM: 100, letS: 8, byMaxM: 220, playerMs: 4, bandM: 0.6 },
+    // Moving off (the owner, 2026-11-27: "each rider should have a delay so they don't start moving until some time
+    // after the bike in front ... look unnatural like a train"). A rider that has stood (slower than standMs for
+    // stoodS) starts only once the bike in front of it in its queue (the nearest rider or player ahead within queueM;
+    // in a stopping place, the last rider to leave it) has moved off and has both ridden its gap and had its delay:
+    // gapM metres from where it stood and delayS seconds since it moved. The delay is from the rider's daring trait
+    // (daring 5, eager, delayS[1]; daring 1, careful, delayS[0]), the gap from its time gap (gapS from gapFor[0] to
+    // gapFor[1] takes gapM[0] to gapM[1]); each is moved by up to `spread` of it, stable per rider (its place). A rider
+    // also stays standing behind a bike in front that still stands. Nothing waits for a player behind it. The band
+    // asked for (0.8 to 2 s, 4 to 8 m) left the riders so spaced out after each light that on two seeds of five the
+    // order never changed and nobody passed from place order; at 0.5 to 1.2 s and 3 to 6 m none did that the group
+    // did not already do without the move-off
+    moveOff: { standMs: 0.3, stoodS: 0.5, queueM: 30, delayS: [1.2, 0.5], gapM: [3, 6], gapFor: [1.4, 4.5], spread: 0.15 },
     // A rider is off the road (in no line and no queue) while it stands in a place, or while its box, as its offset
     // turns it, is clearM or more clear of a bike on its lane line. One waiting on the roadside is on the road
     aside: { clearM: 0.25 }
@@ -287,6 +299,10 @@ class CrewGroup {
         this.standS = 0;
         this.lead = null;
         this.leadPace = null;
+        // The group's clock, the player's move-off and the last rider to leave each place (GROUP.moveOff)
+        this.clock = 0;
+        this.go = { stood: null, stoodT: 0, goT: null, goS: 0 };
+        this.lastOut = new Map();
         this.player = null;
         this.held = 0;
         this.kindSample = {};
@@ -342,6 +358,17 @@ class CrewGroup {
         ride.side = random() < 0.5 ? -1 : 1;
         ride.swapT = R.swapS[0] + (R.swapS[1] - R.swapS[0]) * random();
         ride.driftTo = 0;
+        // Its move-off (GROUP.moveOff): no draw, so the streams ride as before
+        const O = GROUP.moveOff, own = ride.own;
+        const lean = (((ride.place * 0.6180339887) % 1) * 2 - 1) * O.spread;
+        const eager = Math.max(0, Math.min(1, (daring - 1) / 4));
+        ride.goDelayS = (O.delayS[0] + (O.delayS[1] - O.delayS[0]) * eager) * (1 + lean);
+        const far = Math.max(0, Math.min(1, ((own ? own.gapS : 2) - O.gapFor[0]) / (O.gapFor[1] - O.gapFor[0])));
+        ride.goGapM = (O.gapM[0] + (O.gapM[1] - O.gapM[0]) * far) * (1 - lean);
+        ride.stoodT = 0;
+        ride.stood = null;
+        ride.goT = null;
+        ride.goS = 0;
     }
 
     // The metres an eased move of `delta` across takes at `speed` within its caps (GROUP.move): a smootherstep over T
@@ -393,6 +420,10 @@ class CrewGroup {
             ride.bike.takePace(route);
         }
         this.watchPlayer(dt, player);
+        this.clock += dt;
+        for (const ride of this.riders) CrewGroup.watchGo(ride, ride.bike.currentSpeed || 0, ride.s, dt, this.clock);
+        if (this.lead) CrewGroup.watchGo(this.go, this.lead.speed, this.lead.s, dt, this.clock);
+        else { this.go.stood = null; this.go.goT = null; }
         // The player's pace for a rider too far ahead of it (GROUP.ahead): its speed eased over paceS
         if (this.lead && !this.halted) this.leadPace = this.leadPace === null ? this.lead.speed : this.leadPace + (this.lead.speed - this.leadPace) * Math.min(1, dt / GROUP.ahead.paceS);
         else if (!this.lead) this.leadPace = null;
@@ -533,9 +564,55 @@ class CrewGroup {
             // (it moves back onto its lane at a crawl, so its move across keeps within GROUP.move.place)
             ride.capMs = GROUP.far.creepMs;
         }
+        if (!ride.stand && !ride.aside && (ride.state === 'ride' || ride.state === 'hold') && this.waitsToGo(ride)) ride.stand = true;
         this.paceOf(ride, dt);
         this.holdOf(ride);
         this.roadOf(ride, dt, tick);
+    }
+
+    // Whether one (a rider, or the player's `go`) stands or has moved off, and when and where it moved off
+    static watchGo(one, speed, s, dt, clock) {
+        const O = GROUP.moveOff;
+        if (one.stood === null) {
+            one.stood = speed < O.standMs;
+            one.stoodT = one.stood ? O.stoodS : 0;
+            return;
+        }
+        if (speed < O.standMs) {
+            one.stoodT += dt;
+            if (one.stoodT >= O.stoodS && !one.stood) {
+                one.stood = true;
+                one.goT = null;
+            }
+            return;
+        }
+        one.stoodT = 0;
+        if (!one.stood) return;
+        one.stood = false;
+        one.goT = clock;
+        one.goS = s;
+    }
+
+    // Whether `front` (a rider, or the player's `go`) is still moving off for a rider behind it: it stands, or it moved
+    // off less than the rider's delay ago or less than its gap from where it stood (GROUP.moveOff)
+    launching(ride, front, s, standing) {
+        if (front.stood) return standing;
+        return front.goT !== null && (this.clock - front.goT < ride.goDelayS || s - front.goS < ride.goGapM);
+    }
+
+    // A rider that stood on the road waits to move off until the bike in front of it in its queue has (GROUP.moveOff)
+    waitsToGo(ride) {
+        const O = GROUP.moveOff;
+        if (!ride.stood) return false;
+        let front = null, ahead = Infinity;
+        for (const o of this.riders) {
+            if (o === ride || o.aside || !o.bike.bikeGroup.visible || (o.state !== 'ride' && o.state !== 'hold')) continue;
+            const d = o.s - ride.s;
+            if (d > 0 && d <= O.queueM && d < ahead) { ahead = d; front = o; }
+        }
+        // (the player in front: a player who stands holds it by the following rule and the group's hold, not here)
+        if (this.lead && this.lead.s > ride.s && this.lead.s - ride.s <= O.queueM && this.lead.s - ride.s < ahead) return this.launching(ride, this.go, this.lead.s, false);
+        return !!front && this.launching(ride, front, front.s, true);
     }
 
     // The rider's mood walks on (GROUP.mood), and with it the place it wants in the group
@@ -925,6 +1002,10 @@ class CrewGroup {
         // (one that waited for a player who was too far behind it waits maxS at the most: the player may ride away)
         else ready = (!this.halted && !!this.lead && this.lead.s > ride.at.s + J.joinM) || (ride.why === 'ahead' && ride.waitedS > GROUP.ahead.maxS);
         if (!ready || !this.clearToGo(ride)) return;
+        // (the last rider to leave the place has moved off and opened its gap: GROUP.moveOff)
+        const last = ride.at.place ? this.lastOut.get(ride.at.place) : null;
+        if (last && last.ride !== ride && (last.ride.state === 'out' || last.ride.state === 'ride') && Math.abs(last.ride.s - ride.s) < 2 * GROUP.moveOff.queueM && this.launching(ride, last.ride, last.ride.s, last.ride.state === 'out')) return;
+        if (ride.at.place) this.lastOut.set(ride.at.place, { ride });
         ride.state = 'out';
         ride.stand = false;
         ride.at.place = null;
