@@ -1347,3 +1347,9 @@ One job at a time, in the order A to H. Each entry: the job, the commit, what th
 - world-offroad-map: af878c6's tip of a rider who cannot reach the ground (Vehicle.FOOT_REACH) is a cause shown to the rider; the top off-road bike's rider is one (behind the wall at s 2980).
 - world-tunnels: the file ran out of its 4 GB heap on the fifth or sixth stage. The tunnel window gridded every mesh in the streamer's window (3.8 GB on goeschenen-susten alone); it now grids only the meshes in reach of the bike and drops what it did not read, and each stage has its own game. Same places read per stage; 1.9 GB peak over ten stages.
 - Still red, not in these files: tuning-defaults' link-floor test, from d181ba6 (the fast scripted ride crashes into a parapet about 0.35 m past the edge near s 7890, both lanes).
+
+## Leg 1 holds the morning light longer
+
+- The ask (the owner, 2026-11-27): keep the morning sun longer on the first leg; it changed too soon.
+- Change: the dawn part of `airolo-lookout` now runs to 0.4 (s 4,280 m), not 0.16 (s 1,710 m). The 1.5 km blend now starts at about s 3,530 m.
+- Check: `world-looks`, `atmosphere-track`, `world-road-look` pass.

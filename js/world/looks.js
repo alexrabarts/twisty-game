@@ -38,11 +38,12 @@ const WorldLooks = {
     // The tour (js/world/tour.js). Leg 1, Airolo (1,184 m) up the modern pass road to the lookout (1,931 m), 10.7 km:
     // clear all the way, as every photo within 1 km of it (three trips, September and July mornings and one late
     // afternoon: blue sky with fair-weather cumulus, no cloud on the road). It starts in the low light of the morning
-    // in the valley and is full day from 0.16 (s 1,710 m, the first ramps). (The lookout's own light was tried as the
-    // golden hour from 0.8: the mid slopes went 20 points yellower than the photos)
+    // and turns to full day at 0.4 (s 4,280 m), so the morning holds up the first hairpins; at 0.16 the owner found it
+    // went too soon. (The lookout's own light was tried as the golden hour from 0.8: the mid slopes went 20 points
+    // yellower than the photos)
     'airolo-lookout': [
-        { from: 0, to: 0.16, look: { ...WORLD_LOOK_BASE, timeOfDay: 'dawn', weather: 'clear' } },
-        { from: 0.16, to: 1, look: { ...WORLD_LOOK_BASE, weather: 'clear' } }
+        { from: 0, to: 0.4, look: { ...WORLD_LOOK_BASE, timeOfDay: 'dawn', weather: 'clear' } },
+        { from: 0.4, to: 1, look: { ...WORLD_LOOK_BASE, weather: 'clear' } }
     ],
     // Leg 2, the lookout over the summit to Andermatt: gotthard-north the other way, its two changes at the same places
     // (the cloud on the summit plateau and through the galleries, clear down the north side)
