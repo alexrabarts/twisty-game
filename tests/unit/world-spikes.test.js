@@ -313,7 +313,7 @@ const KNOWN = {
     'goeschenen-susten': { beside: 149, setback: 1479 },
     'susten-gadmen': { beside: 333, setback: 1082 },
     // worlds/haslital (legs 6 to 8, 2026-11-27): each kind over the Tremola's limits, as an exact count
-    'gadmen-innertkirchen': { setback: 656, ends: 1, flaps: 3, proud: 1, thin: 1, low: 1 },
+    'gadmen-innertkirchen': { setback: 656, ends: 1, flaps: 2, proud: 1, thin: 1, low: 1 },
     'innertkirchen-guttannen': { bare: 4 },
     'guttannen-grimsel': { flaps: 3, low: 3 }
 };
