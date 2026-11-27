@@ -67,6 +67,23 @@ const WorldLooks = {
         { from: 0, to: 0.1, look: { ...WORLD_LOOK_BASE, timeOfDay: 'dawn', weather: 'clear' } },
         { from: 0.1, to: 1, look: { ...WORLD_LOOK_BASE, weather: 'clear' } }
     ],
+    // Legs 6 to 8 (worlds/haslital): clear all the way, as every photo within 1 km of them (two trips, September, late
+    // morning to mid afternoon: blue sky with fair-weather cumulus). Leg 6 down to Innertkirchen, 12.4 km, in the
+    // morning's low light for its first part, as legs 3 to 5; leg 7 up the Haslital to Guttannen, 8.1 km, in a warmer
+    // light over its last 1.6 km into the village (its photos stand at its start); leg 8 up to the Grimsel pass,
+    // 17.5 km, out of that light in its first 1.7 km (its photos stand near the pass)
+    'gadmen-innertkirchen': [
+        { from: 0, to: 0.15, look: { ...WORLD_LOOK_BASE, timeOfDay: 'dawn', weather: 'clear' } },
+        { from: 0.15, to: 1, look: { ...WORLD_LOOK_BASE, weather: 'clear' } }
+    ],
+    'innertkirchen-guttannen': [
+        { from: 0, to: 0.8, look: { ...WORLD_LOOK_BASE, weather: 'clear' } },
+        { from: 0.8, to: 1, look: { ...WORLD_LOOK_BASE, timeOfDay: 'golden', weather: 'clear' } }
+    ],
+    'guttannen-grimsel': [
+        { from: 0, to: 0.1, look: { ...WORLD_LOOK_BASE, timeOfDay: 'golden', weather: 'clear' } },
+        { from: 0.1, to: 1, look: { ...WORLD_LOOK_BASE, weather: 'clear' } }
+    ],
     // Airolo (1,184 m) up the Tremola to the Gotthard summit (2,104 m). Clear in the Leventina valley, cloud
     // building over the first ramps (a thin mist, the sky closing over), and rain from the middle of the climb: the
     // boundary at 0.53 (s 6,989 m, road 1,677 m) blends over 1.5 km, so the first drops fall at s 6,240 m
@@ -138,7 +155,10 @@ Object.defineProperties(WorldLooks, {
             'lookout-andermatt': Object.freeze({ from: 'gotthard-north', photos: 0 }),
             'andermatt-goeschenen': Object.freeze({ from: 'gotthard-north', photos: 0 }),
             'goeschenen-susten': Object.freeze({ from: 'gotthard-north', photos: 0 }),
-            'susten-gadmen': Object.freeze({ from: 'gotthard-north', photos: 0 })
+            'susten-gadmen': Object.freeze({ from: 'gotthard-north', photos: 0 }),
+            'gadmen-innertkirchen': Object.freeze({ from: 'gotthard-north', photos: 0 }),
+            'innertkirchen-guttannen': Object.freeze({ from: 'gotthard-north', photos: 0 }),
+            'guttannen-grimsel': Object.freeze({ from: 'gotthard-north', photos: 0 })
         })
     },
     // The look of each stage's land, haze and sky, measured on the photos within 1 km of it (tools/world/photomatch.mjs
@@ -179,7 +199,10 @@ Object.defineProperties(WorldLooks, {
             // to 54.5, from 3 km 75.6 to 55.4, 0.6 to 3 km 53.6 to 36.9, near 49.7 to 47.3; skyline 0.82 degrees
             'andermatt-goeschenen': Object.freeze({ from: 'airolo-lookout', palette: Object.freeze({ grass: [0.33, 0.31, 0.2], dry: [0.44, 0.39, 0.26], rock: [0.33, 0.33, 0.32], scree: [0.42, 0.41, 0.38] }), photos: 15 }),
             'goeschenen-susten': Object.freeze({ from: 'airolo-lookout', sceneryScale: 1, photos: 17 }),
-            'susten-gadmen': Object.freeze({ from: 'airolo-lookout', sceneryScale: 1, photos: 22 })
+            'susten-gadmen': Object.freeze({ from: 'airolo-lookout', sceneryScale: 1, photos: 22 }),
+            'gadmen-innertkirchen': Object.freeze({ from: 'airolo-lookout', palette: Object.freeze({ grass: [0.33, 0.31, 0.2], dry: [0.44, 0.39, 0.26], rock: [0.5, 0.48, 0.44], scree: [0.56, 0.54, 0.5] }), sceneryScale: 1, photos: 12 }),
+            'innertkirchen-guttannen': Object.freeze({ from: 'gadmen-innertkirchen', photos: 0 }),
+            'guttannen-grimsel': Object.freeze({ from: 'airolo-lookout', hazePerM: 1 / 9000, palette: Object.freeze({ grass: [0.3, 0.31, 0.22], dry: [0.36, 0.35, 0.3], rock: [0.3, 0.3, 0.29], scree: [0.4, 0.39, 0.36], water: [0.45, 0.5, 0.45] }), sceneryScale: 1, photos: 2 })
         })
     },
     // A stage's view: its own row over its `from` stage's, or {} (the shared values)
