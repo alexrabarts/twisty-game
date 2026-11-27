@@ -445,7 +445,8 @@ const BikeModels = (() => {
     const keep = !!known.keepFileColours;
     const bike = far ? { levels: [file.levels[file.levels.length - 1]] } : file;
     const level = bike.levels[0];
-    const before = [...group.children];
+    // (the patches under the tyres are the bike's whatever it is drawn from: ContactShadow)
+    const before = group.children.filter((child) => !child.userData.contactShadow);
     const kept = new Set(Object.values(palette).filter((value) => value && value.isMaterial));
     const finish = finishes(vehicle, keep);
 

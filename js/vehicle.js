@@ -779,6 +779,8 @@ class Vehicle {
         this.riderStandHeight = kind.stand;
 
         this.scene.add(this.group);
+        // A soft patch under each tyre where it meets the ground (ContactShadow)
+        if (typeof ContactShadow !== 'undefined') ContactShadow.attach(this);
 
         // The Blender-made bike and rider take the place of the parts built
         // above once their files are in; until then, and if a file fails,
@@ -1658,7 +1660,7 @@ class Vehicle {
     // updateMesh() (contract: this.brakeLight.material.emissive)
     buildBrakeLight(x, y, z, tiltX = 0) {
         const brakeMaterial = new THREE.MeshStandardMaterial({
-            color: 0xc40b0b, emissive: 0x000000, emissiveIntensity: 0.0,
+            color: 0xc40b0b, emissive: Vehicle.TAIL_LIGHT, emissiveIntensity: Vehicle.TAIL_LIGHT_INTENSITY,
             roughness: 0.15, metalness: 0.2
         });
         this.brakeLight = new THREE.Mesh(new THREE.BoxGeometry(0.1, 0.045, 0.035), brakeMaterial);
@@ -3980,8 +3982,9 @@ class Vehicle {
             this.brakeLight.material.emissive.setHex(0xff0000);
             this.brakeLight.material.emissiveIntensity = 1.0;
         } else {
-            this.brakeLight.material.emissive.setHex(0x000000);
-            this.brakeLight.material.emissiveIntensity = 0.0;
+            // The tail light is on while riding, as on a road bike, and brighter under braking
+            this.brakeLight.material.emissive.setHex(Vehicle.TAIL_LIGHT);
+            this.brakeLight.material.emissiveIntensity = Vehicle.TAIL_LIGHT_INTENSITY;
         }
         this.previousSpeed = this.speed;
         this.updateFooting();
@@ -5739,6 +5742,10 @@ Vehicle.mirrorParts = (group, rider) => {
 Vehicle.LEFT = typeof Route !== 'undefined' ? Route.LEFT : 1;
 // The share of the steering angle the front end is drawn turned by, and the axle a wheel spins about
 Vehicle.STEER_SHOWN = 0.5;
+// The tail light while riding (the lens's glow; braking turns it to full red): dark, the lens read as no light at all
+// from behind (the critic panel, bike15)
+Vehicle.TAIL_LIGHT = 0xb00000;
+Vehicle.TAIL_LIGHT_INTENSITY = 1.0;
 // The drawn handlebar at speed (Vehicle.shownBar): `counter` s, the bar angle against each rad/s of roll (a full roll
 // rate of 1.15 rad/s shows 8 degrees), at most counterMax; at most intoMax into the turn at a held lean; the roll rate
 // is smoothed over `lag` s; under directSpeed m/s the drawn bar goes over to the steering angle

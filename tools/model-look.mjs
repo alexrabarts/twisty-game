@@ -22,7 +22,7 @@
 //   node tools/model-look.mjs --sheet <dir>=<label>,<dir>=<label>[,...] --out <dir> [--views close] [--crop x,y,w,h --crop-name wheel]
 //
 // --set names a value of the scene: `<material>.<color|roughness|metalness|envMapIntensity|emissiveIntensity>=<value>`
-// on the subject's materials of that name (`*` for all of them; `<map>=none` takes a map away), `exposure=<v>` (tone mapping), `sun=<v>` (the sun's intensity). --file and
+// on the subject's materials of that name (`*` for all of them; `<map>=none` takes a map away), `exposure=<v>` (tone mapping), `sun=<v>` (the sun's intensity), `rim=<v>` and `fill=<v>` (the stage's, Game.SHOWCASE_LIGHT). --file and
 // --far draw a candidate file in place of the bike's own (served from where it lies; the repo is not touched).
 // --sheet lays the same views of several runs side by side, each column labelled, one sheet per view and one of all.
 // Never lets a page reach production. Exit: 0 pictures saved, 1 a step failed, 2 no Chrome.
@@ -169,6 +169,7 @@ async function stage(spec) {
     for (const [key, value] of Object.entries(spec.sets)) {
         if (key === 'exposure') { g.renderer.toneMappingExposure = value; continue; }
         if (key === 'sun') { g.directionalLight.intensity = value; continue; }
+        if (key === 'rim' || key === 'fill') { Game.SHOWCASE_LIGHT[key] = value; continue; }
         const [name, prop] = key.split('.');
         // (`*` names every material; `none` takes a map away, to find which map a fault comes from)
         const hits = [...materials.values()].filter(m => (name === '*' || m.name === name) && prop in m);
@@ -242,10 +243,8 @@ function shoot(view) {
     if (offset) cam.setViewOffset(window.__look.size.w, window.__look.size.h, offset.offsetX, offset.offsetY, window.__look.size.w, window.__look.size.h);
     cam.lookAt(look);
     cam.updateProjectionMatrix();
-    // The sun and its shadow frustum on the stage, as the menu loop sets them
-    g.directionalLight.position.set(spot.x + 30, spot.y + 45, spot.z + 22);
-    g.directionalLight.target.position.copy(spot);
-    g.directionalLight.target.updateMatrixWorld();
+    // The stage's light from this camera, as the menu loop sets it (Game.lightShowcase)
+    g.lightShowcase(spot, eye);
     // Two frames: the first settles what the post chain carries from frame to frame
     g.graphics.update(1 / 60);
     g.graphics.render(g.scene, cam);

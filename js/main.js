@@ -3668,6 +3668,12 @@ class Game {
     }
 
     endRiderShowcase() {
+        // The fill shines from where the ride puts it (setupLighting), not from the stage
+        if (this.fillLight && this.showcaseBikes) {
+            this.fillLight.position.set(-50, 30, 0);
+            this.fillLight.target.position.set(0, 0, 0);
+            this.fillLight.target.updateMatrixWorld();
+        }
         if (this.showcaseBikes) {
             Object.values(this.showcaseBikes).forEach(v => {
                 this.scene.remove(v.group);
@@ -3739,10 +3745,7 @@ class Game {
                 // Ease toward the orbit point so focus changes glide across
                 this.camera.position.lerp(new THREE.Vector3(camX, target.y + 0.9 + r * 0.3, camZ), this.showcaseSnap ? 1 : Math.min(1, dt * 4));
                 this.showcaseSnap = false;
-                // The sun and its shadow frustum follow the stage
-                this.directionalLight.position.set(target.x + 30, target.y + 45, target.z + 22);
-                this.directionalLight.target.position.copy(target);
-                this.directionalLight.target.updateMatrixWorld();
+                this.lightShowcase(target, this.camera.position);
                 this.camera.up.set(0, 1, 0);
                 this.camera.lookAt(target.x, target.y + 0.7, target.z);
             } else if (this.showcaseMode === 'track' && this.previewEnv) {
@@ -3766,6 +3769,33 @@ class Game {
             this.graphics.render(this.scene, this.camera);
         };
         this.menuShowcaseRAF = requestAnimationFrame(loop);
+    }
+
+    // The rider stage's light, set from where the camera is: the sun is the key, high on one side, and its shadow
+    // frustum follows the stage; the fill comes low from the camera's side, away from the sun, so the shade side keeps
+    // its shape; the rim comes from behind the bike, against the camera, and draws its outline off the dark floor.
+    // One flat key showed no shape (the critic panel, bike15). The ride sets the fill and the rim again (setTimeOfDay)
+    lightShowcase(target, eye) {
+        const lights = Game.SHOWCASE_LIGHT;
+        this.directionalLight.position.set(target.x + 30, target.y + 45, target.z + 22);
+        this.directionalLight.target.position.copy(target);
+        this.directionalLight.target.updateMatrixWorld();
+        const back = new THREE.Vector3(target.x - eye.x, 0, target.z - eye.z);
+        if (back.lengthSq() < 1e-6) back.set(0, 0, 1);
+        back.normalize();
+        // (the camera's side, turned a quarter away from the sun's)
+        const sun = new THREE.Vector3(30, 0, 22).normalize();
+        const turn = back.x * sun.z - back.z * sun.x > 0 ? 1 : -1;
+        const fill = new THREE.Vector3(-back.x, 0, -back.z).applyAxisAngle(new THREE.Vector3(0, 1, 0), turn * Math.PI / 4);
+        const aim = (light, at, intensity) => {
+            if (!light) return;
+            light.position.copy(at);
+            light.target.position.copy(target);
+            light.target.updateMatrixWorld();
+            light.intensity = intensity;
+        };
+        aim(this.fillLight, new THREE.Vector3(target.x + fill.x * 30, target.y + 20, target.z + fill.z * 30), lights.fill);
+        aim(this.rimLight, new THREE.Vector3(target.x + back.x * 22, target.y + 40, target.z + back.z * 22), lights.rim);
     }
 
     // Frames the showcase in the menu's stage box (HomeStage.frame): the camera's view is shifted so the box's centre
@@ -5554,6 +5584,9 @@ Game.SIDE_CAR_COLORS = [0xf2f2f0, 0x2b2f36, 0x8a9199, 0x7a1d1d, 0x1f3f6b, 0x3d5a
 Game.ROAM_TEXT = { edge: 'Edge of the map: turn back', key: 'Back on the road', 'edge-back': 'Turned back at the edge of the map' };
 
 // The menu's rider: the camera's field of view (degrees) and how fast it turns round the bike (rad/s)
+// The rider stage's fill and rim (Game.lightShowcase), against the sun's own intensity. The rim is off: from behind it
+// flared on the glossy paint of a mudguard's tip under the bloom, a fault all six critics named (bike15, final3)
+Game.SHOWCASE_LIGHT = { fill: 0.35, rim: 0 };
 Game.SHOWCASE_FOV = 38;
 Game.SHOWCASE_TURN = 0.22;
 

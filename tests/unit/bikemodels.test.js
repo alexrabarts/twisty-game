@@ -337,7 +337,9 @@ describe.each(IDS)('swapping the model of %s', id => {
         vehicle.isJumping = true;
         for (let i = 0; i < 120; i++) vehicle.updateMesh();
         expect(vehicle.rider.position.y).toBeCloseTo(vehicle.riderBasePos.y + vehicle.riderStandHeight, 2);
-        expect(vehicle.brakeLight.material.emissiveIntensity).toBe(0);
+        // Off the brake the tail light still glows, as a road bike's does, dimmer than under braking
+        expect(vehicle.brakeLight.material.emissive.getHex()).toBe(game.Vehicle.TAIL_LIGHT);
+        expect(vehicle.brakeLight.material.emissive.getHex()).not.toBe(0xff0000);
         vehicle.isJumping = false;
 
         // The crash tint Vehicle writes to this.frame reaches the painted bodywork
