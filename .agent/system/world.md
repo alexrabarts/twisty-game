@@ -654,9 +654,14 @@ The owner chose a tour from Airolo over five passes to the car park at Hospental
 | 3 | `andermatt-goeschenen` | worlds/susten | its own import | down the Schöllenen | a hotel car park in Andermatt, the station car park at Göschenen |
 | 4 | `goeschenen-susten` | worlds/susten | its own import | down to Wassen, up the Meiental | Göschenen, the car park at the Susten pass |
 | 5 | `susten-gadmen` | worlds/susten | its own import | down | the Susten pass, the car park at Gadmen |
-| 6 to 10 | not built (leg 10 ends at the car park at Hospental, a stop of worlds/gotthard) | | | | |
+| 6 | `gadmen-innertkirchen` | worlds/haslital | its own import | down the Gadmental | the car park at Gadmen, a car park in Innertkirchen on the Grimsel road |
+| 7 | `innertkirchen-guttannen` | worlds/haslital | its own import | up the Haslital | Innertkirchen, the car park at Guttannen |
+| 8 | `guttannen-grimsel` | worlds/haslital | its own import | up | Guttannen, the car park at the Grimsel pass |
+| 9 and 10 | not built (leg 9 starts at the car park at the Grimsel pass; leg 10 ends at the car park at Hospental, a stop of worlds/gotthard) | | | | |
 
 - **Where legs 3 and 4 meet.** The owner's leg 3 ends at Wassen. The map has no car park or rest area there that a rider can reach (only the motorway's services) and none on the Susten road before the pass, so the stop rule cannot place one: legs 3 and 4 meet at the station car park at Göschenen, the last before Wassen, 4 km up the valley.
+- **Where legs 5 and 6 meet.** worlds/susten ends at the car park at Gadmen and worlds/haslital starts there: the two folders hold the same stop, each its own copy (the same area, the same slots), as worlds/gotthard and worlds/susten meet at Andermatt.
+- **Where legs 6 and 7 meet.** No public car park lies within 300 m of the village's junction of the Susten and Grimsel roads. Leg 6 ends at the car park nearest it on the Grimsel road (by road), so leg 6 rides through the junction and leg 7 starts past it.
 - **A row.** `stage` alone: the importer made the stage (a slice of `tools/world/route.json`). `base` and `dir`: the tools make the stage from the base stage's ride, `dir` 1 the way the ride runs, -1 against it, from its `start` stop to its `end` stop (stop ids of its folder's manifest). A row with no folder is a leg not built yet.
 - **Its ends.** A derived leg starts at its start stop's turn-in and its timed line is `STOP.leadM` (60 m) before its end stop's turn-in, as an imported stage's. A stop where a leg starts may be a stop on the way of its base stage (`legStart`: the Hospental car park, gathered within the start's 800 m).
 - **Its stations and boards.** `node tools/world/tour.mjs` places a derived leg's stations by the importer's rule and works out its time floors on the ride as the leg rides it, writes the stage into its folder's manifest and its stations into `ride.json`, seals the folder again (`dataHash`, `SHA256SUMS`) and writes its board row (`world-<id>-v1`). Run it after an import of a folder a leg is made from; it gives the same bytes when run again.

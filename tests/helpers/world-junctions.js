@@ -66,7 +66,12 @@ export const JUNCTION_OPEN = Object.freeze({
     // step of 0.23 m at j90 by the lookout and a narrow gap of 2.1 m open to the land at j13 (s 12 661). Leg 1, its own
     // import: a strip of laid ground 2 cm over the mouth at j48 (s 6 444) and a narrow gap of 1.5 m at j34 (s 5 103)
     'lookout-andermatt': { steps: 2, open: 1, strips: 2, pits: 2, clefts: 1, physics: 2 },
-    'airolo-lookout': { strips: 1, clefts: 1 }
+    'airolo-lookout': { strips: 1, clefts: 1 },
+    // Legs 6 to 8 (worlds/haslital), measured when first ridden (2026-11-27), under the builders' rules of that day:
+    // exact counts, held so they may only fall
+    'gadmen-innertkirchen': { steps: 1, sunk: 1, decks: 2, open: 4, strips: 3, pits: 5, clefts: 4 },
+    'innertkirchen-guttannen': { physics: 1 },
+    'guttannen-grimsel': { decks: 1, open: 1, strips: 2, pits: 1, clefts: 1, physics: 1 }
 });
 export const junctionLimits = stage => ({ ...JUNCTION_LIMITS, physics: 0, ...(JUNCTION_OPEN[stage] || {}) });
 

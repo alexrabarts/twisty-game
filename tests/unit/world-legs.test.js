@@ -20,7 +20,7 @@ const store = (initial = null) => {
 describe('the legs and their folders', () => {
     test('the tour is the list: its ten legs in ride order, then the legs shipped before it', () => {
         expect(WorldLegs.LIST.filter(l => l.n).map(l => l.n)).toEqual([1, 2, 3, 4, 5, 6, 7, 8, 9, 10]);
-        expect(WorldLegs.LIST.filter(l => !l.planned && l.n).map(l => l.id)).toEqual(['airolo-lookout', 'lookout-andermatt', 'andermatt-goeschenen', 'goeschenen-susten', 'susten-gadmen']);
+        expect(WorldLegs.LIST.filter(l => !l.planned && l.n).map(l => l.id)).toEqual(['airolo-lookout', 'lookout-andermatt', 'andermatt-goeschenen', 'goeschenen-susten', 'susten-gadmen', 'gadmen-innertkirchen', 'innertkirchen-guttannen', 'guttannen-grimsel']);
         expect(WorldLegs.LIST.slice(-2).map(l => l.id)).toEqual(['gotthard-north', 'tremola']);
         expect(WorldLegs.groups().map(g => g.pass)).toEqual(['Gotthard', 'Schöllenen', 'Susten', 'Grimsel', 'Furka', 'Earlier legs']);
     });
@@ -75,6 +75,7 @@ describe('which legs are open', () => {
         expect(WorldLegs.suggested({ storage: s })).toBe('lookout-andermatt');
         expect(WorldLegs.find('andermatt-goeschenen').opensAfter).toBe('lookout-andermatt');
         expect(WorldLegs.find('susten-gadmen').opensAfter).toBe('goeschenen-susten');
+        expect(WorldLegs.find('gadmen-innertkirchen').opensAfter).toBe('susten-gadmen');
     });
 
     test('a leg that opens after another stays shut until that leg is finished', () => {

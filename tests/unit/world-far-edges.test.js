@@ -39,7 +39,9 @@ const KNOWN = {
     'airolo-lookout': 1,
     'andermatt-goeschenen': 1,
     'goeschenen-susten': 6,
-    'susten-gadmen': 4
+    'susten-gadmen': 4,
+    'gadmen-innertkirchen': 2,
+    'guttannen-grimsel': 6
 };
 
 const WALK_M = 1000;
