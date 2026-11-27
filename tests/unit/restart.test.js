@@ -62,9 +62,27 @@ function fakeGame() {
     return game;
 }
 
+// The few parts of a world ride that a restart in place reads (Game.restartInPlace), on the plain game
+function onWorld(game) {
+    game.vehicle.position = { set(x, y, z) { Object.assign(this, { x, y, z }); } };
+    game.environment = {
+        isWorld: true,
+        stage: null,
+        route: { sample: () => ({ x: 0, y: 0, z: 0, heading: 0 }), toUnits: s => s / 4, unitM: 4 },
+        place: jest.fn(),
+        guide: { reset: jest.fn() },
+        roadworks: null
+    };
+    game.worldRun = { restartPlace: () => ({ s: 100, lateral: 0 }), noteRestart: jest.fn(), restartAt: jest.fn() };
+    game.worldCamera = { reset: jest.fn() };
+    game.snapAtmosphere = jest.fn();
+    game.atmosphereUnit = s => s / 100;
+    return game;
+}
+
 describe('the clock of a run', () => {
     test('a restart adds 5 s to the time and the time keeps running', () => {
-        const game = fakeGame();
+        const game = onWorld(fakeGame());
         game.advance(30000);
         expect(game.raceElapsed()).toBe(30000);
         game.restartFromCheckpoint();
@@ -79,7 +97,7 @@ describe('the clock of a run', () => {
     });
 
     test('the penalty stays in the time while paused', () => {
-        const game = fakeGame();
+        const game = onWorld(fakeGame());
         game.restartFromCheckpoint();
         game.advance(20000);
         game.paused = true;
@@ -97,7 +115,7 @@ describe('the clock of a run', () => {
     });
 
     test('a new run clears the penalty and the count', () => {
-        const game = fakeGame();
+        const game = onWorld(fakeGame());
         game.restartFromCheckpoint();
         game.checkpointTimes = [];
         game.environment = null;

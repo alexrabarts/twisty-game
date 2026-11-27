@@ -493,15 +493,16 @@ describe('Game atmosphere', () => {
         expect(rain.sunIntensity).toBe(timeConfigs.twilight.sunIntensity * GameStatics.WORLD_OVERCAST_SUN);
         expect(rain.hemisphereIntensity).toBe(timeConfigs.twilight.hemisphereIntensity * GameStatics.WORLD_OVERCAST_SKY);
         expect(rain.headlight).toBe(Math.max(timeConfigs.twilight.headlight, GameStatics.WORLD_OVERCAST_HEADLIGHT));
+
+        const fog = self.resolveTime('golden', 'fog');
+        expect(fog.sunIntensity).toBe(timeConfigs.golden.sunIntensity * 0.6);
+        expect(fog.hemisphereIntensity).toBe(timeConfigs.golden.hemisphereIntensity * 1.15);
+        expect(self.resolveTime('night', 'clear')).toBe(clear);
         // With no world (the menu) a time keeps its own light under cloud
         self.environment = null;
         const plain = self.resolveTime('twilight', 'rain');
         expect(plain.sunIntensity).toBe(timeConfigs.twilight.sunIntensity * 0.25);
         expect(plain.hemisphereIntensity).toBe(timeConfigs.twilight.hemisphereIntensity * 1.35);
-        const fog = self.resolveTime('golden', 'fog');
-        expect(fog.sunIntensity).toBe(timeConfigs.golden.sunIntensity * 0.6);
-        expect(fog.hemisphereIntensity).toBe(timeConfigs.golden.hemisphereIntensity * 1.15);
-        expect(self.resolveTime('night', 'clear')).toBe(clear);
     });
 
     test('a snap with no weather system writes no fog density and no particles', () => {
@@ -512,8 +513,8 @@ describe('Game atmosphere', () => {
         expect(self.scene.fog.density).toBe(0.123);
         expect(self.weatherSystem.mix.rain).toBe(0);
         expect(self.weatherSystem.systems.rain.points.visible).toBe(false);
-        // The road's surface is still the part's: wet in the rain
-        expect(RoadSurface.wetness).toBe(1);
+        // The road's surface is still the part's: wet in the rain, as much as its intensity
+        expect(RoadSurface.wetness).toBeCloseTo(track.parts[1].look.weatherIntensity, 9);
         RoadSurface.setWet(0);
         self.snapAtmosphere(AtmosphereTrack.oneLook({ ring: 1 }), 0, {});
         expect(self.graphics.atmosphere).toBeNull();
@@ -586,7 +587,7 @@ describe('Game atmosphere', () => {
         expect(self.graphics.environmentDirty).toBe(true);
         expect(self.scene.background.equals(new THREE.Color(timeConfigs.night.skyColor))).toBe(true);
         expect(self.weatherSystem.mix.rain).toBe(1);
-        expect(RoadSurface.wetness).toBe(1);
+        expect(RoadSurface.wetness).toBeCloseTo(track.parts[1].look.weatherIntensity, 9);
 
         const writes = jest.spyOn(self.graphics, 'writeSky');
         self.graphics.environmentDirty = false;
