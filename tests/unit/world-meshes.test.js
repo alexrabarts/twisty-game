@@ -932,6 +932,87 @@ describe('Scenery', () => {
         expect(scenery.houseCap()).toBe(Scenery.HOUSE_TRIANGLES);
     });
 
+    // A camera over the tile looking down on all of it, or away from it
+    const cameraOver = (away = false) => {
+        const camera = new THREE.PerspectiveCamera(60, 1, 1, 5000);
+        camera.position.set(100, 1600, 100);
+        camera.lookAt(100, away ? 3000 : 1000, away ? 100 : 101);
+        camera.updateMatrixWorld();
+        return camera;
+    };
+    const treeShares = (scenery) => {
+        const out = new Map();
+        for (const mesh of scenery.forest.children) {
+            if (!mesh.name.startsWith('trees:')) continue;
+            const a = mesh.instanceMatrix.array;
+            for (let i = 0; i < mesh.count; i++) out.set(`${a[i * 16 + 12].toFixed(1)},${a[i * 16 + 14].toFixed(1)}:${mesh.userData.treeLevel}`, a[i * 16 + 3]);
+        }
+        return out;
+    };
+
+    test('a tree drawn in view is held when the room falls; out of view the room is taken at once', () => {
+        const held = new Scenery(ground, data, levelled());
+        held.setView(cameraOver());
+        held.buildTile(tile, forest, [], { x: 100, z: 100 });
+        held.stepFades(10);
+        const all = held.treeCount;
+        expect(all).toBeGreaterThan(20);
+        // (the room falls to a few trees' worth: every tree is in view and drawn, so every one stays)
+        held.setWindowRoom(3000);
+        held.rankTrees({ x: 100, z: 100 }, true);
+        expect(held.treeCount).toBe(all);
+        // Out of view the same fall takes the furthest trees, at once
+        const away = new Scenery(ground, data, levelled());
+        away.setView(cameraOver(true));
+        away.buildTile(tile, forest, [], { x: 100, z: 100 });
+        expect(away.treeCount).toBe(all);
+        away.setWindowRoom(3000);
+        away.rankTrees({ x: 100, z: 100 }, true);
+        expect(away.treeCount).toBeLessThan(all);
+        for (const share of treeShares(away).values()) expect(share).toBe(0);
+    });
+
+    test('a tree that comes into the window in view fades in over FADE_S; one that goes in view fades out', () => {
+        const scenery = new Scenery(ground, data, levelled());
+        scenery.setView(cameraOver());
+        scenery.buildTile(tile, forest, [], { x: 100, z: 100 });
+        // (each starts with none of its pixels drawn: a cut of -1 in its instance matrix's fourth row)
+        const first = treeShares(scenery);
+        expect(first.size).toBeGreaterThan(20);
+        for (const cut of first.values()) expect(cut).toBeCloseTo(-1, 6);
+        scenery.stepFades(Scenery.FADE_S / 2);
+        for (const cut of treeShares(scenery).values()) expect(cut).toBeCloseTo(-0.5, 6);
+        scenery.stepFades(Scenery.FADE_S);
+        for (const cut of treeShares(scenery).values()) expect(cut).toBe(0);
+        // The quality level's share takes half of them away: in view they fade out and are drawn until they have gone
+        const places = () => new Set([...treeShares(scenery).keys()].map(key => key.split(':')[0]));
+        const all = places().size;
+        expect(all).toBe(scenery.treeCount);
+        scenery.setTrees(0.5, Scenery.TREE_NEAR_CAP);
+        expect(scenery.treeCount).toBeLessThan(all);
+        expect(places().size).toBe(all);
+        expect([...treeShares(scenery).values()].filter(cut => cut !== 0).length).toBeGreaterThan(5);
+        scenery.stepFades(Scenery.FADE_S * 2);
+        scenery.rankTrees({ x: 100, z: 100 });
+        expect(places().size).toBe(scenery.treeCount);
+        for (const cut of treeShares(scenery).values()) expect(cut).toBe(0);
+    });
+
+    test('the fade is a dither in the materials, read from the fourth row of the instance matrix or a vertex attribute', () => {
+        const material = Scenery.fadeable(new THREE.MeshLambertMaterial());
+        const shader = { vertexShader: THREE.ShaderLib.lambert.vertexShader, fragmentShader: THREE.ShaderLib.lambert.fragmentShader, uniforms: {} };
+        material.onBeforeCompile(shader);
+        expect(shader.vertexShader).toContain('vFadeCut = fadeInstance[0][3];');
+        expect(shader.vertexShader).toContain('#define instanceMatrix fadeInstance');
+        expect(shader.fragmentShader).toContain('discard');
+        expect(material.customProgramCacheKey()).toMatch(/\|fade$/);
+        // (once: a material patched again keeps the one patch)
+        const key = material.customProgramCacheKey();
+        expect(Scenery.fadeable(material).customProgramCacheKey()).toBe(key);
+        // Its shadow fades with it
+        expect(Scenery.fadeDepth(material).userData.fade).toBe(true);
+    });
+
     test('each tree has its own girth and tint, and its tint never lifts a colour', () => {
         const sites = new Scenery(ground, data).treeSites(tile, forest);
         expect(new Set(sites.map(s => s.width.toFixed(3))).size).toBeGreaterThan(20);
@@ -952,7 +1033,10 @@ describe('Scenery', () => {
         expect(scenery.houseInstances).toBeLessThanOrEqual(Scenery.BUILDING_CAP);
         // Each house has its footing, from under the land (flat at 1000 here) up into the walls; the floor is on the land
         const footing = scenery.houseGroup.children.find(m => m.name === 'houses:footing');
-        expect(footing.material).toBe(RoadMesh.stoneMaterial());
+        // (the walls' stone, in a copy of its own that fades with its house: Scenery.footingMaterial)
+        expect(footing.material).toBe(Scenery.footingMaterial());
+        expect(footing.material.userData).toMatchObject({ landShade: true, fade: true, fadeAttribute: true });
+        expect(footing.geometry.attributes.fadeCut.count).toBe(footing.geometry.attributes.position.count);
         expect(footing.userData.footings).toHaveLength(placed);
         const body = new THREE.Matrix4();
         meshes[0].getMatrixAt(0, body);

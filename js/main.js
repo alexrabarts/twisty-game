@@ -993,29 +993,70 @@ class Game {
     // programs on that frame (world-shot: 230 ms)
     // What the window draws besides the scenery's houses, boulders and trees, measured once a second, and the room it
     // leaves them under Scenery.WINDOW_TRIANGLES (Scenery.setWindowRoom). As LEG_BUDGET counts: every mesh drawn in
-    // the scene, the ground cover apart (tools/terrain-check.mjs countScene)
+    // the scene, the ground cover apart (tools/terrain-check.mjs countScene).
+    // The riders are not measured: the player's bike and rider, the crew's and the cars' take a fixed share
+    // (riderRoom), every one of them counted as drawn, the most seen in the ride. They move in and out of the window
+    // every few seconds, and measured they moved the scenery with them; they are not scenery, and a fixed share always
+    // holds them. The rest is the median of the last WINDOW_SAMPLES measures, so what stands for a moment (a section's
+    // old mesh beside its new one, a tile's two levels) moves nothing; Scenery.setWindowRoom adds its own hysteresis.
+    // `force` measures now, as it stands (a check that puts the bike down: tools/terrain-check.mjs placeAt)
     budgetWindow(force = false) {
         const scenery = this.environment && this.environment.scenery;
         if (!scenery || !scenery.setWindowRoom) return;
         const now = performance.now();
         if (!force && this.windowBudgetAt && now - this.windowBudgetAt < Game.WINDOW_BUDGET_MS) return;
         this.windowBudgetAt = now;
+        const riders = new Set([this.vehicle && this.vehicle.group]);
+        if (this.traffic) {
+            for (const bike of this.traffic.motorcycles || []) riders.add(bike.bikeGroup);
+            for (const car of this.traffic.cars || []) riders.add(car.carGroup);
+        }
+        riders.delete(undefined);
+        riders.delete(null);
         const skip = new Set([scenery.boulderGroup, scenery.forest]);
-        let rest = 0;
+        let rest = 0, ridden = 0;
+        const count = (g, o) => (g.index ? g.index.count : g.attributes.position.count) / 3 * (o.isInstancedMesh ? o.count : 1);
         // (a mesh hidden itself is counted, as LEG_BUDGET counts it: only a hidden group hides what is in it)
         const walk = (o) => {
-            if (skip.has(o) || o.name === 'ground-cover' || (!o.visible && !o.isMesh)) return;
-            if (o.isMesh && o.geometry && o.geometry.attributes.position && !(o.parent === scenery.houseGroup && o.name !== 'houses:footing')) {
-                const g = o.geometry;
-                rest += (g.index ? g.index.count : g.attributes.position.count) / 3 * (o.isInstancedMesh ? o.count : 1);
-            }
+            if (skip.has(o) || riders.has(o) || o.name === 'ground-cover' || (!o.visible && !o.isMesh)) return;
+            if (o.isMesh && o.geometry && o.geometry.attributes.position && !(o.parent === scenery.houseGroup && o.name !== 'houses:footing')) rest += count(o.geometry, o);
             for (const child of o.children) walk(child);
         };
         walk(this.scene);
-        scenery.setWindowRoom(Math.max(0, Math.round(Scenery.WINDOW_TRIANGLES - rest)));
+        // (a rider is counted as drawn whether its group is shown now or not; what in it is hidden, a level of detail
+        // not drawn, is not)
+        const ride = (o, top) => {
+            if (!top && !o.visible && !o.isMesh) return;
+            if (o.isMesh && o.geometry && o.geometry.attributes.position) ridden += count(o.geometry, o);
+            for (const child of o.children) ride(child, false);
+        };
+        for (const root of riders) ride(root, true);
+        if (this.riderRoomOf !== this.environment) {
+            this.riderRoomOf = this.environment;
+            this.riderRoom = 0;
+            this.windowRests = [];
+        }
+        this.riderRoom = Math.max(this.riderRoom, Math.round(ridden));
+        const rests = this.windowRests;
+        if (force) rests.length = 0;
+        rests.push(rest);
+        if (rests.length > Game.WINDOW_SAMPLES) rests.shift();
+        const sorted = [...rests].sort((a, b) => a - b);
+        const steady = sorted[Math.floor(sorted.length / 2)];
+        scenery.setWindowRoom(Math.max(0, Math.round(Scenery.WINDOW_TRIANGLES - steady - this.riderRoom)));
     }
 
     static get WINDOW_BUDGET_MS() { return 1000; }
+    static get WINDOW_SAMPLES() { return 3; }
+
+    // The window's scenery reads the view each frame, and its fades step (Scenery.setView, stepFades): a thing in view
+    // is held and fades, out of view it changes at once
+    watchWindow(dt) {
+        const scenery = this.environment && this.environment.scenery;
+        if (!scenery || !scenery.setView) return;
+        scenery.setView(this.camera);
+        scenery.stepFades(dt);
+    }
 
     prewarmWorldScenery() {
         const scenery = this.environment && this.environment.scenery;
@@ -4306,7 +4347,10 @@ class Game {
         // Everything a world draws takes the haze of this frame's air, also what a build step added since the last
         // frame, before it is first drawn (js/world/landshade.js)
         if (this.environment.isWorld) LandShade.update(this.scene, this.graphics, this.weatherSystem, this.environment.group);
-        if (this.environment.isWorld) this.budgetWindow();
+        if (this.environment.isWorld) {
+            this.budgetWindow();
+            this.watchWindow(rawDeltaTime);
+        }
         if (this.effectLevels) Effects.frame(this);
         this.graphics.update(
             rawDeltaTime,
@@ -5172,6 +5216,7 @@ class Game {
         this.updateShadowCamera(Number.isFinite(floor) ? state.sun.set(fly.x, Math.min(fly.y, floor), fly.z) : at);
         if (typeof LandShade !== 'undefined') LandShade.update(this.scene, this.graphics, this.weatherSystem, env.group);
         this.budgetWindow();
+        this.watchWindow(dt);
 
         const now = performance.now();
         if (now - state.readAt >= 250) {

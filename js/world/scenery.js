@@ -480,6 +480,18 @@ class Scenery {
 
     // A shape's parts at each level (Scenery.TREE_LEVELS); a shape made at one level only (a bush, a plain shape) is
     // the same at all three
+    // The box of a shape's mid level (its outline at every level: tests/unit/scenery-levels.test.js), measured once
+    static boxOf(shape) {
+        if (!shape.box) {
+            shape.box = new THREE.Box3();
+            for (const part of Scenery.levelsOf(shape).mid) {
+                if (!part.geometry.boundingBox) part.geometry.computeBoundingBox();
+                shape.box.union(part.geometry.boundingBox);
+            }
+        }
+        return shape.box;
+    }
+
     static levelsOf(shape) {
         const lods = shape.lods || {};
         return { near: lods.near || shape.parts, mid: lods.mid || shape.parts, far: lods.far || lods.mid || shape.parts };
@@ -572,16 +584,35 @@ class Scenery {
     // The footings of a set of buildings as one mesh in the world's own metres, so the dry-stone courses of the
     // retaining walls (RoadMesh.stoneMaterial, drawn from the world position) lie on them at their true size.
     // `boxes`: [{rect, bottom, top}] from Scenery.footing. Each footing is kept in userData.footings for the checks.
-    static footingMesh(boxes, name) {
+    // `fade`: each footing's share in its run of vertices (fadeRun of them), as its house's (Scenery.FADE_S)
+    static footingMesh(boxes, name, fade = false) {
         const out = { positions: [], shades: [] };
         const stone = [0.6, 0.58, 0.54];
         for (const f of boxes) RoadMesh.box(out, f.rect.x, (f.bottom + f.top) / 2, f.rect.z, f.rect.across, f.top - f.bottom, f.rect.along, f.rect.heading, stone);
-        const mesh = new THREE.Mesh(RoadMesh.geometry(out.positions, out.shades), RoadMesh.stoneMaterial());
+        const geometry = RoadMesh.geometry(out.positions, out.shades);
+        const run = boxes.length ? geometry.attributes.position.count / boxes.length : 0;
+        if (fade && !Number.isInteger(run)) throw new Error(`Scenery.footingMesh: ${geometry.attributes.position.count} vertices are not ${boxes.length} even runs`);
+        if (fade) geometry.setAttribute('fadeCut', new THREE.BufferAttribute(new Float32Array(geometry.attributes.position.count), 1));
+        const mesh = new THREE.Mesh(geometry, fade ? Scenery.footingMaterial() : RoadMesh.stoneMaterial());
+        if (fade) {
+            mesh.customDepthMaterial = Scenery.fadeDepth(mesh.material);
+            mesh.userData.fadeRun = run;
+        }
         mesh.name = name;
         mesh.receiveShadow = true;
         mesh.userData.world = 'scenery';
         mesh.userData.footings = boxes.map(f => ({ rect: { ...f.rect }, bottom: f.bottom, top: f.top }));
         return mesh;
+    }
+
+    // The stone of a house's footing: the walls' stone (RoadMesh.stoneMaterial), its own copy, which fades with its house
+    static footingMaterial() {
+        if (!Scenery.footingStone) {
+            const material = new THREE.MeshLambertMaterial({ vertexColors: true, side: THREE.DoubleSide, polygonOffset: true, polygonOffsetFactor: 0, polygonOffsetUnits: -4 });
+            material.userData.fadeAttribute = true;
+            Scenery.footingStone = Scenery.fadeable(LandShade.patch(material, { stone: true }));
+        }
+        return Scenery.footingStone;
     }
 
     // Triangles of one footing (a box: 6 faces of 2)
@@ -857,7 +888,7 @@ class Scenery {
     // Instanced meshes for a list of placements of one set of parts; parts' geometry and material are shared, never freed here
     instanced(parts, matrices, name, group) {
         for (const part of parts) {
-            const mesh = new THREE.InstancedMesh(part.geometry, part.material, matrices.length);
+            const mesh = Scenery.fading(new THREE.InstancedMesh(part.geometry, part.material, matrices.length));
             matrices.forEach((m, i) => mesh.setMatrixAt(i, m));
             mesh.instanceMatrix.needsUpdate = true;
             mesh.name = name;
@@ -923,6 +954,11 @@ class Scenery {
             scale.set(site.scale * site.width, site.scale, site.scale * site.width);
             site.matrix = new THREE.Matrix4().compose(position, rotation, scale);
             site.cost = Scenery.trianglesOf(Scenery.levelsOf(site.shape).far);
+            // (its fade is kept by its place; its middle and reach for the view: Scenery.inView)
+            const box = Scenery.boxOf(site.shape);
+            site.key = `t${Math.round(site.x * 10)},${Math.round(site.z * 10)}`;
+            site.cy = site.y - 0.2 + site.scale * (box.min.y + box.max.y) / 2;
+            site.r = site.scale * Math.max(site.width * Math.max(box.max.x - box.min.x, box.max.z - box.min.z), box.max.y - box.min.y) / 2;
         }
         held.treeSites = taken;
         held.trees = taken.length;
@@ -946,13 +982,29 @@ class Scenery {
         // The tufts beside the ride (the window chooses the ones drawn, nearest the bike first: rankCaps)
         const tufts = yield* this.tuftSitesSteps(tile);
 
-        this.disposeTile(tile.key);
-        if (!group.children.length && !taken.length && !houses.length && !boulders.length && !tufts.length) return null;
+        // A tile built again keeps its things' fades, and the window is chosen again once, with the new tile in it; its
+        // tufts stand until the new ones are made (applyCaps). Let go of and chosen again between, what stood in view
+        // went out at once and came in again (world-pops)
+        const was = this.perTile.get(tile.key);
+        const carried = was ? was.group.children.filter(o => o.name === 'tufts') : [];
+        for (const mesh of carried) was.group.remove(mesh);
+        this.disposeTile(tile.key, !!was);
+        if (!group.children.length && !taken.length && !houses.length && !boulders.length && !tufts.length) {
+            for (const mesh of carried) mesh.geometry.dispose();
+            if (was) {
+                this.capsDirty = true;
+                this.rankCaps(this.capsBike, true);
+                this.rankTrees(this.treeBike, true);
+            }
+            return null;
+        }
+        for (const mesh of carried) group.add(mesh);
         this.perTile.set(tile.key, { group, ...held, candidates: { houses, boulders, boulderShape, tufts } });
         this.capsDirty = true;
         yield* this.rankCapsSteps(bike, true);
         if (held.stoneSites && held.stoneSites.length) this.rankStones(bike, true);
-        if (taken.length) this.rankTrees(bike, true);
+        // (and the trees of the tile it was, which the disposal left to this choice)
+        if (taken.length || (was && was.trees)) this.rankTrees(bike, true);
         return group;
     }
 
@@ -1198,10 +1250,13 @@ class Scenery {
         return { home: plain, turn: b.heading, scale: [b.w, Scenery.hutHeight(b), b.d], centre: [0, 0] };
     }
 
-    // Frees the instance buffers of a tile's scenery; the shared geometry and materials stay
-    disposeTile(key) {
+    // Frees the instance buffers of a tile's scenery; the shared geometry and materials stay. `again`: the tile is built
+    // again at once (buildTileSteps), which chooses the window again itself. Else its houses, boulders and trees in view
+    // fade out (leave)
+    disposeTile(key, again = false) {
         const held = this.perTile.get(key);
         if (!held) return;
+        if (!again) this.leave(held);
         // (the window's near edge meshes are not the tile's: they go on with the next tile that has a near stone)
         this.releaseNearEdges(held);
         held.group.traverse(child => {
@@ -1217,13 +1272,47 @@ class Scenery {
         this.perTile.delete(key);
         this.stamp = (this.stamp || 0) + 1;
         // (the room it gives up is the other tiles' again)
-        if (held.candidates) {
+        if (held.candidates && !again) {
             this.capsDirty = true;
             this.rankCaps(this.capsBike, true);
         }
         // The stones it gives up are another tile's to draw
         if (held.stones) this.rankStones(this.rankBike, true);
-        if (held.trees) this.rankTrees(this.treeBike, true);
+        if (held.trees && !again) this.rankTrees(this.treeBike, true);
+    }
+
+    // The things of a tile the window lets go of that are drawn and in view: they fade out, drawn from `left` until they
+    // have gone (rankTrees, rankCapsSteps). The land under them goes with the tile, at the window's edge
+    leave(held) {
+        const fades = this.fades;
+        if (!fades || !this.view) return;
+        const left = this.left || (this.left = { trees: [], boulders: [], houses: [] });
+        const going = (st, seen) => {
+            if (!st || st.level === null || st.amount <= 0 || !seen) return false;
+            st.dir = -1;
+            st.old = null;
+            return true;
+        };
+        for (const site of held.treeSites || []) if (going(fades.get(site.key), this.inView(site.x, site.cy, site.z, site.r))) left.trees.push(site);
+        const c = held.candidates;
+        if (!c) return;
+        for (const b of c.boulders) if (b.fk && going(fades.get(b.fk), this.inView(b.x, b.matrix.elements[13], b.z, 3))) left.boulders.push({ c: b, shape: c.boulderShape });
+        for (const h of c.houses) if (h.fk && going(fades.get(h.fk), this.inView(h.x, h.matrix.elements[13] + 5, h.z, 12))) left.houses.push(h);
+    }
+
+    // What is still fading out of `left`'s list of a kind, stamped as read by this choice; what has gone is let go
+    stillLeaving(list, keyOf, stamp) {
+        const fades = this.fades;
+        for (let k = list.length - 1; k >= 0; k--) {
+            const st = fades ? fades.get(keyOf(list[k])) : null;
+            if (st && st.dir < 0 && st.amount > 0) {
+                st.stamp = stamp;
+                continue;
+            }
+            if (st && st.dir < 0) this.fadeOut(st, false);
+            list.splice(k, 1);
+        }
+        return list;
     }
 
     // The most triangles a tree adds at the near level over its far level, of the shapes loaded (measured once)
@@ -1294,8 +1383,9 @@ class Scenery {
         const key = `${shape.name}:${level}:${k}`;
         let mesh = this.forestMeshes.get(key);
         if (!mesh) {
-            const room = level === 'near' ? Scenery.TREE_NEAR_CAP : level === 'mid' ? Scenery.TREE_MID_CAP : Scenery.TREE_CAP;
-            mesh = new THREE.InstancedMesh(part.geometry, part.material, room);
+            // (and room for the trees held in view and those fading: Scenery.FADE_ROOM)
+            const room = Math.ceil((level === 'near' ? Scenery.TREE_NEAR_CAP : level === 'mid' ? Scenery.TREE_MID_CAP : Scenery.TREE_CAP) * Scenery.FADE_ROOM);
+            mesh = Scenery.fading(new THREE.InstancedMesh(part.geometry, part.material, room));
             mesh.setColorAt(0, new THREE.Color(1, 1, 1));
             mesh.count = 0;
             mesh.visible = false;
@@ -1315,6 +1405,226 @@ class Scenery {
     static snapped(at) {
         const m = Scenery.TREE_RANK_M;
         return { x: (Math.floor(at.x / m) + 0.5) * m, z: (Math.floor(at.z / m) + 0.5) * m };
+    }
+
+    // How the window's houses, boulders, tufts and trees come and go. Measured with world-pops (4 km of the Tremola and
+    // of leg 3, before this rule): the caps and the trees were chosen again for every TREE_RANK_M the bike moved, for
+    // every tile that came or went and for every change of the window's room, nearest the bike first, and the furthest
+    // of them came in or went out at once wherever they stood: 41 000 and 46 000 such pops, a third of them in view,
+    // 4 000 and 7 600 of those in and out again within 2 s; the room's changes caused only 2 to 4% of them. So now:
+    //   - A thing drawn and in the view (setView, inView) is held: it stays while it is in view and within HOLD_REACH
+    //     of its kind's reach, whatever the room or the order of the rank. It is let go only out of view, or with a fade.
+    //   - The room a choice is short of is taken from what is out of view, the furthest first (the held things are
+    //     chosen first, the rest nearest first in what room is left).
+    //   - A thing that comes into the window in view, or goes out of it in view, fades over FADE_S, and a tree that
+    //     changes its level in view fades from the one to the other. Out of view it changes at once.
+    // The fade is a screen-door dither in the materials the things are drawn with (fadeable): no blending, so no
+    // sorting and nothing drawn twice in a pixel. A thing's share is carried in the fourth row of its instance matrix
+    // (an affine matrix has 0 there), a tuft's or a footing's in a vertex attribute (`fadeCut`)
+    static get FADE_S() { return 0.5; }
+    // A thing within this share of its distance past the view's edges counts as in view: the view is read for each
+    // rank, which comes for every TREE_RANK_M the bike moves, and a hairpin turns the camera by up to about 10 degrees
+    // in that time
+    static get VIEW_WIDEN() { return 0.18; }
+    // A held thing is let go once it is HOLD_REACH times as far as the furthest of its kind the rank chose
+    static get HOLD_REACH() { return 1.3; }
+    // The most the held things may stand over the room before the furthest of them fade out: well inside the 14 000
+    // triangles between WINDOW_TRIANGLES and LEG_BUDGET
+    static get HOLD_OVER() { return 6000; }
+    // A level's instanced meshes have room for this share over its cap: the held trees and the ones fading out or from
+    // a level are drawn besides the ones chosen
+    static get FADE_ROOM() { return 1.5; }
+    // The things the window's choice reads and settles in one step (rankCapsSteps)
+    static get STEP_THINGS() { return 400; }
+
+    // The material, patched in place, so that a thing's share in its instance matrix (or its `fadeCut` attribute where
+    // the material says so: userData.fadeAttribute) dithers it out. A share of 1 (a cut of 0) draws it as before.
+    // Its program key carries the fade, after any patch it has
+    static fadeable(material) {
+        if (!material || Array.isArray(material) || material.userData.fade) return material;
+        material.userData.fade = true;
+        const before = material.onBeforeCompile;
+        const key = `${material.customProgramCacheKey()}|fade${material.userData.fadeAttribute ? '-attr' : ''}`;
+        if (material.userData.fadeAttribute) material.defines = { ...(material.defines || {}), FADE_ATTRIBUTE: '' };
+        material.onBeforeCompile = (shader, renderer) => {
+            if (before) before.call(material, shader, renderer);
+            Scenery.injectFade(shader);
+        };
+        material.customProgramCacheKey = () => key;
+        material.needsUpdate = true;
+        return material;
+    }
+
+    // The dither: a cut c > 0 leaves out the pixels whose noise is under c, a cut c < 0 those whose noise is at or over
+    // 1 + c. So the two levels of a tree that changes its level draw complementary pixels (Scenery.fadeValue), and no
+    // pixel of it is drawn twice or left empty. The noise is interleaved gradient noise of the pixel's place
+    static injectFade(shader) {
+        const vertex = shader.vertexShader, fragment = shader.fragmentShader;
+        if (!vertex.includes('#include <begin_vertex>') || !fragment.includes('#include <clipping_planes_fragment>')) {
+            throw new Error('Scenery.injectFade: the shader has no begin_vertex or clipping_planes_fragment chunk to fade');
+        }
+        shader.vertexShader = vertex
+            .replace('#include <common>', '#include <common>\nvarying float vFadeCut;\n#ifdef USE_INSTANCING\nmat4 fadeInstance;\n#elif defined( FADE_ATTRIBUTE )\nattribute float fadeCut;\n#endif')
+            .replace('#include <begin_vertex>', `#ifdef USE_INSTANCING
+fadeInstance = instanceMatrix;
+vFadeCut = fadeInstance[0][3];
+fadeInstance[0][3] = 0.0;
+#define instanceMatrix fadeInstance
+#elif defined( FADE_ATTRIBUTE )
+vFadeCut = fadeCut;
+#else
+vFadeCut = 0.0;
+#endif
+#include <begin_vertex>`);
+        shader.fragmentShader = fragment
+            .replace('#include <common>', '#include <common>\nvarying float vFadeCut;')
+            .replace('#include <clipping_planes_fragment>', `#include <clipping_planes_fragment>
+if ( vFadeCut != 0.0 ) {
+	float fadeNoise = fract( 52.9829189 * fract( dot( gl_FragCoord.xy, vec2( 0.06711056, 0.00583715 ) ) ) );
+	if ( vFadeCut > 0.0 ? fadeNoise < vFadeCut : fadeNoise >= 1.0 + vFadeCut ) discard;
+}`);
+    }
+
+    // The sun's shadow of a fading thing fades with it: a depth material of the same dither for each material (three
+    // copies the material's map and alpha test onto it for each draw)
+    static fadeDepth(material) {
+        Scenery.fadeDepths = Scenery.fadeDepths || new Map();
+        let depth = Scenery.fadeDepths.get(material);
+        if (!depth) {
+            depth = new THREE.MeshDepthMaterial({ depthPacking: THREE.RGBADepthPacking });
+            depth.userData.fadeAttribute = !!material.userData.fadeAttribute;
+            Scenery.fadeable(depth);
+            Scenery.fadeDepths.set(material, depth);
+        }
+        return depth;
+    }
+
+    // A mesh drawn with the fade, its shadow too
+    static fading(mesh) {
+        Scenery.fadeable(mesh.material);
+        mesh.customDepthMaterial = Scenery.fadeDepth(mesh.material);
+        return mesh;
+    }
+
+    // The view the window's choices read this frame (Game.watchWindow): the camera's frustum. Null leaves everything out
+    // of view, so every change is made at once, as before (a check or a test with no camera)
+    setView(camera) {
+        if (!camera) {
+            this.view = null;
+            return;
+        }
+        const view = this.view || (this.view = { frustum: new THREE.Frustum(), matrix: new THREE.Matrix4(), at: new THREE.Vector3() });
+        camera.updateMatrixWorld();
+        view.matrix.multiplyMatrices(camera.projectionMatrix, camera.matrixWorldInverse);
+        view.frustum.setFromProjectionMatrix(view.matrix);
+        view.at.setFromMatrixPosition(camera.matrixWorld);
+    }
+
+    // Whether a thing of radius r at (x, y, z) is in the view, widened by VIEW_WIDEN of its distance
+    inView(x, y, z, r) {
+        const view = this.view;
+        if (!view) return false;
+        const reach = r + Scenery.VIEW_WIDEN * Math.hypot(x - view.at.x, y - view.at.y, z - view.at.z);
+        for (const plane of view.frustum.planes) if (plane.normal.x * x + plane.normal.y * y + plane.normal.z * z + plane.constant < -reach) return false;
+        return true;
+    }
+
+    // The fade of a thing: {level, amount, old, dir, slots}. `level` is what is drawn (a tree's level, or the kind),
+    // `amount` its share, `old` the level it fades from (drawn at the rest of the share), `dir` +1 while it comes or
+    // stays, -1 while it goes. Kept by the thing's place, so a tile built again keeps its things' fades
+    fadeOf(key, kind) {
+        const fades = this.fades || (this.fades = new Map());
+        let st = fades.get(key);
+        if (!st) fades.set(key, st = { key, kind, level: null, amount: 1, old: null, dir: 1, slots: [] });
+        return st;
+    }
+
+    // Whether a thing is drawn and staying (not going): what a hold reads
+    static shown(st) {
+        return !!st && st.level !== null && st.dir > 0;
+    }
+
+    // A thing chosen to be drawn at `level`: it comes in at once out of view, or fades in; a change of level in view
+    // fades from the one to the other. `seen`: in view now
+    fadeTo(st, level, seen) {
+        if (st.level === null) {
+            Object.assign(st, { level, amount: seen ? 0 : 1, old: null, dir: 1 });
+        } else if (st.level !== level) {
+            if (!seen) Object.assign(st, { level, amount: 1, old: null, dir: 1 });
+            // (back to the level it was fading from: the same fade, the other way)
+            else if (st.old === level) Object.assign(st, { level, old: st.level, amount: 1 - st.amount, dir: 1 });
+            // (a thing still coming in, or in a fade already, finishes it first: the choice after it ends makes the
+            // change. Its share at once at the new level changed its shape at once)
+            else if (st.amount < 1 || st.old) Object.assign(st, { dir: 1, later: true });
+            else Object.assign(st, { level, old: st.level, amount: 0, dir: 1 });
+        } else {
+            st.dir = 1;
+        }
+    }
+
+    // A thing no longer chosen: in view it fades out (true: it is still drawn), out of view it goes at once (false)
+    fadeOut(st, seen) {
+        if (st.level !== null && seen && st.amount > 0) {
+            st.dir = -1;
+            st.old = null;
+            return true;
+        }
+        this.fades.delete(st.key);
+        if (this.fadingSet) this.fadingSet.delete(st);
+        return false;
+    }
+
+    // The things of a kind whose fades were not read by this choice (their tile is gone): let go
+    dropFades(kind, stamp, caps = false) {
+        if (!this.fades) return;
+        // (a choice of the caps that a newer one has started after leaves the fades to that one)
+        if (caps && stamp !== this.capsStamp) return;
+        for (const [key, st] of this.fades) {
+            if (st.kind !== kind || st.stamp === stamp) continue;
+            this.fades.delete(key);
+            if (this.fadingSet) this.fadingSet.delete(st);
+        }
+    }
+
+    // The value a slot of a thing carries: its level's share, or the rest of it for the level it fades from
+    static fadeValue(st, old) {
+        if (old) return st.amount;
+        return st.amount >= 1 ? 0 : -(1 - st.amount);
+    }
+
+    // A thing drawn: where its share is written (an instance matrix's fourth row: offset 16 n + 3, or a run of a mesh's
+    // `fadeCut`), with its value now. Kept in the frame's fades while it moves
+    slotFade(st, attribute, offset, stride, count, old) {
+        const value = Scenery.fadeValue(st, old);
+        const array = attribute.array;
+        for (let i = 0; i < count; i++) array[offset + i * stride] = value;
+        st.slots.push({ attribute, offset, stride, count, old });
+        if (st.amount < 1 || st.dir < 0 || st.old) (this.fadingSet || (this.fadingSet = new Set())).add(st);
+    }
+
+    // The frame's step of every fade (Game.watchWindow): its share moved by dt / FADE_S and written. A fade that ends
+    // asks for its kind to be chosen again, so what has gone, or the level faded from, is no longer drawn. No allocation
+    stepFades(dt) {
+        const set = this.fadingSet;
+        if (!set || !set.size) return;
+        const step = Math.max(0, dt) / Scenery.FADE_S;
+        for (const st of set) {
+            st.amount = Math.min(1, Math.max(0, st.amount + step * st.dir));
+            for (const slot of st.slots) {
+                const value = Scenery.fadeValue(st, slot.old), array = slot.attribute.array;
+                for (let i = 0; i < slot.count; i++) array[slot.offset + i * slot.stride] = value;
+                slot.attribute.needsUpdate = true;
+            }
+            const ended = st.dir < 0 ? st.amount <= 0 : st.amount >= 1;
+            if (!ended) continue;
+            set.delete(st);
+            if (st.dir < 0 || st.old || st.later) {
+                st.old = null;
+                st.later = false;
+                if (st.kind === 'tree') this.treesDirty = true;
+                else this.capsDirty = true;
+            }
+        }
     }
 
     // The window's caps, chosen over every tile it holds, nearest the middle of the bike's square first: the houses
@@ -1349,37 +1659,117 @@ class Scenery {
         for (const [key, h] of tiles) {
             yield;
             h.candidates.houses.forEach((c, i) => houses.push({ key, i, c, x: c.x, z: c.z, d: d(c.x, c.z) }));
-            h.candidates.boulders.forEach((c, i) => boulders.push({ key, i, x: c.x, z: c.z, d: d(c.x, c.z) }));
-            h.candidates.tufts.forEach((c, i) => tufts.push({ key, i, x: c.x, z: c.z, d: d(c.x, c.z) }));
+            h.candidates.boulders.forEach((c, i) => boulders.push({ key, i, c, x: c.x, z: c.z, d: d(c.x, c.z), shape: h.candidates.boulderShape }));
+            h.candidates.tufts.forEach((c, i) => tufts.push({ key, i, c, x: c.x, z: c.z, d: d(c.x, c.z) }));
         }
-        const chosen = new Map(tiles.map(([key]) => [key, { houses: [], boulders: [], tufts: [] }]));
+        const chosen = new Map(tiles.map(([key]) => [key, { houses: [], boulders: [], tufts: [], going: [] }]));
+        const fades = this.fades || (this.fades = new Map());
+        const stamp = this.capsStamp = (this.capsStamp || 0) + 1;
+        // Which are in view, and which of those are drawn and held (Scenery.FADE_S), each kind within HOLD_REACH of the
+        // reach of its last choice
+        // (each a step of STEP_THINGS things: the window's tufts and boulders took a step of 47 ms read whole)
+        const scenery = this;
+        const look = function* (list, kind, reachM, y, r) {
+            const holdM = (reachM || Infinity) * Scenery.HOLD_REACH;
+            let n = 0;
+            for (const e of list) {
+                if (++n % Scenery.STEP_THINGS === 0) yield;
+                e.fk = e.c.fk || (e.c.fk = `${kind[0]}${Math.round(e.x * 10)},${Math.round(e.z * 10)}`);
+                e.seen = scenery.inView(e.x, y(e.c), e.z, r);
+                e.keep = e.seen && e.d <= holdM && Scenery.shown(fades.get(e.fk));
+            }
+        };
+        // What a kind's choice leaves: the things chosen fade in or stay, the rest in view fade out (`going`, drawn until
+        // they have gone), the rest out of view go now
+        const settle = function* (list, kind, into) {
+            let n = 0;
+            for (const e of list) {
+                if (++n % Scenery.STEP_THINGS === 0) yield;
+                if (e.take) {
+                    chosen.get(e.key)[into].push(e.i);
+                    const st = scenery.fadeOf(e.fk, kind);
+                    scenery.fadeTo(st, kind, e.seen);
+                    st.stamp = stamp;
+                } else {
+                    const st = fades.get(e.fk);
+                    if (st && scenery.fadeOut(st, e.seen)) {
+                        st.stamp = stamp;
+                        e.going = true;
+                    }
+                }
+            }
+        };
         yield;
         houses.sort(order);
+        yield* look(houses, 'house', Scenery.BUILDING_REACH_M, c => c.matrix.elements[13] + 5, 12);
         let instances = 0, triangles = 0;
         for (const e of houses) {
-            if (e.d > Scenery.BUILDING_REACH_M) break;
-            if (instances + e.c.parts > Scenery.BUILDING_CAP || triangles + e.c.cost > houseCap) continue;
+            if (!e.keep) continue;
+            e.take = true;
             instances += e.c.parts;
             triangles += e.c.cost;
-            chosen.get(e.key).houses.push(e.i);
         }
+        // (held over the houses' share by more than HOLD_OVER, or over their parts' cap: the furthest of them go, with a fade)
+        for (let k = houses.length - 1; k >= 0 && (triangles > houseCap + Scenery.HOLD_OVER || instances > Scenery.BUILDING_CAP); k--) {
+            const e = houses[k];
+            if (!e.take) continue;
+            e.take = e.keep = false;
+            instances -= e.c.parts;
+            triangles -= e.c.cost;
+        }
+        for (const e of houses) {
+            if (e.take) continue;
+            if (e.d > Scenery.BUILDING_REACH_M) break;
+            if (instances + e.c.parts > Scenery.BUILDING_CAP || triangles + e.c.cost > houseCap) continue;
+            e.take = true;
+            instances += e.c.parts;
+            triangles += e.c.cost;
+        }
+        yield* settle(houses, 'house', 'houses');
+        const housesGoing = houses.filter(e => e.going).map(e => e.c);
+        if (this.left) housesGoing.push(...this.stillLeaving(this.left.houses, c => c.fk, stamp));
         yield;
         boulders.sort(order);
-        for (const e of boulders.slice(0, Scenery.BOULDER_CAP)) chosen.get(e.key).boulders.push(e.i);
+        yield* look(boulders, 'boulder', this.boulderReachM, c => c.matrix.elements[13], 3);
+        let boulderCount = 0;
+        for (const e of boulders) if (e.keep && boulderCount < Scenery.BOULDER_CAP * Scenery.HOLD_REACH) { e.take = true; boulderCount++; }
+        for (const e of boulders) {
+            if (boulderCount >= Scenery.BOULDER_CAP) break;
+            if (e.take) continue;
+            e.take = true;
+            boulderCount++;
+            this.boulderReachM = e.d;
+        }
+        yield* settle(boulders, 'boulder', 'boulders');
+        const bouldersDrawn = boulders.filter(e => e.take || e.going)
+            // (a tile let go of while the choice ran in steps has nothing to draw)
+            .filter(e => this.perTile.has(e.key)).map(e => ({ c: e.c, shape: e.shape }));
+        // (and those of a tile let go of, fading out: leave)
+        if (this.left) bouldersDrawn.push(...this.stillLeaving(this.left.boulders, e => e.c.fk, stamp));
         yield;
         // (the tufts a tile at a time, its nearest tuft first: a tuft mesh for each tile a few were spread over put the
         // window over its meshes' margin)
         const tileNear = new Map();
         for (const e of tufts) tileNear.set(e.key, Math.min(tileNear.has(e.key) ? tileNear.get(e.key) : Infinity, e.d));
         tufts.sort((p, q) => tileNear.get(p.key) - tileNear.get(q.key) || (p.key < q.key ? -1 : p.key > q.key ? 1 : 0) || order(p, q));
+        yield* look(tufts, 'tuft', this.tuftReachM, c => c.y, 0.6);
         let tuftsTaken = 0;
+        const perTile = new Map();
+        const count = e => perTile.set(e.key, (perTile.get(e.key) || 0) + 1);
+        for (const e of tufts) if (e.keep && tuftsTaken < Scenery.TUFT_CAP * Scenery.HOLD_REACH) { e.take = true; tuftsTaken++; count(e); }
+        let tuftReach = 0;
         for (const e of tufts) {
             if (tuftsTaken >= Scenery.TUFT_CAP) break;
-            const list = chosen.get(e.key).tufts;
-            if (list.length >= Scenery.TUFTS_PER_TILE) continue;
-            list.push(e.i);
+            if (e.take || (perTile.get(e.key) || 0) >= Scenery.TUFTS_PER_TILE) continue;
+            e.take = true;
             tuftsTaken++;
+            count(e);
+            tuftReach = Math.max(tuftReach, e.d);
         }
+        if (tuftReach > 0) this.tuftReachM = tuftReach;
+        yield* settle(tufts, 'tuft', 'tufts');
+        for (const e of tufts) if (e.going) chosen.get(e.key).going.push(e.i);
+        for (const kind of ['house', 'boulder', 'tuft']) this.dropFades(kind, stamp, true);
         let walls = false;
         this.capsBusy = true;
         try {
@@ -1397,9 +1787,9 @@ class Scenery {
             this.capsBusy = false;
         }
         if (walls) this.stamp = (this.stamp || 0) + 1;
-        this.drawBoulders(boulders.slice(0, Scenery.BOULDER_CAP));
+        this.drawBoulders(bouldersDrawn);
         yield;
-        yield* this.drawHousesSteps(tiles, chosen);
+        yield* this.drawHousesSteps(tiles, chosen, housesGoing);
         // (the trees take the room the houses and boulders leave: Scenery.rankTrees)
         this.treesDirty = true;
     }
@@ -1422,27 +1812,33 @@ class Scenery {
     // The chosen houses of every tile into the window's meshes: a mesh for each part of each model, and one mesh of
     // their footings in stone, made again when the houses drawn change (a mesh for each model of each tile with any put
     // the window over its meshes' margin once the caps were shared over the window)
-    drawHouses(tiles, chosen) {
-        Scenery.drain(this.drawHousesSteps(tiles, chosen));
+    drawHouses(tiles, chosen, going = []) {
+        Scenery.drain(this.drawHousesSteps(tiles, chosen, going));
     }
 
     // The same in steps, a model at a time; the houses drawn stay until the new ones are made
-    *drawHousesSteps(tiles, chosen) {
+    *drawHousesSteps(tiles, chosen, going = []) {
         const list = [];
         for (const [key, h] of tiles) {
             if (this.perTile.get(key) !== h || !h.candidates) continue;
             for (const i of chosen.get(key).houses) list.push(h.candidates.houses[i]);
         }
+        // (and the houses fading out in view: Scenery.FADE_S)
+        for (const c of going) list.push(c);
         const sig = list.map(c => `${c.x},${c.z}`).join('|');
         if (sig === this.housesSig) return;
         const made = new THREE.Group();
         const byHome = new Map();
-        for (const c of list) (byHome.get(c.home) || byHome.set(c.home, []).get(c.home)).push(c.matrix);
-        for (const [home, matrices] of byHome) {
-            this.instanced(home.parts, matrices, `houses:${home.name}`, made);
+        for (const c of list) (byHome.get(c.home) || byHome.set(c.home, []).get(c.home)).push(c);
+        const meshesOf = new Map();
+        for (const [home, homes] of byHome) {
+            const before = made.children.length;
+            this.instanced(home.parts, homes.map(c => c.matrix), `houses:${home.name}`, made);
+            meshesOf.set(home, made.children.slice(before));
             yield;
         }
-        if (list.length) made.add(Scenery.footingMesh(list.map(c => c.foot), 'houses:footing'));
+        const footing = list.length ? Scenery.footingMesh(list.map(c => c.foot), 'houses:footing', true) : null;
+        if (footing) made.add(footing);
         yield;
         // (a choice made whole meanwhile is the one drawn)
         if (sig === this.housesSig) {
@@ -1455,6 +1851,17 @@ class Scenery {
             if (mesh.isInstancedMesh) mesh.dispose();
             else mesh.geometry.dispose();
         }
+        // Each house's share into its parts and its footing
+        const fades = this.fades || (this.fades = new Map());
+        const per = footing ? footing.userData.fadeRun : 0;
+        list.forEach((c, k) => {
+            const st = c.fk ? fades.get(c.fk) : null;
+            if (!st) return;
+            st.slots.length = 0;
+            const n = byHome.get(c.home).indexOf(c);
+            for (const mesh of meshesOf.get(c.home)) this.slotFade(st, mesh.instanceMatrix, n * 16 + 3, 1, 1, false);
+            if (footing) this.slotFade(st, footing.geometry.attributes.fadeCut, k * per, 1, per, false);
+        });
         const meshes = [...made.children];
         for (const mesh of meshes) {
             mesh.castShadow = mesh.receiveShadow = true;
@@ -1463,16 +1870,13 @@ class Scenery {
         if (meshes.length && this.onMeshes) this.onMeshes(meshes);
     }
 
-    // The chosen boulders of every tile into the window's meshes, a mesh for each shape, nearest first
+    // The chosen boulders of every tile into the window's meshes, a mesh for each shape, nearest first, and those
+    // fading out in view (Scenery.FADE_S)
     drawBoulders(chosen) {
         const byShape = new Map();
-        for (const e of chosen) {
-            const h = this.perTile.get(e.key);
-            if (!h || !h.candidates) continue;
-            const shape = h.candidates.boulderShape;
-            (byShape.get(shape) || byShape.set(shape, []).get(shape)).push(h.candidates.boulders[e.i].matrix);
-        }
+        for (const { c, shape } of chosen) (byShape.get(shape) || byShape.set(shape, []).get(shape)).push(c);
         this.boulderMeshes = this.boulderMeshes || new Map();
+        const fades = this.fades || (this.fades = new Map());
         const added = [];
         for (let shape = 0; shape < Scenery.BOULDER_SHAPES; shape++) {
             const list = byShape.get(shape) || [];
@@ -1480,7 +1884,7 @@ class Scenery {
             if (!mesh && !list.length) continue;
             if (!mesh) {
                 const part = Scenery.boulderPart(shape);
-                mesh = new THREE.InstancedMesh(part.geometry, part.material, Scenery.BOULDER_CAP);
+                mesh = Scenery.fading(new THREE.InstancedMesh(part.geometry, part.material, Math.ceil(Scenery.BOULDER_CAP * Scenery.FADE_ROOM)));
                 mesh.name = 'boulders';
                 mesh.frustumCulled = false;
                 mesh.userData.world = 'scenery';
@@ -1488,9 +1892,19 @@ class Scenery {
                 this.boulderGroup.add(mesh);
                 added.push(mesh);
             }
-            list.forEach((m, i) => mesh.setMatrixAt(i, m));
-            mesh.count = list.length;
-            mesh.visible = list.length > 0;
+            let n = 0;
+            for (const c of list) {
+                if (n >= mesh.instanceMatrix.count) break;
+                mesh.setMatrixAt(n, c.matrix);
+                const st = c.fk ? fades.get(c.fk) : null;
+                if (st) {
+                    st.slots.length = 0;
+                    this.slotFade(st, mesh.instanceMatrix, n * 16 + 3, 1, 1, false);
+                }
+                n++;
+            }
+            mesh.count = n;
+            mesh.visible = n > 0;
             mesh.instanceMatrix.needsUpdate = true;
         }
         if (added.length && this.onMeshes) this.onMeshes(added);
@@ -1522,7 +1936,20 @@ class Scenery {
             houseTriangles += house.cost;
         }
         const before = group.children.length;
-        if (pick.tufts.length) group.add(Scenery.tuftMesh(pick.tufts.map(i => c.tufts[i])));
+        // (and the tufts fading out in view, Scenery.FADE_S; each tuft's share into its run of the mesh)
+        const drawn = [...pick.tufts, ...(pick.going || [])];
+        if (drawn.length) {
+            const mesh = Scenery.tuftMesh(drawn.map(i => c.tufts[i]));
+            const fades = this.fades || (this.fades = new Map());
+            const cut = mesh.geometry.attributes.fadeCut, first = mesh.userData.tuftFirst;
+            drawn.forEach((i, k) => {
+                const st = c.tufts[i].fk ? fades.get(c.tufts[i].fk) : null;
+                if (!st) return;
+                st.slots.length = 0;
+                this.slotFade(st, cut, first[k], 1, first[k + 1] - first[k], false);
+            });
+            group.add(mesh);
+        }
         added.push(...group.children.slice(before));
         const boulderTriangles = pick.boulders.length ? pick.boulders.length * Scenery.boulderPart(c.boulderShape).triangles : 0;
         this.houseInstances += parts - h.house;
@@ -1537,11 +1964,13 @@ class Scenery {
 
     // Draws the window's trees, each at its level. Of the trees of every tile, nearest the bike first: the share the
     // quality level draws, at most TREE_CAP, while the triangle cap has room for each at its far level after
-    // TREE_NEAR_KEPT near trees' worth of it (the houses, the boulders and the stones come first). Then, out of the
-    // room left and nearest first, the trees within TREE_NEAR_M at the near level (treeNear of them at the most) and
-    // the next within TREE_MID_M at the mid level (TREE_MID_CAP times the share), the rest far. So the nearest trees are
-    // always drawn, and the window never holds more than the cap. Read again when the tiles change and for every
-    // TREE_RANK_M the bike moves
+    // TREE_NEAR_KEPT near trees' worth of it (the houses, the boulders and the stones come first). The trees drawn and
+    // in view are held (Scenery.FADE_S): they take their room first, so what the room is short of is taken from the
+    // trees out of view, the furthest first. Then, out of the room left and nearest first, the trees within TREE_NEAR_M
+    // at the near level (treeNear of them at the most) and the next within TREE_MID_M at the mid level (TREE_MID_CAP
+    // times the share), the rest far. A tree that comes, goes or changes its level in view fades. So the nearest trees
+    // are always drawn, and the window holds no more than the cap, and HOLD_OVER over it at the most while it holds.
+    // Read again when the tiles change, for every TREE_RANK_M the bike moves and when a fade ends
     rankTrees(bike, force = false) {
         if (!bike) return;
         // (from the middle of the bike's TREE_RANK_M square, so the trees drawn are the same whatever order the tiles
@@ -1551,8 +1980,11 @@ class Scenery {
         if (!force && !this.treesDirty && last && last.x === bike.x && last.z === bike.z) return;
         this.treeBike = { x: bike.x, z: bike.z };
         this.treesDirty = false;
+        const fades = this.fades || (this.fades = new Map());
+        const stamp = this.treeStamp = (this.treeStamp || 0) + 1;
         // The tiles nearest first, and their trees until the cap is sure to be among them: a tile whose nearest point
-        // is past the furthest tree taken so far, once the cap is reached, holds none of the nearest
+        // is past the furthest tree taken so far, once the cap is reached, holds none of the nearest. Past it only the
+        // trees drawn now are read, as one held in view may stand there
         const half = WorldData.TILE_M / 2;
         const tiles = [];
         for (const [key, held] of this.perTile) {
@@ -1566,39 +1998,83 @@ class Scenery {
         const all = [];
         let furthest = 0;
         for (const { held, d } of tiles) {
-            if (all.length >= Scenery.TREE_CAP && d > furthest) break;
+            const past = all.length >= Scenery.TREE_CAP && d > furthest;
             for (const site of held.treeSites) {
+                if (past && (!this.view || !fades.has(site.key))) continue;
                 site.d = Math.hypot(site.x - bike.x, site.z - bike.z);
-                furthest = Math.max(furthest, site.d);
+                if (!past) furthest = Math.max(furthest, site.d);
                 all.push(site);
             }
         }
         all.sort((a, b) => a.d - b.d);
+        // Which are in view, and which of those are drawn and held
+        const holdM = (this.treeReachM || Infinity) * Scenery.HOLD_REACH;
+        for (const site of all) {
+            site.seen = this.inView(site.x, site.cy, site.z, site.r);
+            site.keep = site.seen && site.d <= holdM && Scenery.shown(fades.get(site.key));
+        }
         const others = this.triangles - this.treeTriangles;
         const shot = this.shot || {};
         // (and the stage's own share of it, WorldLooks.viewOf `sceneryScale`: a leg whose land is denser keeps LEG_BUDGET)
         let cap = Scenery.TRIANGLE_CAP * (shot.triangleScale || 1) * (this.stageScale || 1);
         // (and no more than the window's room: setWindowRoom; the held shot keeps its own raise)
         if (!this.shot && this.windowRoom !== null && this.windowRoom !== undefined) cap = Math.min(cap, this.windowRoom);
-        let room = Math.max(0, cap - others - Scenery.TREE_NEAR_KEPT * this.nearExtra());
+        const kept = Scenery.TREE_NEAR_KEPT * this.nearExtra();
+        let room = cap - others - kept;
         const total = this.perTile.size ? [...this.perTile.values()].reduce((n, held) => n + (held.trees || 0), 0) : 0;
         const want = Math.min(Scenery.TREE_CAP, Math.ceil(total * this.treeShare));
-        let drawn = 0;
+        // The held trees first; over the room by more than HOLD_OVER, or over the share, the furthest of them go, with a
+        // fade
+        const chosen = [];
         let spent = 0;
-        while (drawn < want && drawn < all.length && all[drawn].cost <= room) {
-            room -= all[drawn].cost;
-            spent += all[drawn].cost;
-            drawn++;
+        for (const site of all) {
+            if (!site.keep) continue;
+            chosen.push(site);
+            spent += site.cost;
         }
-        room += Scenery.TREE_NEAR_KEPT * this.nearExtra();
+        room -= spent;
+        // (and no more than the quality level's share: a step down the ladder lets them go, with a fade)
+        while ((room < -Scenery.HOLD_OVER || chosen.length > want) && chosen.length) {
+            const site = chosen.pop();
+            site.keep = false;
+            room += site.cost;
+            spent -= site.cost;
+        }
+        // Then the rest, nearest first, while the share and the room allow
+        let reachM = 0;
+        for (const site of all) {
+            if (site.keep) continue;
+            if (chosen.length >= want || site.cost > room) break;
+            chosen.push(site);
+            room -= site.cost;
+            spent += site.cost;
+            reachM = site.d;
+        }
+        if (reachM > 0) this.treeReachM = reachM;
+        chosen.sort((a, b) => a.d - b.d);
+        room += kept;
         room = Math.min(room, cap - others - spent);
         const most = { near: this.treeNear, mid: Math.round(Scenery.TREE_MID_CAP * this.treeShare) };
         const reach = { near: shot.treeNearM || Scenery.TREE_NEAR_M, mid: shot.treeMidM || Scenery.TREE_MID_M };
         const counts = { near: 0, mid: 0, far: 0 };
         for (const mesh of this.forestMeshes.values()) mesh.userData.drawn = 0;
-        const tint = new THREE.Color();
-        for (let i = 0; i < drawn; i++) {
-            const site = all[i];
+        const tint = this.rankTint || (this.rankTint = new THREE.Color());
+        // A tree into the forest's meshes at a level, its share written (the level it fades from carries the rest)
+        const draw = (site, st, level, old) => {
+            const parts = Scenery.levelsOf(site.shape)[level];
+            tint.setRGB(site.tint[0], site.tint[1], site.tint[2]);
+            parts.forEach((part, k) => {
+                const mesh = this.forestMesh(site.shape, level, k, part);
+                const n = mesh.userData.drawn;
+                if (n >= mesh.instanceMatrix.count) return;
+                mesh.userData.drawn++;
+                mesh.setMatrixAt(n, site.matrix);
+                mesh.setColorAt(n, tint);
+                this.slotFade(st, mesh.instanceMatrix, n * 16 + 3, 1, 1, old);
+            });
+            return Scenery.trianglesOf(parts);
+        };
+        for (const site of chosen) {
             const levels = Scenery.levelsOf(site.shape);
             let level = 'far';
             if (site.shape.lods) {
@@ -1613,14 +2089,34 @@ class Scenery {
                 }
             }
             counts[level]++;
-            tint.setRGB(site.tint[0], site.tint[1], site.tint[2]);
-            levels[level].forEach((part, k) => {
-                const mesh = this.forestMesh(site.shape, level, k, part);
-                const n = mesh.userData.drawn++;
-                mesh.setMatrixAt(n, site.matrix);
-                mesh.setColorAt(n, tint);
-            });
+            site.picked = stamp;
+            const st = this.fadeOf(site.key, 'tree');
+            this.fadeTo(st, level, site.seen);
+            st.stamp = stamp;
+            st.slots.length = 0;
+            draw(site, st, st.level, false);
+            // (the level it fades from, drawn until the fade ends)
+            if (st.old) spent += draw(site, st, st.old, true);
         }
+        // The trees no longer chosen: in view they fade out, drawn until they have gone; out of view they go now
+        for (const site of all) {
+            if (site.picked === stamp) continue;
+            const st = fades.get(site.key);
+            if (!st || !this.fadeOut(st, site.seen)) continue;
+            st.stamp = stamp;
+            st.slots.length = 0;
+            spent += draw(site, st, st.level, false);
+        }
+        // (and those of a tile let go of, fading out: leave)
+        if (this.left) {
+            for (const site of this.stillLeaving(this.left.trees, site => site.key, stamp)) {
+                if (site.picked === stamp) continue;
+                const st = fades.get(site.key);
+                st.slots.length = 0;
+                spent += draw(site, st, st.level, false);
+            }
+        }
+        this.dropFades('tree', stamp);
         for (const mesh of this.forestMeshes.values()) {
             // (shown or hidden only as it fills or empties: what hides a drawn mesh for a while, as world-quality
             // does to measure the trees, keeps it hidden)
@@ -1629,7 +2125,7 @@ class Scenery {
             mesh.instanceMatrix.needsUpdate = true;
             if (mesh.instanceColor) mesh.instanceColor.needsUpdate = true;
         }
-        this.treeCount = drawn;
+        this.treeCount = chosen.length;
         this.triangles = others + spent;
         this.treeTriangles = spent;
         this.treeLevelCounts = counts;
@@ -2098,11 +2594,12 @@ class Scenery {
     // cards (4) read as a green cross from the saddle. Colours from the photos: pale straw over a darker foot, and the
     // dull green of the low broad-leaved plants, dark at the heart and lighter at the tips
     static tuftMesh(sites) {
-        const out = { positions: [], shades: [] };
+        const out = { positions: [], shades: [], first: [] };
         const foot = [0.42, 0.39, 0.25], straw = [0.68, 0.62, 0.44], pale = [0.62, 0.58, 0.4];
         const heart = [0.12, 0.16, 0.09], leaf = [0.2, 0.28, 0.15], tip = [0.24, 0.32, 0.17];
         const tri = (a, b, c, ka, kb, kc) => { out.positions.push(...a, ...b, ...c); out.shades.push(...ka, ...kb, ...kc); };
         for (const t of sites) {
+            out.first.push(out.positions.length / 3);
             const reach = Scenery.tuftRadius(t.green, t.size), h = Scenery.tuftHeight(t.green, t.size);
             // Each tuft's own uneven leaves and blades, from its turn (no draw of its own)
             const jit = k => 0.5 + 0.5 * Math.sin(t.turn * 7.3 + k * 2.39);
@@ -2128,8 +2625,15 @@ class Scenery {
                 tri([bx + sin * w, t.y, bz - cos * w], [bx - sin * w, t.y, bz + cos * w], [t.x + cos * out_, t.y + up, t.z + sin * out_], foot, foot, k % 2 ? straw : pale);
             }
         }
-        if (!Scenery.tuftMaterial) Scenery.tuftMaterial = new THREE.MeshLambertMaterial({ vertexColors: true, side: THREE.DoubleSide });
-        const mesh = new THREE.Mesh(RoadMesh.geometry(out.positions, out.shades), Scenery.tuftMaterial);
+        if (!Scenery.tuftMaterial) {
+            Scenery.tuftMaterial = new THREE.MeshLambertMaterial({ vertexColors: true, side: THREE.DoubleSide });
+            Scenery.tuftMaterial.userData.fadeAttribute = true;
+        }
+        const geometry = RoadMesh.geometry(out.positions, out.shades);
+        // Each tuft's share (Scenery.FADE_S), in the run of vertices it starts at (tuftFirst, and its end at the next)
+        geometry.setAttribute('fadeCut', new THREE.BufferAttribute(new Float32Array(geometry.attributes.position.count), 1));
+        const mesh = Scenery.fading(new THREE.Mesh(geometry, Scenery.tuftMaterial));
+        mesh.userData.tuftFirst = out.first.concat([geometry.attributes.position.count]);
         mesh.name = 'tufts';
         mesh.userData.world = 'scenery';
         mesh.userData.tileOwned = true;
