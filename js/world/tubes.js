@@ -99,7 +99,10 @@ class TubeLining {
 
     // One quad a b c d with its normal `n` (the side it is lit from: into the tube), wound so that side is its front.
     // `at(p, k)` gives each corner's attributes {s, h, lat, inM, u, v} (k 0 to 3), `kind` and `color` the piece's
+    // `n` may be four normals, one for each corner (a curved face lit smooth across its pieces), wound by their mean
     static quad(buf, a, b, c, d, n, kind, color, at, share) {
+        const each = Array.isArray(n[0]) ? n : null;
+        if (each) n = [0, 1, 2].map(i => (each[0][i] + each[1][i] + each[2][i] + each[3][i]) / 4);
         const ux = b[0] - a[0], uy = b[1] - a[1], uz = b[2] - a[2], vx = c[0] - a[0], vy = c[1] - a[1], vz = c[2] - a[2];
         const w = (uy * vz - uz * vy) * n[0] + (uz * vx - ux * vz) * n[1] + (ux * vy - uy * vx) * n[2];
         let corners = w >= 0 ? [[a, 0], [b, 1], [c, 2], [a, 0], [c, 2], [d, 3]] : [[a, 0], [c, 2], [b, 1], [a, 0], [d, 3], [c, 2]];
@@ -108,7 +111,8 @@ class TubeLining {
         for (const [p, k] of corners) {
             const e = at(p, k);
             buf.positions.push(p[0], p[1], p[2]);
-            buf.normals.push(n[0], n[1], n[2]);
+            const nk = each ? each[k] : n;
+            buf.normals.push(nk[0], nk[1], nk[2]);
             buf.colors.push(color[0], color[1], color[2]);
             buf.tube.push(e.s, e.h, kind, share(e));
             buf.aux.push(e.ax, e.az, e.lat, e.inM);
@@ -371,13 +375,16 @@ class TubeLining {
                 const lat = sign * (half - R.inM + R.inM * Math.cos(th)), h = roof - R.riseM + R.riseM * Math.sin(th);
                 return { p: point(k, t, lat, h), lat, h };
             };
-            for (let i = 0; i < n; i++) {
-                const th = ((i + 0.5) / n) * Math.PI / 2;
+            // (each corner lit by the curve's own normal there, so the pieces shade as one smooth vault, not as facets)
+            const normalAt = (j, f) => {
+                const th = (j / n) * Math.PI / 2;
                 const gx = Math.cos(th) / R.inM, gy = Math.sin(th) / R.riseM, gl = Math.hypot(gx, gy);
-                const rx = (fa.rx + fb.rx) / 2, rz = (fa.rz + fb.rz) / 2;
-                const nrm = [-sign * rx * gx / gl, -gy / gl, -sign * rz * gx / gl];
+                return [-sign * f.rx * gx / gl, -gy / gl, -sign * f.rz * gx / gl];
+            };
+            for (let i = 0; i < n; i++) {
                 const c = [at(0, fa.half, ra, i), at(1, fb.half, rb, i), at(1, fb.half, rb, i + 1), at(0, fa.half, ra, i + 1)];
-                TubeLining.quad(buf, c[0].p, c[1].p, c[2].p, c[3].p, nrm, K.concrete, C.concrete, (p, j) => attr(k, j === 1 || j === 2 ? 1 : 0, c[j].lat, c[j].h), share);
+                const ns = [normalAt(i, fa), normalAt(i, fb), normalAt(i + 1, fb), normalAt(i + 1, fa)];
+                TubeLining.quad(buf, c[0].p, c[1].p, c[2].p, c[3].p, ns, K.concrete, C.concrete, (p, j) => attr(k, j === 1 || j === 2 ? 1 : 0, c[j].lat, c[j].h), share);
             }
         }
     }

@@ -486,7 +486,7 @@ vec4 wallBase(float style, float down, float u, float y, float near) {
         float inCourse = fract((down - from) / 1.0);
         float bu = u / 2.0 + 0.5 * mod(course, 2.0);
         float edge = min(min(fract(bu), 1.0 - fract(bu)) * 2.0, min(inCourse, 1.0 - inCourse));
-        vec3 cell = wallCells(vec2(u, y) / 0.2);
+        vec3 cell = wallCells(vec2(u, y) / 0.3);
         float tone = 0.55 + 0.45 * cell.z;
         c = vec3(tone * 1.02, tone, tone * 0.96) * mix(0.3, 1.0, smoothstep(0.01, 0.12, cell.y - cell.x) * near + 1.0 - near);
         float m1 = abs(fract((u + y) / 0.1) - 0.5), m2 = abs(fract((u - y) / 0.1) - 0.5);

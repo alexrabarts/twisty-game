@@ -119,7 +119,7 @@ class StructureStyles {
     // The rounded profile: how far in from each wall the curve reaches (`inM`, never past TUBE_FLOOR_M from the
     // carriageway's edge, so the full roof stands over the whole carriageway) and from how far under the roof it rises
     // (`riseM`). Over the walkway the roof is lower than the box's: the camera reads it (StructureStyles.roofAt)
-    static get ROUND() { return { inM: RoadMesh.TUBE_WALL_M - RoadMesh.TUBE_FLOOR_M, riseM: 3.0, pieces: 4, farPieces: 4, minRoofM: 5.5 }; }
+    static get ROUND() { return { inM: RoadMesh.TUBE_WALL_M - RoadMesh.TUBE_FLOOR_M, riseM: 3.0, pieces: 6, farPieces: 6, minRoofM: 5.5 }; }
 
     // The roof's height over the floor `d` metres in from the nearer wall of a tube `roof` high, by its profile
     static roofAt(profile, d, roof) {
@@ -379,6 +379,11 @@ float structRelief(float face, float kind, bool level, vec2 p) {
         // A soffit: damp and dark, efflorescence along some panel joints, the drip line under the edge beam, the
         // wettest strip along the edges
         if (sKind == ${f(K.soffit)} || down) {
+            // (the plywood forms' joints and each panel's own tone read from the road under it, to 120 m: a soffit is
+            // seen from 20 to 60 m away, where the near detail has faded)
+            vec4 form = structPanel(P.xz * vec2(1.0, 2.0));
+            float formNear = 1.0 - smoothstep(30.0, 120.0, dist);
+            c *= 1.1 * (1.0 + 0.12 * form.w * formNear) * mix(1.0, mix(0.62, 1.0, smoothstep(0.006, 0.02, form.y)), formNear);
             float damp = smoothstep(0.45, 0.8, structFbm(P.xz * 0.35 + 5.0));
             c *= 1.0 - 0.3 * damp * age;
             vec4 pn = structPanel(P.xz);

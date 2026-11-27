@@ -2845,11 +2845,14 @@ class RoadMesh {
             for (const key of ['l', 'r']) StructureBuild.parapet(out, rails[key].filter(seg => segStyle[seg.k] === style), RoadMesh.PARAPET_W_M, H, style, colors.concrete);
         }
         yield;
-        const piers = RoadMesh.placePiers(out, runs, { groundAt, footAt, guard, styles: runStyles });
+        // (sized to the deck it carries, as the ride's are: a cap most of the deck's width, so a pier does not read as a
+        // post under a 24 m span; placed and kept clear of every road at that size)
+        const across = sides.length ? Math.hypot(sides[0].r[0] - sides[0].l[0], sides[0].r[2] - sides[0].l[2]) : 0;
+        const piers = RoadMesh.placePiers(out, runs, { groundAt, footAt, guard, styles: runStyles, width: Math.max(RoadMesh.PIER_W_M, Math.min(3.5, across * 0.55)), depth: Math.max(RoadMesh.PIER_D_M, 1.6) });
         yield;
         // The lining of each tube run: metres along from the road's first row, metres in from its portals (none where
         // it goes on past the drawn rows), its rock on the side where the land outside stands higher. A side road is
-        // seen from the ride, so it has its lining and no fittings
+        // seen from the ride, so it has its lining and its lamps, no other fittings
         const lining = TubeLining.parts();
         if (tubeRuns.length) {
             const along = [0];
