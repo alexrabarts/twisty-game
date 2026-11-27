@@ -1464,6 +1464,10 @@ class WorldEnvironment {
         const gallery = i => (points[i].bits & 5) === 4;
         for (const [from, to] of RoadMesh.runs(points, 1 | 4)) {
             const tube = [along[from], along[to]];
+            // (one style for the whole tube, StructureStyles.tube: a tube with a gallery in it keeps the box)
+            let mixed = false;
+            for (let i = from; i <= to; i++) mixed = mixed || gallery(i);
+            const style = StructureStyles.tube({ x: Math.round(tube[0]), z: 0, gallery: mixed });
             let a = from;
             for (let i = from; i <= to; i++) {
                 if (i < to && gallery(i + 1) === gallery(a)) continue;
@@ -1476,7 +1480,7 @@ class WorldEnvironment {
                 const g = gallery(a), rock = lean >= 0 ? 1 : -1;
                 for (let j = a; j <= i; j++) run[j] = runs.length;
                 // (a gallery's mountain side is rock or sprayed concrete, by the run)
-                runs.push({ s0: along[a], s1: along[i], tube, gallery: g, rock, open: g ? -rock : 0, shotcrete: g && LandShade.hash(a, i, 7) > 0.5 });
+                runs.push({ s0: along[a], s1: along[i], tube, gallery: g, rock, open: g ? -rock : 0, shotcrete: g && LandShade.hash(a, i, 7) > 0.5, style, profile: style.profile });
                 a = i + 1;
             }
         }
@@ -3229,9 +3233,11 @@ class WorldEnvironment {
         const foot = (p, sign) => { const o = sign * (p.width / 2 + RoadMesh.TUBE_WALL_M); return [p.x + o * Math.cos(p.heading), p.y, p.z - o * Math.sin(p.heading)]; };
         const tube = i => !!(points[i] && points[i].bits & 5);
         // (a box in front of a portal is marked `mouth`: the land is cut there, but no roof stands over it)
-        const add = (a, b, mouth = false) => { const box = TerrainMesh.tubeBox(foot(a, -1), foot(a, 1), foot(b, 1), foot(b, -1), WorldRoute.ROOF_M); if (box) list.push(mouth ? Object.assign(box, { mouth }) : box); };
+        const add = (a, b, mouth = false, profile = 'box') => { const box = TerrainMesh.tubeBox(foot(a, -1), foot(a, 1), foot(b, 1), foot(b, -1), WorldRoute.ROOF_M); if (box) list.push(mouth ? Object.assign(box, { mouth }) : Object.assign(box, { profile })); };
+        // (each box carries its tube's profile, StructureStyles.tube, for the camera's roof: tubeRoofY)
+        const info = this.tubeInfo();
         for (let i = 0; i + 1 < points.length; i++) {
-            if (tube(i) && tube(i + 1)) add(points[i], points[i + 1]);
+            if (tube(i) && tube(i + 1)) add(points[i], points[i + 1], false, info.run[i] >= 0 ? info.runs[info.run[i]].profile : 'box');
             // In front of each portal, out RoadMesh.TUBE_MOUTH_M along the road (RoadMesh.wings closes its sides)
             for (const [at, step] of [[i, -1], [i + 1, 1]]) {
                 if (!(tube(i) && tube(i + 1)) || tube(at + step) || !points[at + step]) continue;
@@ -3293,7 +3299,9 @@ class WorldEnvironment {
             if (!tube.planes.every(([nx, nz, d]) => nx * x + nz * z + d >= 0)) continue;
             const floor = tube.floor[0] + tube.floor[1] * x + tube.floor[2] * z;
             if (floor > y + WorldEnvironment.TUBE_LEVEL_M || floor + tube.roof < y) continue;
-            low = Math.min(low, floor + tube.roof - WorldEnvironment.TUBE_CAMERA_M);
+            // (a rounded tube's roof comes down over its walkways: the room kept is round the camera, StructureStyles)
+            const wall = Math.min(tube.planes[0][0] * x + tube.planes[0][1] * z + tube.planes[0][2], tube.planes[2][0] * x + tube.planes[2][1] * z + tube.planes[2][2]);
+            low = Math.min(low, floor + StructureStyles.ceilingAt(tube.profile, wall, tube.roof, WorldEnvironment.TUBE_CAMERA_M));
         }
         return low;
     }
@@ -3320,7 +3328,7 @@ class WorldEnvironment {
     // The tubes a side chunk draws ({la, ra, rb, lb, roof}, RoadMesh.sideStructures): the tiles under them are drawn
     // again, at the level of detail they have, when they change
     setSideTubes(k, segments) {
-        const boxes = segments.map(s => { const box = TerrainMesh.tubeBox(s.la, s.ra, s.rb, s.lb, s.roof); return box && s.mouth ? Object.assign(box, { mouth: true }) : box; }).filter(Boolean);
+        const boxes = segments.map(s => { const box = TerrainMesh.tubeBox(s.la, s.ra, s.rb, s.lb, s.roof); return box && s.mouth ? Object.assign(box, { mouth: true }) : box && Object.assign(box, { profile: s.profile || 'box' }); }).filter(Boolean);
         const sign = list => list.map(b => b.box.map(v => Math.round(v * 100)).join(',') + `:${Math.round(b.roof * 100)}`).join('|');
         const old = this.sideTubes.get(k) || [];
         if (sign(old) === sign(boxes)) return;
