@@ -6548,7 +6548,8 @@ async function worldMain() {
     const server = await startServer();
     const port = server.address().port;
     const args = gpu ? [] : ['--use-angle=swiftshader', '--enable-unsafe-swiftshader', '--ignore-gpu-blocklist'];
-    const browser = await puppeteer.launch({ protocolTimeout: 1800000, executablePath, headless: 'new', args: ['--no-sandbox', ...args] });
+    // (four hours for one call into the page: world-pops --villages rides every village of a long leg at two speeds in one)
+    const browser = await puppeteer.launch({ protocolTimeout: 14400000, executablePath, headless: 'new', args: ['--no-sandbox', ...args] });
     const id = option('world') || 'tremola';
     const report = { chrome: executablePath, mode: gpu ? 'gpu' : 'headless', world: id, blocked: state.blocked, notFound: state.notFound, pageErrors: state.pageErrors, results: {}, failures: [], notes: [] };
     let exit = 0;
@@ -7178,7 +7179,9 @@ function worldChecks(report) {
     shotChecks(results, failures);
     // No thing of the window's scenery pops in view because the room changed (world-pops)
     const pops = results['world-pops'];
-    if (pops && pops.summary && pops.summary.inViewByCause.room) failures.push(`world-pops: ${pops.summary.inViewByCause.room.n} pops in view from a change of the window's room, want none`);
+    if (pops && pops.summary && pops.summary.inView) failures.push(`world-pops: ${pops.summary.inView} pops in view in the ride (${JSON.stringify(pops.summary.inViewByKind)}), want none`);
+    if (pops && pops.summary && pops.summary.villageNearInView) failures.push(`world-pops: ${pops.summary.villageNearInView} houses first drawn in view within ${HOUSE_NEAR_M} m of the camera in the villages, want none`);
+    if (pops && pops.summary && pops.summary.standComesGoes) failures.push(`world-pops: ${pops.summary.standComesGoes} things came or went in view with the bike stopped (${JSON.stringify(pops.summary.standByKind)}), want none`);
     const steps = results['world-steps'];
     if (steps && steps.hostLoad > STEPS_LOAD_MOST) failures.push(`world-steps: the host's load was ${steps.hostLoad} per CPU, over ${STEPS_LOAD_MOST}: the steps are not measured (run it on a quiet host)`);
     else if (steps) for (const list of Object.values(steps.slowestByKind || {})) for (const t of list) if (t.ms > STEPS_MOST_MS) failures.push(`world-steps: ${t.id} took ${t.ms} ms, over ${STEPS_MOST_MS}: ${JSON.stringify(t.parts)}`);
@@ -7616,10 +7619,30 @@ WORLD['hill-look'] = async (page) => {
 // and its cause: `room` when the window's room changed (Game.budgetWindow, Scenery.setWindowRoom; the caps and trees are
 // chosen again at once at the same place, so the change is the room's alone), with what changed the room by kind (land,
 // roads, riders, the player's bike, structures, scenery), else `tiles` when a tile came or went in the last second,
-// else `move`. Fails on a pop in view caused by the room. `--out <dir>` writes frame strips round the first --strips
-// pops and fades in view (the frame before, the frame of the change, then 8, 16 and 32 frames on, cropped round it)
-//   node tools/terrain-check.mjs world-pops --world tremola --gpu [--from s] [--to s] [--speed 18] [--mode far] [--out <dir>] [--strips 24]
+// else `move`. The forest's crown clumps on the land's middle tiles (TerrainMesh.clumps) are read too, as things of
+// their own (`clump`). `--level <id>` holds a quality level for the ride (Quality.LEVELS; the ladder is off in a probe).
+// `--stand <frames>` then stops the bike at --stands places (ride metres; every STAND_EVERY_M of the stretch by
+// default) and holds it there: the far chase settles, then the quality level is stepped down the whole ladder and up
+// again, --stand frames at each level, the window's room measured as the ride measures it. A stopped bike's view holds
+// still (Scenery.holdsStill), so nothing may come into it or go out of it then, by a pop or a fade: only a tree that
+// changes its level, which fades from the one to the other. It reads the frame too: each frame of the stand against the
+// one before (at a quarter of its size, the frames of a level change and the two after apart, as its pixel ratio and
+// shadow change them all), the pixels that changed by more than STAND_PIXEL, whatever drew them.
+// `--villages` rides each village of the stage (VILLAGE_HOUSES buildings or more within VILLAGE_M of the ride) from
+// VILLAGE_LEAD_M before it at each of --speeds (15,30 m/s) and logs the first frame each house is drawn in, with its
+// distance from the camera; a house first drawn in view within HOUSE_NEAR_M fails.
+// Fails on a pop in view of the ride, or a thing that comes or goes in view on a stand. `--out <dir>` writes frame
+// strips round the first --strips pops and fades in view (the frame before, the frame of the change, then 8, 16 and
+// 32 frames on, cropped round it)
+//   node tools/terrain-check.mjs world-pops --world tremola --gpu [--from s] [--to s] [--speed 18] [--mode far] [--level <id>] [--stand 90] [--stands s,s] [--villages] [--speeds 15,30] [--out <dir>] [--strips 24]
 const POP_STEP = 0.5;
+const STAND_EVERY_M = 1000;
+const VILLAGE_M = 300;
+const VILLAGE_HOUSES = 15;
+const VILLAGE_LEAD_M = 600;
+const HOUSE_NEAR_M = 250;
+const STAND_PIXEL = 25;
+const STAND_QUIET = 300;
 const POP_OUT = join(process.env.HOME || '.', 'Library/Caches/twisty-world/pop-shots');
 function popRide(placeSource, pilotSource, opts) {
     return (async () => {
@@ -7627,8 +7650,10 @@ function popRide(placeSource, pilotSource, opts) {
         const env = game.environment, sc = env.scenery, v = game.vehicle, cam = game.camera, route = env.route;
         twistyDev.freeze();
         game.setCameraView(opts.mode);
+        if (opts.level) game.quality.fix(opts.level);
         const start = opts.from || Math.max(20, (env.startS ?? 0) + 20);
-        const end = Math.min(route.length - 30, opts.to || start + 4000, (env.endS ?? route.length) - 30);
+        // (with --villages and no --to, the villages alone)
+        const end = opts.villages && !opts.to ? start : Math.min(route.length - 30, opts.to || start + 4000, (env.endS ?? route.length) - 30);
         await placeAt(start);
         game.worldCamera.reset(v.yawAngle);
         new Function('game', 'cruise', `return (${pilotSource})(game, cruise)`)(game, opts.speed);
@@ -7639,6 +7664,7 @@ function popRide(placeSource, pilotSource, opts) {
             frustum.setFromProjectionMatrix(pv);
         };
         const seen = (x, y, z, r) => { sphere.center.set(x, y, z); sphere.radius = r; return frustum.intersectsSphere(sphere); };
+        const clumpsOf = new WeakMap();
         // What the window draws of each thing: key to { kind, x, y, z, r, levels: { level: drawn share } }
         const shareOf = (a, o) => 1 - Math.min(1, Math.abs(a[o + 3]));
         const snap = () => {
@@ -7657,6 +7683,12 @@ function popRide(placeSource, pilotSource, opts) {
                 }
             }
             for (const mesh of sc.houseGroup.children) {
+                // (the far houses: one mesh, each house a run of its vertices with its share in `fadeCut`)
+                if (mesh.userData.farHouses && mesh.visible) {
+                    const cut = mesh.geometry.attributes.fadeCut.array;
+                    for (const f of mesh.userData.farHouses) put('house', `h${f.x.toFixed(1)},${f.z.toFixed(1)}`, 'far', 1 - Math.min(1, Math.abs(cut[f.first])), f.x, f.y + 4, f.z, 9);
+                    continue;
+                }
                 if (!mesh.isInstancedMesh || !mesh.visible) continue;
                 const a = mesh.instanceMatrix.array;
                 for (let i = 0; i < mesh.count; i++) {
@@ -7671,6 +7703,19 @@ function popRide(placeSource, pilotSource, opts) {
                     const o = i * 16;
                     put('boulder', `b${a[o + 12].toFixed(1)},${a[o + 14].toFixed(1)}`, 'boulder', shareOf(a, o), a[o + 12], a[o + 13], a[o + 14], 2);
                 }
+            }
+            // (the crown clumps a middle tile's land draws: TerrainMesh.clumps, read once for each mesh)
+            for (const [key, held] of env.tileMeshes) {
+                const mesh = held.mesh;
+                if (!mesh || !mesh.parent || !mesh.visible || mesh.userData.lod !== 1) continue;
+                let list = clumpsOf.get(mesh);
+                if (!list) clumpsOf.set(mesh, list = TerrainMesh.clumps(env.data.tile(key), env.data.cover(key), 1));
+                // (each at the share the land's shader draws it at, by its tile's distance from the bike: TerrainMesh.clumpShare;
+                // a build without that fade draws them whole)
+                const limits = env.streamer.tileLodM || WorldStreamer.TILE_LOD_M;
+                const entry = TerrainMesh.drawnClumps ? TerrainMesh.drawnClumps().get(key) : null;
+                const byTime = entry && entry.mesh === mesh ? entry.share : 1;
+                for (const c of list) put('clump', `c${c.x.toFixed(1)},${c.z.toFixed(1)}`, 'clump', TerrainMesh.clumpShare ? byTime * TerrainMesh.clumpShare(c.x, c.z, v.position, limits) : 1, c.x, c.y + c.h / 2, c.z, Math.max(c.r, c.h / 2));
             }
             for (const held of sc.perTile.values()) {
                 for (const mesh of held.group.children) {
@@ -7710,22 +7755,28 @@ function popRide(placeSource, pilotSource, opts) {
             return kinds;
         };
         const events = [], rooms = [], fades = [];
-        let frame = 0, last = snap(), lastRest = restByKind(), cause = null;
+        // (`stand`: the place of the stand under way, or null while riding)
+        let frame = 0, last = snap(), lastRest = restByKind(), cause = null, stand = null;
+        // Whether a change of one level of a thing is a level change (another of its levels is drawn before or after),
+        // not the thing coming or going
+        const other = (e, level) => !!e && Object.entries(e.levels).some(([l, share]) => l !== level && share > 0);
         const tick = (now, why, room) => {
+            const dist = e => Math.round(Math.hypot(e.x - cam.position.x, e.y - cam.position.y, e.z - cam.position.z));
             for (const [key, e] of now) {
                 const was = last.get(key);
                 for (const [level, share] of Object.entries(e.levels)) {
                     const before = was ? was.levels[level] || 0 : 0;
                     const step = share - before;
-                    if (Math.abs(step) > opts.popStep) events.push({ frame, key, kind: e.kind, level, step: Math.round(step * 100) / 100, why, room, x: e.x, y: e.y, z: e.z, r: e.r, d: Math.round(Math.hypot(e.x - cam.position.x, e.y - cam.position.y, e.z - cam.position.z)) });
-                    else if (step && (before === 0 || share === 0 || before === 1 || share === 1) && Math.abs(step) <= opts.popStep) fades.push({ frame, key, kind: e.kind, level, from: before, to: share, x: e.x, y: e.y, z: e.z, r: e.r });
+                    const swap = other(e, level) || other(was, level);
+                    if (Math.abs(step) > opts.popStep) events.push({ frame, key, kind: e.kind, level, step: Math.round(step * 100) / 100, why, room, stand, swap, x: e.x, y: e.y, z: e.z, r: e.r, d: dist(e) });
+                    else if (step && (before === 0 || share === 0 || before === 1 || share === 1) && Math.abs(step) <= opts.popStep) fades.push({ frame, key, kind: e.kind, level, from: before, to: share, stand, swap, x: e.x, y: e.y, z: e.z, r: e.r, d: dist(e) });
                 }
             }
             for (const [key, e] of last) {
                 const is = now.get(key);
                 for (const [level, before] of Object.entries(e.levels)) {
                     if (is && is.levels[level] !== undefined) continue;
-                    if (before > opts.popStep) events.push({ frame, key, kind: e.kind, level, step: -Math.round(before * 100) / 100, why, room, x: e.x, y: e.y, z: e.z, r: e.r, d: Math.round(Math.hypot(e.x - cam.position.x, e.y - cam.position.y, e.z - cam.position.z)) });
+                    if (before > opts.popStep) events.push({ frame, key, kind: e.kind, level, step: -Math.round(before * 100) / 100, why, room, stand, swap: other(e, level) || other(is, level), x: e.x, y: e.y, z: e.z, r: e.r, d: dist(e) });
                 }
             }
             last = now;
@@ -7805,20 +7856,139 @@ function popRide(placeSource, pilotSource, opts) {
             for (const s of strips) while (s.left.length && s.left[0] === frame) { s.left.shift(); s.put(game.graphics.renderer.domElement, s.k++); }
             grab(ring[frame % 2]);
         }
+        // The villages: each run of the stage where VILLAGE_HOUSES buildings or more stand within VILLAGE_M of the ride,
+        // ridden from VILLAGE_LEAD_M before it at each speed; the first frame each house is drawn in, its distance and
+        // whether it is in view (the ones drawn on the put-down's first frame apart)
+        const villages = [];
+        if (opts.villages) {
+            // (the room's changes are not logged here: they are the ride's)
+            const wrapped = sc.setWindowRoom;
+            sc.setWindowRoom = setRoom;
+            const buildings = env.data.buildings || [];
+            const s0 = env.startS ?? 0, s1 = (env.endS ?? route.length) - 30;
+            const spans = [];
+            for (let at = s0; at < s1; at += 50) {
+                const p = route.sample(at, {});
+                const n = buildings.filter(b => Math.abs(b.x - p.x) < opts.villageM && Math.abs(b.z - p.z) < opts.villageM && Math.hypot(b.x - p.x, b.z - p.z) < opts.villageM).length;
+                if (n < opts.villageHouses) continue;
+                const lastSpan = spans[spans.length - 1];
+                if (lastSpan && at - lastSpan.to <= 100) lastSpan.to = at;
+                else spans.push({ from: at, to: at });
+            }
+            for (const span of spans) {
+                for (const speed of opts.speeds) {
+                    const from = Math.max(s0 + 20, span.from - opts.villageLead), to = Math.min(s1, span.to + 100);
+                    await placeAt(from);
+                    game.worldCamera.reset(v.yawAngle);
+                    twistyDev.step(1, { render: true });
+                    view();
+                    const known = new Set([...snap()].filter(([, e]) => e.kind === 'house').map(([k]) => k));
+                    const firsts = [];
+                    new Function('game', 'cruise', `return (${pilotSource})(game, cruise)`)(game, speed);
+                    let n = 0;
+                    while (v.routeS < to && !game.finished && n < 60 * 60 * 10) {
+                        twistyDev.step(1, { render: true });
+                        n++;
+                        if (n % 60 === 0) await new Promise(resolve => setTimeout(resolve, 0));
+                        view();
+                        for (const [key, e] of snap()) {
+                            if (e.kind !== 'house' || known.has(key)) continue;
+                            known.add(key);
+                            firsts.push({ s: Math.round(v.routeS), d: Math.round(Math.hypot(e.x - cam.position.x, e.y - cam.position.y, e.z - cam.position.z)), inView: seen(e.x, e.y, e.z, e.r), x: Math.round(e.x), z: Math.round(e.z), level: Object.keys(e.levels).join('/') });
+                        }
+                    }
+                    const near = firsts.filter(f => f.inView && f.d < opts.houseNearM);
+                    villages.push({ from: Math.round(from), to: Math.round(to), speed, reached: Math.round(v.routeS), crashed: v.crashed, houses: firsts.length, nearInView: near.length, nearest: near.sort((a, b) => a.d - b.d).slice(0, 8) });
+                }
+            }
+            last = snap();
+            sc.setWindowRoom = wrapped;
+        }
         const ms = performance.now() - t0;
+        // The stands: the bike stopped and held, the ladder stepped down and up (opts.stand frames at each level)
+        const stands = [];
+        if (opts.stand > 0) {
+            const input = game.input, saved = { throttle: input.getThrottleInput, brake: input.getBrakeInput };
+            if (twistyDev.ap) twistyDev.ap.on = false;
+            input.getThrottleInput = () => 0;
+            input.getBrakeInput = () => 1;
+            const top = Quality.LEVELS.length - 1;
+            const ladder = [...Array(top + 1).keys()].reverse().concat([...Array(top).keys()].slice(1), [top]);
+            const places = opts.stands && opts.stands.length ? opts.stands : [];
+            if (!places.length) for (let at = start + opts.standEvery / 2; at < end; at += opts.standEvery) places.push(Math.round(at));
+            const W = Math.max(1, Math.round(game.graphics.renderer.domElement.width / 4)), H = Math.max(1, Math.round(game.graphics.renderer.domElement.height / 4));
+            const small = document.createElement('canvas');
+            small.width = W;
+            small.height = H;
+            const sctx = small.getContext('2d', { willReadFrequently: true });
+            const read = () => { sctx.drawImage(game.graphics.renderer.domElement, 0, 0, W, H); return sctx.getImageData(0, 0, W, H).data; };
+            for (const at of places) {
+                await placeAt(at);
+                game.quality.fix(top);
+                game.worldCamera.reset(v.yawAngle);
+                // (settled: the chase camera comes to rest, what the put-down chose has faded in, and the tiles the place
+                // before held are let go after the streamer's grace: a stop in a ride has none to let go. The tiles held
+                // the same for STAND_QUIET frames running, 2 minutes of frames at the most)
+                const landSig = () => `${[...env.streamer.tiles].map(([k, h]) => `${k}:${h.lod}`).join('|')}#${tileSig()}`;
+                let quiet = 0, held = landSig();
+                for (let k = 0; k < 7200 && (k < 150 || quiet < opts.standQuiet); k++) {
+                    twistyDev.step(1, { render: true });
+                    if (k % 60 === 0) await new Promise(resolve => setTimeout(resolve, 0));
+                    const now = landSig();
+                    quiet = now === held && !env.streamer.busy ? quiet + 1 : 0;
+                    held = now;
+                }
+                view();
+                last = snap();
+                stand = Math.round(v.routeS);
+                const firstEvent = events.length, firstFade = fades.length, firstRoom = rooms.length;
+                let before = read(), changedFrames = 0, mostPixels = 0, changedAt = -99;
+                for (const level of ladder) {
+                    game.quality.fix(level);
+                    changedAt = frame;
+                    for (let k = 0; k < opts.stand; k++) {
+                        twistyDev.step(1, { render: true });
+                        frame++;
+                        if (k % 60 === 0) await new Promise(resolve => setTimeout(resolve, 0));
+                        view();
+                        tick(snap(), 'stand', null);
+                        const now = read();
+                        if (frame - changedAt > 2) {
+                            let n = 0;
+                            for (let i = 0; i < now.length; i += 4) if (Math.abs(0.2126 * (now[i] - before[i]) + 0.7152 * (now[i + 1] - before[i + 1]) + 0.0722 * (now[i + 2] - before[i + 2])) > opts.standPixel) n++;
+                            if (n) changedFrames++;
+                            mostPixels = Math.max(mostPixels, n);
+                        }
+                        before = now;
+                    }
+                }
+                for (const e of events.slice(firstEvent)) e.inView = seen(e.x, e.y, e.z, e.r);
+                for (const e of fades.slice(firstFade)) e.inView = seen(e.x, e.y, e.z, e.r);
+                const moved = Math.hypot(v.speed);
+                stands.push({ s: stand, speed: Math.round(moved * 100) / 100, frames: ladder.length * opts.stand, rooms: rooms.length - firstRoom, changedFrames, mostPixels });
+                stand = null;
+            }
+            input.getThrottleInput = saved.throttle;
+            input.getBrakeInput = saved.brake;
+        }
         sc.setWindowRoom = setRoom;
         const player = restByKind().player || 0;
         return {
             start: Math.round(start), end: Math.round(end), reached: Math.round(v.routeS), frames: frame, crashes, seconds: Math.round(ms / 1000),
-            playerTriangles: player, bike: v.bike || null, riderRoom: game.riderRoom ?? null, rooms, fadeCount: fades.length, fadesInView: fades.filter(f => f.inView).length,
-            events: events.map(e => ({ frame: e.frame, kind: e.kind, level: e.level, step: e.step, why: e.why, room: e.room, inView: e.inView, d: e.d, x: Math.round(e.x), z: Math.round(e.z) })),
+            playerTriangles: player, bike: v.bike || null, riderRoom: game.riderRoom ?? null, level: Quality.LEVELS[game.quality.level].id, rooms, stands, villages,
+            fadeCount: fades.filter(f => f.stand === null).length, fadesInView: fades.filter(f => f.stand === null && f.inView).length,
+            // (a thing that came or went in view on a stand, by a fade: a level change is not one)
+            standFades: fades.filter(f => f.stand !== null && f.inView && !f.swap && (f.from === 0 || f.to === 0)).map(f => ({ s: f.stand, frame: f.frame, kind: f.kind, level: f.level, from: f.from, to: f.to, d: f.d, x: Math.round(f.x), z: Math.round(f.z) })),
+            events: events.map(e => ({ frame: e.frame, kind: e.kind, level: e.level, step: e.step, why: e.why, room: e.room, stand: e.stand, swap: e.swap, inView: e.inView, d: e.d, x: Math.round(e.x), z: Math.round(e.z) })),
             strips: strips.map(s => ({ name: s.name, png: s.sheet.toDataURL('image/png') }))
         };
     })();
 }
 WORLD_PROBES.push('world-pops');
 WORLD['world-pops'] = async (page) => {
-    const opts = { mode: option('mode') || 'far', speed: Number(option('speed') || 18), from: Number(option('from') || 0), to: Number(option('to') || 0), strips: Number(option('strips') || (option('out') ? 24 : 0)), popStep: POP_STEP };
+    const opts = { mode: option('mode') || 'far', speed: Number(option('speed') || 18), from: Number(option('from') || 0), to: Number(option('to') || 0), strips: Number(option('strips') || (option('out') ? 24 : 0)), popStep: POP_STEP,
+        level: option('level') || null, stand: Number(option('stand') || 0), stands: option('stands') ? option('stands').split(',').map(Number) : [], standPixel: STAND_PIXEL, standEvery: STAND_EVERY_M, standQuiet: STAND_QUIET,
+        villages: flag('villages'), speeds: (option('speeds') || '15,30').split(',').map(Number), villageM: VILLAGE_M, villageHouses: VILLAGE_HOUSES, villageLead: VILLAGE_LEAD_M, houseNearM: HOUSE_NEAR_M };
     const ride = await page.evaluate(popRide, placeAt.toString(), pilotWorld.toString(), opts);
     const files = [];
     if (ride.strips.length) {
@@ -7837,8 +8007,9 @@ WORLD['world-pops'] = async (page) => {
         for (const e of list) out[key(e)] = (out[key(e)] || 0) + 1;
         return Object.fromEntries(Object.entries(out).sort((a, b) => b[1] - a[1]).map(([k, n]) => [k, { n, share: Math.round(n / Math.max(1, list.length) * 1000) / 10 }]));
     };
-    const events = ride.events;
+    const events = ride.events.filter(e => e.stand === null);
     const inView = events.filter(e => e.inView);
+    const standEvents = ride.events.filter(e => e.stand !== null && e.inView);
     // What changed the room for a pop of the room's: the kind whose count moved most the way the room moved
     const roomKind = e => {
         const r = ride.rooms[e.room];
@@ -7853,9 +8024,16 @@ WORLD['world-pops'] = async (page) => {
         roomByKind: share(roomPops, roomKind), roomInViewByKind: share(roomPops.filter(e => e.inView), roomKind),
         roomChanges: ride.rooms.length, roomChangesByKind: share(ride.rooms.map((r, k) => ({ room: k })), roomKind),
         medianInViewM: inView.length ? [...inView].sort((a, b) => a.d - b.d)[Math.floor(inView.length / 2)].d : null,
-        fades: ride.fadeCount, fadesInView: ride.fadesInView
+        fades: ride.fadeCount, fadesInView: ride.fadesInView,
+        // On the stands: pops in view, and things that came or went in view (pops or fades; a level change apart)
+        stands: ride.stands.length, standPops: standEvents.length, standComesGoes: standEvents.filter(e => !e.swap).length + ride.standFades.length,
+        standByKind: share([...standEvents.filter(e => !e.swap), ...ride.standFades], e => e.kind),
+        standPixelFrames: ride.stands.reduce((n, st) => n + st.changedFrames, 0), standMostPixels: Math.max(0, ...ride.stands.map(st => st.mostPixels)),
+        villages: ride.villages.length, villageHouses: ride.villages.reduce((n, r) => n + r.houses, 0), villageNearInView: ride.villages.reduce((n, r) => n + r.nearInView, 0)
     };
-    return { ...ride, events: option('dump') ? events : events.filter(e => e.inView).slice(0, 40), summary, files };
+    const standList = [...standEvents, ...ride.standFades].slice(0, 40);
+    delete ride.standFades;
+    return { ...ride, events: option('dump') ? ride.events : inView.slice(0, 40), standList, summary, files };
 };
 
 // world-look: a script of the caller's in a world page (--script <file>: the body of an async function given `game`,
