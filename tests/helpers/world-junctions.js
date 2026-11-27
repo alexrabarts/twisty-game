@@ -69,7 +69,9 @@ export const JUNCTION_OPEN = Object.freeze({
     'airolo-lookout': { strips: 1, clefts: 1 },
     // Legs 6 to 8 (worlds/haslital), measured when first ridden (2026-11-27), under the builders' rules of that day:
     // exact counts, held so they may only fall
-    'gadmen-innertkirchen': { steps: 1, sunk: 1, decks: 2, open: 4, strips: 3, pits: 5, clefts: 4 },
+    // (2026-11-27: j35's open edge and pit and j12's cleft closed by the turned paving and the cleft fill brought
+    // down to the side road in a mouth; the land over j35 read 0 by then)
+    'gadmen-innertkirchen': { steps: 1, decks: 2, open: 4, strips: 3, pits: 4, clefts: 3 },
     'innertkirchen-guttannen': { physics: 1 },
     'guttannen-grimsel': { decks: 1, open: 1, strips: 2, pits: 1, clefts: 1, physics: 1 }
 });

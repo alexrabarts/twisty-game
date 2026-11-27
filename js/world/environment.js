@@ -798,11 +798,13 @@ class WorldEnvironment {
         return false;
     }
 
-    cleftAt(index, sign) {
+    // `walled` false: the same ground where the ride's wall does not stand by the row (the row past a run's end in a
+    // side road's mouth, where the fill comes down to the side road beside it, not to the land: RoadMesh.edgeWorks)
+    cleftAt(index, sign, walled = true) {
         const p = this.route.points[index];
         if (!p || p.bits & 7) return null;
         if (!this.cleftRows) this.cleftRows = new Map();
-        const key = index * 2 + (sign > 0 ? 1 : 0);
+        const key = (index * 2 + (sign > 0 ? 1 : 0)) * (walled ? 1 : -1) - (walled ? 0 : 1);
         if (this.cleftRows.has(key)) return this.cleftRows.get(key);
         const [vn, vp] = RoadMesh.verges(p);
         const reach = p.width / 2 + (sign > 0 ? vp : vn);
@@ -820,7 +822,7 @@ class WorldEnvironment {
             // (only where the ride's own wall holds it up on that side, on the segment either side of the row: a side
             // road beside the ride's slope or level with it has a slope or land there, not a cleft. The side road has
             // no wall on that side, edgeFoot `facesRideWall`: the ride's wall is the one face between the two)
-            if (!this.rideWalledAt(index, sign)) return null;
+            if (walled && !this.rideWalledAt(index, sign)) return null;
             // (the side road the lower of the two, by no more than CLEFT_STEP_M: the fill lies at its height and the
             // ride's wall stands over it; a side road over the ride holds its own fill)
             if (hit.side > y + RoadMesh.APRON_UNDER_M || hit.side < y - WorldEnvironment.CLEFT_STEP_M) return null;
@@ -2289,7 +2291,7 @@ class WorldEnvironment {
 
         // Where a side road's wall would stand, before the rule that leaves it out across a cleft (cleftAt reads it)
         // The ground that closes a narrow gap between the ride's row i and a side road beside it (cleftAt)
-        if (aprons) foot.cleft = (i, sign) => this.cleftAt(i, sign);
+        if (aprons) foot.cleft = (i, sign, walled = true) => this.cleftAt(i, sign, walled);
         // Whether a side road's edge point stands in the ride's carriageway or its verge, with its coping over the
         // ride's surface there: the side road's walls keep out of the ride's road (RoadMesh.atMouth). Where a side road
         // leaves beside the ride, its wall stood in the ride's verge with its coping 0.28 to 0.38 m over it
@@ -2304,12 +2306,15 @@ class WorldEnvironment {
         // road is drawn: WorldGround.sideRoadY), found without a gap wider than SIDE_GORE_M, or null with none. The
         // ride lays paving from its edge to there (RoadMesh.edgeWorks), under the side roads' ribbons: whatever lies
         // between the ride and a side road in a junction, and behind the piece that joins their walls, is road
-        // With `turn` (the paving read on the segment to a bridge's first row, RoadMesh.edgeWorks), a line square to
-        // the ride that meets no side road is turned, up to SIDE_GORE_TURNS from square either way, and the paving goes
-        // out along the turned line that meets one soonest: a side road that leaves at an angle and falls away lies
-        // beside the ride at its height square to itself, but square to the ride it lies farther out and under the
-        // step, and the land lay 1.4 m down in the corner between the two by the bridge (leg 3's j35). Turned on every
-        // segment, the paving's edges hung over the land elsewhere (overhangs 13 to 22 on the Gotthard leg)
+        // With `turn` (the paving read between two of the ride's rows, RoadMesh.edgeWorks), a line square to the ride
+        // that meets no side road is turned, up to SIDE_GORE_TURNS from square either way, and the paving goes out
+        // along the turned line that meets one soonest, within SIDE_GORE_M of the edge: a side road that leaves at an
+        // angle and falls away lies beside the ride at its height square to itself, but square to the ride it lies
+        // farther out and under the step, and the land lay 1.4 m down in the corner between the two (leg 3's j35 by a
+        // bridge, leg 4's j95 in the open, 0.3 m down over 4 m). Turned on every segment before the paving's far edge
+        // came down to the land, its edges hung over the land elsewhere (overhangs 13 to 22 on the Gotthard leg); a
+        // turned line that met a side road farther out than SIDE_GORE_M paved a corner beside a side road's slope and
+        // left its side open (a flap on leg 2 at s 65)
         if (aprons) foot.gore = (x, y, z, ox, oz, turn = false) => {
             const square = scan(x, y, z, ox, oz);
             if (square || !turn) return square;
@@ -2317,7 +2322,7 @@ class WorldEnvironment {
             for (const a of WorldEnvironment.SIDE_GORE_TURNS) {
                 const c = Math.cos(a), s = Math.sin(a);
                 const got = scan(x, y, z, ox * c - oz * s, ox * s + oz * c);
-                if (got && (best === null || got.nearD < best.nearD)) best = got;
+                if (got && got.nearD <= WorldEnvironment.SIDE_GORE_M && (best === null || got.nearD < best.nearD)) best = got;
             }
             return best;
         };

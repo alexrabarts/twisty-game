@@ -1543,7 +1543,8 @@ class RoadMesh {
         };
         const groundUnder = (out, ca, cb, pb, pa, ta, tb) => {
             const near = !!sideUnder && [ca, cb, pa, pb].some(p => sideUnder(p[0], p[1], p[2], 2 * RoadMesh.SIDE_UNDER_PIECE_M, RoadSurface.VERGE_M) !== null);
-            if (!near) { const down = p => [p[0], p[1] - RoadMesh.APRON_UNDER_M, p[2]]; RoadMesh.quad(out, down(ca), down(cb), down(pb), down(pa), [ta, tb, tb, ta]); return; }
+            // (it gives its corners as laid from row a to row b, each [inner, outer]: the outer edge from pa to pb)
+            if (!near) { const down = p => [p[0], p[1] - RoadMesh.APRON_UNDER_M, p[2]]; RoadMesh.quad(out, down(ca), down(cb), down(pb), down(pa), [ta, tb, tb, ta]); return [[down(ca), down(pa)], [down(cb), down(pb)]]; }
             const mix = (u, v, t) => u.map((c, i) => c + (v[i] - c) * t);
             const n = Math.max(1, Math.ceil(Math.max(Math.hypot(cb[0] - ca[0], cb[2] - ca[2]), Math.hypot(pb[0] - pa[0], pb[2] - pa[2])) / RoadMesh.SIDE_UNDER_PIECE_M));
             for (let i = 0; i < n; i++) {
@@ -1551,6 +1552,7 @@ class RoadMesh {
                 const t0 = mix(ta, tb, i / n), t1 = mix(ta, tb, (i + 1) / n);
                 RoadMesh.quad(out, underAt(c0), underAt(c1), underAt(p1), underAt(p0), [t0, t1, t1, t0]);
             }
+            return Array.from({ length: n + 1 }, (_, i) => [underAt(mix(ca, cb, i / n)), underAt(mix(pa, pb, i / n))]);
         };
         const W = RoadMesh.PARAPET_W_M, H = RoadMesh.PARAPET_H_M;
         // How deep the works of kind f standing at p (out along o) reach into another carriageway, or null where they
@@ -1800,8 +1802,9 @@ class RoadMesh {
                 const near = [k - 1, k, k + 1, k + 2].some(j => paved[j] && paved[j][key]);
                 // (and on to a bridge's first row from the open row before it: a side road that leaves just before a
                 // bridge lay beside the segment to the deck's first row with the land 1.4 m down between the two, leg
-                // 3's j35. The bridge row's own end reads no side road, so the paving closes to the edge there, and the
-                // lines between are turned toward the side road where square to the ride they meet none: edgeFoot `gore`)
+                // 3's j35. The bridge row's own end reads no side road, so the paving closes to the edge there. On every
+                // segment the lines between are turned toward the side road where square to the ride they meet none:
+                // edgeFoot `gore`)
                 const open = j => !(sides[j].bits & 7), bridged = j => !(sides.owner >= 0) && (sides[j].bits & 7) === 2 && !sides[j].viaduct;
                 const bridging = (open(k) && bridged(k + 1)) || (bridged(k) && open(k + 1));
                 if (!near || !foot || !foot.gore || !((open(k) && open(k + 1)) || bridging) || !sides[k].lc || !sides[k + 1].lc) continue;
@@ -1816,7 +1819,7 @@ class RoadMesh {
                     const ol = Math.hypot(ox, oz) || 1;
                     ox /= ol; oz /= ol;
                     // (the rows' own reads at the ends, so two segments meet on one line)
-                    const g = j === 0 ? paved[k] && paved[k][key] : j === steps ? paved[k + 1] && paved[k + 1][key] : foot.gore(c[0], c[1], c[2], ox, oz, bridging);
+                    const g = j === 0 ? paved[k] && paved[k][key] : j === steps ? paved[k + 1] && paved[k + 1][key] : foot.gore(c[0], c[1], c[2], ox, oz, true);
                     line.push({ c, g: g || null });
                 }
                 const c = RoadMesh.PAVING_LINEAR;
@@ -1853,11 +1856,21 @@ class RoadMesh {
                     // road beside the ride bends or dips)
                     const prof = (g, n) => (g && g.under && g.under.length ? [n, g.under[0]] : [n]);
                     const pa = prof(qa.g, an), pb = prof(qb.g, bn), m = Math.max(pa.length, pb.length);
+                    // (its far edge comes down to the land where it stands more than a hand over it: at a side road that
+                    // ends in the ride's verge as its stub, the edge stood 1 to 3.6 m over the land falling away past the
+                    // verge, leg 3's j54, 8 of world-spikes' overhangs. With it the lines are turned on every segment)
+                    const drop = (ea, eb) => {
+                        if (!landAt) return;
+                        const la = landAt(ea[0], ea[2]), lb = landAt(eb[0], eb[2]);
+                        if (la !== null && lb !== null && (la < ea[1] - 0.25 || lb < eb[1] - 0.25)) RoadMesh.quad(pavingOut, ea, eb, [eb[0], Math.min(eb[1], lb - 0.2), eb[2]], [ea[0], Math.min(ea[1], la - 0.2), ea[2]], [c, c, c, c]);
+                    };
                     // (and there not where the paving closes to the edge: closed to the edge too, the piece under the road
                     // stood as a sliver from under the side road back to the ride's edge, open over the land, leg 3's j35)
+                    if (m < 2 && qa.g && qb.g) drop(an, bn);
                     if (m < 2 || (bridging && (!qa.g || !qb.g))) continue;
                     const at = (list, i) => { const f = (i * (list.length - 1)) / (m - 1), lo = Math.floor(f), hi = Math.min(list.length - 1, lo + 1); return mix(list[lo], list[hi], f - lo); };
                     for (let i = 0; i + 1 < m; i++) strip(at(pa, i), at(pb, i), at(pa, i + 1), at(pb, i + 1));
+                    drop(at(pa, m - 1), at(pb, m - 1));
                 }
             }
             // The ground that closes a narrow gap between the ride and a side road beside it (WorldEnvironment.cleftAt),
@@ -1873,11 +1886,36 @@ class RoadMesh {
                     const lp = landAt ? landAt(p[0], p[2]) : null, lq = landAt ? landAt(q[0], q[2]) : null;
                     return lp === null || lq === null ? null : { y: Math.min(c.y, lp), at: [q[0], Math.min(c.y, lq), q[2]] };
                 };
-                const fa = ca || down(k, cb), fb = cb || down(k + 1, ca);
+                // (in a side road's mouth, where the ride lays nothing on the segment, it comes down to the side road
+                // beside the ride at that row instead, as the ground that closes a cleft lies: brought down to the land
+                // there, the ground under the verge stood over it as a face 2.7 m high, leg 6's j12)
+                const open = (j, c) => (!kindOf(k, key) && foot.cleft(sides[j].i, sign, false)) || down(j, c);
+                const fa = ca || open(k, cb), fb = cb || open(k + 1, ca);
                 if (!fa || !fb) continue;
                 const na = [sides[k][key][0], fa.y, sides[k][key][2]], nb = [sides[k + 1][key][0], fb.y, sides[k + 1][key][2]];
                 const ta = (ca || cb).color || RoadMesh.APRON_LINEAR, tb = (cb || ca).color || RoadMesh.APRON_LINEAR;
                 RoadMesh.quad(apronOut, na, nb, fb.at, fa.at, [ta, tb, tb, ta]);
+                // (and under the ride's verge, where the segment lays nothing there: from the wall's end to the next row
+                // in a side road's mouth, where the verge is cut for the side road, the fill started at the verge's edge
+                // and the metre under the verge stood open 3 m down to the land, leg 5's j260. Closed down to the land
+                // at a row the fill does not reach)
+                const va = sides[k][key + 'c'], vb = sides[k + 1][key + 'c'];
+                if (!kindOf(k, key) && va && vb && !(paved[k] && paved[k][key] && paved[k + 1] && paved[k + 1][key])) {
+                    const pa = sides[k][key], pb = sides[k + 1][key];
+                    const rim = groundUnder(apronOut, va, vb, pb, pa, ta, tb);
+                    // (its outer edge down to the fill, at the lower road's height: no wall stands there to close the step)
+                    const mix = (u, v, t) => u.map((x, i) => x + (v[i] - x) * t);
+                    for (let i = 0; i + 1 < rim.length; i++) {
+                        const ua = rim[i][1], ub = rim[i + 1][1], da = mix(na, nb, i / (rim.length - 1)), db = mix(na, nb, (i + 1) / (rim.length - 1));
+                        if (ua[1] - da[1] > 0.05 || ub[1] - db[1] > 0.05) RoadMesh.quad(apronOut, ua, ub, [db[0], Math.min(ub[1], db[1]), db[2]], [da[0], Math.min(ua[1], da[1]), da[2]], [ta, tb, tb, ta]);
+                    }
+                    for (const [f, top] of [[ca, rim[0]], [cb, rim[rim.length - 1]]]) {
+                        if (f) continue;
+                        const lands = top.map(q => (landAt ? landAt(q[0], q[2]) : null));
+                        if (lands.some(l => l === null) || top.every((q, i) => q[1] - lands[i] < 0.25)) continue;
+                        RoadMesh.quad(apronOut, top[0], top[1], [top[1][0], Math.min(top[1][1], lands[1] - 0.2), top[1][2]], [top[0][0], Math.min(top[0][1], lands[0] - 0.2), top[0][2]], [ta, ta, tb, tb]);
+                    }
+                }
                 // (and from its far edge, under the side road's verge, down to the land: the side road has no wall there,
                 // and the edge hung over the land)
                 const la = landAt ? landAt(fa.at[0], fa.at[2]) : null, lb = landAt ? landAt(fb.at[0], fb.at[2]) : null;
@@ -2134,6 +2172,19 @@ class RoadMesh {
                             pieces.push([point(a, t0), point(b, t1), railOn(t0) || railOn(t1)]);
                         }
                         a = b;
+                    }
+                    // (the slope's side at a row beside a structure, where the segment on lays no slope: closed down to
+                    // the land drawn under it. Open, it stood 1 to 1.3 m over the land under a bridge's end, the
+                    // first open row past four of legs 4 and 5's bridges, world-spikes' flaps)
+                    for (const [j, row, seg, e] of [[k, k - 1, k - 1, first], [k + 1, k + 2, k + 1, a]]) {
+                        if (!landAt || !(sides[row] && sides[row].bits & 7) || kindOf(seg, key) === 'apron') continue;
+                        const n = Math.max(1, rows), line = [];
+                        for (let r = 0; r <= n; r++) line.push(lerp(e.top, e.foot, r / n));
+                        for (let r = 0; r < n; r++) {
+                            const p = line[r], q = line[r + 1], lp = landAt(p[0], p[2]), lq = landAt(q[0], q[2]);
+                            if (lp === null || lq === null || (p[1] - lp < 0.25 && q[1] - lq < 0.25)) continue;
+                            RoadMesh.quad(apronOut, p, q, [q[0], Math.min(q[1], lq - 0.2), q[2]], [p[0], Math.min(p[1], lp - 0.2), p[2]], j === k ? topColor(fa) : topColor(fb));
+                        }
                     }
                     // The stone, one piece over the strips it holds in turn: the edge is straight between two rows, so
                     // the piece's top is theirs and only its foot is sunk to lie under every strip's own, about the end
