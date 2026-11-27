@@ -2714,7 +2714,10 @@ class RoadMesh {
 
     // `faceAt(x, z)`: the land a portal's headwall reaches up to (RoadMesh.headwall), `groundAt` by default: a long
     // side road is drawn whole from one chunk, and its far portal stands where only the far grid is drawn
-    static *sideStructuresSteps(sides, groundAt = null, roof = 6.5, footAt = null, guard = null, through = [false, false], faceAt = groundAt) {
+    // `inRide(x, y, z)`: whether a point is inside the ride's own tube. A side tube's segment inside it has no tube of its
+    // own (the ride's is round it), and where the side tube leaves the ride's no portal stands: it opens in the ride's
+    // wall (a portal frame there stood through the ride's roof, Andermatt to Goeschenen j39)
+    static *sideStructuresSteps(sides, groundAt = null, roof = 6.5, footAt = null, guard = null, through = [false, false], faceAt = groundAt, inRide = null) {
         const out = { positions: [], shades: [] };
         const colors = RoadMesh.COLORS;
         const drop = RoadMesh.PARAPET_DROP_M, D = RoadMesh.DECK_M, H = RoadMesh.PARAPET_H_M;
@@ -2781,6 +2784,8 @@ class RoadMesh {
         for (let k = 0; k + 1 < sides.length; k++) {
             if (k % RoadMesh.SIDE_STRUCTURE_STEP === RoadMesh.SIDE_STRUCTURE_STEP - 1) yield;
             const a = sides[k], b = sides[k + 1];
+            const inside = j => !!inRide && inRide((sides[j].l[0] + sides[j].r[0]) / 2, (sides[j].l[1] + sides[j].r[1]) / 2 + 1, (sides[j].l[2] + sides[j].r[2]) / 2);
+            if ((a.bits & b.bits & 5) && inside(k) && inside(k + 1)) { run = null; continue; }
             if (a.bits & b.bits & 5) {
                 yield;
                 // The roof stays under any other road the tube passes beneath, by the deck's depth
@@ -2818,8 +2823,9 @@ class RoadMesh {
                     mouth(at, step, forward);
                     StructureShade.end(out, start, 'wing', look, (x, py) => py - y);
                 };
-                if (sides[k - 1] ? !(sides[k - 1].bits & 5) : !through[0]) marked(k, -1, portal(a, b));
-                if (sides[k + 2] ? !(sides[k + 2].bits & 5) : !through[1]) marked(k + 1, 1, portal(b, a));
+                // (no portal where the tube goes on as the ride's: at a row inside the ride's tube)
+                if ((sides[k - 1] ? !(sides[k - 1].bits & 5) : !through[0]) && !inside(k)) marked(k, -1, portal(a, b));
+                if ((sides[k + 2] ? !(sides[k + 2].bits & 5) : !through[1]) && !inside(k + 1)) marked(k + 1, 1, portal(b, a));
                 run = null;
                 continue;
             }
@@ -2865,7 +2871,7 @@ class RoadMesh {
                     return lean > 0 ? 1 : lean < 0 ? -1 : 0;
                 };
                 const rock = sideRock(), gallery = (sides[first].bits & 5) === 4;
-                TubeLining.run(lining, rows, { gallery, rock, open: gallery ? -rock : 0, shotcrete: gallery, lod: 1, groundAt, run: [along[first], along[last]], fittings: false, profile: tubeStyle(first).profile });
+                TubeLining.run(lining, rows, { gallery, rock, open: gallery ? -rock : 0, shotcrete: gallery, lod: 1, groundAt, run: [along[first], along[last]], fittings: 'lamps', profile: tubeStyle(first).profile });
                 yield;
             }
         }

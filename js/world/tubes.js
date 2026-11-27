@@ -206,7 +206,10 @@ class TubeLining {
                     TubeLining.quad(lining, corners[0][0], corners[1][0], corners[2][0], corners[3][0], [0, 1, 0], K.walk, C.walk, (p, j) => attr(k, corners[j][1], sign * corners[j][2], 0, corners[j][3], 0), share);
                 }
             }
-            if (near && opts.fittings !== false) TubeLining.fit(fittings, k, rows, frames, attr, point, roofOf, share, seg);
+            // (a side road's tube is seen from the ride: its lamps alone, at every level, so its mouth reads as a way
+            // through and not as a dark recess, `fittings: 'lamps'`)
+            if (near && opts.fittings !== false && opts.fittings !== 'lamps') TubeLining.fit(fittings, k, rows, frames, attr, point, roofOf, share, seg);
+            else if (opts.fittings === 'lamps') TubeLining.fit(fittings, k, rows, frames, attr, point, roofOf, share, { ...seg, lampsOnly: true });
         }
         return parts;
     }
@@ -413,6 +416,7 @@ class TubeLining {
             const t0 = tOf(s - Lp.long / 2), t1 = tOf(s + Lp.long / 2);
             hung(t0, t1, -Lp.wide / 2, Lp.wide / 2, Lp.deep, Lp.gap, K.metal, C.metal, K.lens, C.lens);
         }
+        if (opts.lampsOnly) return;
         // A conduit beside the lamps' line, the length of the segment
         const Cd = T.conduit;
         hung(0, 1, Cd.lat, Cd.lat + Cd.wide, Cd.deep, Lp.gap, K.metal, C.metal);

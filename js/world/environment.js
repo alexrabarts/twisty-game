@@ -3089,7 +3089,11 @@ class WorldEnvironment {
             const far = this.data.farHeight(x, z);
             return far === null ? undefined : far;
         };
-        const options = { groundAt, footAt, faceAt, roof: WorldRoute.ROOF_M };
+        // (a point inside the ride's own tunnel or gallery: a side tube that starts there opens in the ride's wall, with
+        // no portal or tube of its own inside it, RoadMesh.sideStructures `inRide`)
+        const rideBoxes = this.rideTubes().filter(t => !t.mouth);
+        const inRide = (x, y, z) => TerrainMesh.inTube(rideBoxes, x, y, z);
+        const options = { groundAt, footAt, faceAt, roof: WorldRoute.ROOF_M, inRide };
         // A road's structures and edge works stand at its verge's outer edge (its LOD0 ribbon's sides) at every level of
         // detail, as the ride's do, so a change of level of detail builds only its ribbons again (drawSideRibbons)
         const roads = [];
@@ -3118,7 +3122,7 @@ class WorldEnvironment {
             const road = new THREE.Group();
             road.name = stub ? 'world-road-stub' : 'world-road-side';
             const through = [!!(before.length && before[before.length - 1].bits & 5), !!(after.length && after[0].bits & 5)];
-            const built = yield* RoadMesh.sideStructuresSteps(RoadMesh.vergeSides(rows, this.sideHold(edge.id)), options.groundAt, options.roof, options.footAt, guard, through, options.faceAt);
+            const built = yield* RoadMesh.sideStructuresSteps(RoadMesh.vergeSides(rows, this.sideHold(edge.id)), options.groundAt, options.roof, options.footAt, guard, through, options.faceAt, options.inRide);
             Object.assign(road.userData, { sides: built.sides, structures: built.parts, piers: built.piers, tubes: built.tubes, through, rows, stub, edge: edge.id, s0 });
             // The physics rides the road as it is drawn (held at the ride's height in a junction, on its ramp past it)
             edgesHere.push({ x: rows.map(row => row.x), z: rows.map(row => row.z), y: rows.map(row => row.y), width: rows.map(row => row.width) });
