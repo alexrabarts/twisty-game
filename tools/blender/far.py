@@ -104,7 +104,8 @@ def triangles(doc, binary, node, at=(0.0, 0.0, 0.0)):
         if "COLOR_0" in prim["attributes"]:
             accessor = doc["accessors"][prim["attributes"]["COLOR_0"]]
             scale = {5126: 1.0, 5123: 65535.0, 5121: 255.0}[accessor["componentType"]]
-            shades = [v[0] / scale for v in values(doc, binary, prim["attributes"]["COLOR_0"])]
+            # (the mean of the three: a layered surface, tools/blender/surface.py, tints them apart)
+            shades = [(v[0] + v[1] + v[2]) / (3 * scale) for v in values(doc, binary, prim["attributes"]["COLOR_0"])]
         else:
             shades = [1.0] * len(points)
         index = [v[0] for v in values(doc, binary, prim["indices"])] if "indices" in prim else list(range(len(points)))
@@ -420,7 +421,10 @@ def bike(path):
     for target, shape in shapes.items():
         tris = cut(shape, 1.0 if target == "brake_light" else share, names=merged(shape, colours))
         nodes[target] = (places[target], tris + fixed.get(target, []))
-    out = os.path.join(FAR, f"{name}.glb")
+    # (a detail file built elsewhere, a variant of a model-build round, has its far file in a `far` folder beside it)
+    folder = FAR if os.path.abspath(os.path.dirname(path)) == os.path.abspath(DETAIL) else os.path.join(os.path.dirname(path), "far")
+    os.makedirs(folder, exist_ok=True)
+    out = os.path.join(folder, f"{name}.glb")
     size = write(out, nodes, marks, materials)
     counts = {n: len(tris) for n, (_, tris) in nodes.items()}
     total = sum(counts.values())

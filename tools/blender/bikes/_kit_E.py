@@ -36,8 +36,10 @@ from mathutils import Matrix, Vector  # noqa: E402
 import common  # noqa: E402
 from bike_kit import Kit, B, render, pack_colours  # noqa: E402
 import far  # noqa: E402
+import surface  # noqa: E402
 
-OUT_DIR = os.path.join(common.ASSETS, "bikes", "detail")
+# TWISTY_BIKE_DIR builds a variant elsewhere (a model-build round), its far file in a `far` folder beside it
+OUT_DIR = os.environ.get("TWISTY_BIKE_DIR") or os.path.join(common.ASSETS, "bikes", "detail")
 LODS = ("lod0", "lod1")
 BUDGET = {"lod0": 40000, "lod1": 10000}
 FILE_BUDGET = int(1.2 * 1024 * 1024)
@@ -60,8 +62,16 @@ def along(a, b, t):
 class EKit(Kit):
     """The shared kit, building one bike at two levels of detail into one scene."""
 
-    def __init__(self, seed, colours, cull=0.09, extra=None):
+    def __init__(self, seed, colours, cull=0.09, extra=None, layers=None, headroom=1.0):
         super().__init__(seed=seed, colours=colours)
+        # The surface layers worked over the occlusion (surface.config), or None for the occlusion alone; `headroom`
+        # is how far a finish may be raised so wear can lighten it (surface.py)
+        # (TWISTY_SURFACE and TWISTY_HEADROOM set them for a variant build of any bike of this kit)
+        if layers is None and os.environ.get("TWISTY_SURFACE"):
+            layers = surface.config()
+        self.layers = layers
+        self.headroom = float(os.environ.get("TWISTY_HEADROOM") or headroom)
+        self.seed = seed
         # Finishes the shared kit has no name for, as (colour, roughness,
         # metalness); the game's palette holds none of these names, so each
         # keeps the colour written here
@@ -155,6 +165,8 @@ class EKit(Kit):
         for lod in LODS:
             mine = {key: obj for key, obj in joined.items() if key.startswith(lod + "_")}
             self.occlude_level(mine, joined)
+            if self.layers:
+                surface.apply(list(mine.values()), self.layers, self.colours, seed=self.seed, headroom=self.headroom)
         groups = {}
         marks = []
         for lod in LODS:
