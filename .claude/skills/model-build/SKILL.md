@@ -11,9 +11,10 @@ A model is done when it looks right **in the game**, at the distance the player 
 
 1. Name the model, its script in `tools/blender/`, its output in `assets/`, and the game code that reads it (`js/bikemodels.js`, `js/carmodels.js`, `js/sceneassets.js`, `js/treemodels.js`, `js/hill/`).
 2. Write the budget from the README and the tests: triangles per level, file size, draw calls (one per material per node), texture size. A change that cannot fit is a change to the budget, and that is the owner's call.
-3. Write the bar in a few lines: what the player must see at each distance (the menu close-up, the chase camera, the far crew). Each line names a distance and a property that can be checked from a picture.
+3. Write the bar in a few lines: what the player must see at each distance (the menu close-up, the chase camera, the far crew). Each line names a distance and a property that can be checked from a picture. Add what the model must not have, from the subject and the rules: a water-cooled engine has no fins, a plate carries no lettering, the side stand is folded. Critics read the bar, and without these lines they ask for them.
 4. Gather references. The owner's photos are in `~/Pictures/twisty-reference/` and are private: read them, never copy them, a crop, a traced outline or a sampled texture into the repo. Only numbers (sizes, ratios, colour values) and neutral words enter the repo. No maker's name, logo, wordmark or sign text on any model. Never model a real person's face.
 5. Take the **before** pictures (section 3) so every later round compares against them.
+6. Name what in the pictures is the stage, not the model (the menu's stand and floor, the backdrop, the light). A fault there (a shadow that does not meet the tyres on a dark metal stand) is the stage's owner's to fix: write it down and keep it out of the rounds.
 
 ## 1. Geometry: shape first, then edges
 
@@ -34,6 +35,8 @@ The game cannot run Blender's shader nodes, so every surface layer is **baked in
 5. **Roughness varies.** From the same noise as the colour, plus wear: rough in cavities, smoother where hands, boots or tyres touch.
 6. **Wear on edges.** A mask from curvature that lightens paint and brightens metal on exposed edges. Dirt low down and where water runs.
 
+Vertex colours follow the mesh. A panel of a few large triangles takes a gradient, not a grain, so on a sparse mesh the layers change nothing a picture shows: measure that first (build with the layers on and off and compare the numbers) before you spend rounds on them. On such a model, the finish values (colour, roughness, metalness per material) and the geometry move the picture; the layers need a dense mesh or a map. `tools/blender/surface.py` holds the steps for the bike kits (`TWISTY_SURFACE` switches them for a variant build).
+
 A surface that still looks plastic after one fix needs research: find how material artists build that surface, write what you learned in the progress log, and rebuild it their way. Do not try the same fix twice.
 
 ## 3. Look in the game, not in Blender
@@ -46,6 +49,8 @@ A surface that still looks plastic after one fix needs research: find how materi
 
 - Each round changes one thing (a bevel width, a speckle range, a roughness level). Render the same views with two or three values, put them on one sheet with their values as labels, and pick by eye.
 - Never change two things in one comparison. Never keep a change you did not compare.
+- Build each value as a variant into the rounds folder, never over the model in `assets/`: a switch in the script read from the environment (the bike kits take `TWISTY_BIKE_DIR` for the output and a script's own switches for the values), then `model-look --file` on each build and `model-look --sheet` for the sheet. A sheet of whole pictures can hide a small part: crop the part from each picture and sheet the crops.
+- A value that changes nothing the sheet or the numbers show is not kept. Write it in the ledger as a round that taught something.
 - When something looks wrong and the cause is unclear, switch layers off one at a time (speckle, cavity, fine bump, wear) and measure a region, until the number moves. Do not tidy while you diagnose.
 
 ## 5. Measure

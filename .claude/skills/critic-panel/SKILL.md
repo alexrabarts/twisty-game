@@ -10,10 +10,12 @@ A builder rates its own work too high. The panel exists so that no agent grades 
 ## Rules for every critic
 
 - **Fresh context.** A new subagent with no history: no code, no ledger, no brief beyond the bar, no word of who made the work or what the builder thinks of it.
-- **Images only.** The critic gets the picture files, never a description of them. Side by sides put the reference left and the game right at the same framing. Add full-size crops where detail matters.
+- **Images only.** The critic gets the picture files, never a description of them. Side by sides put the reference left and the game right at the same framing. Add full-size crops where detail matters. With no photo of the subject itself, give real photos of the same class as references for materials only, and say so in the image list.
+- **Neutral paths.** A file name or folder can tell the realism critic which picture is the game: put that lens's pictures in a folder of their own with neutral names (`image-A.png`). Crop the game pictures to the size and framing of the photos, or the size alone is the tell.
 - **Private references stay private.** A critic may see the owner's photos as images. Nothing a critic writes about them goes into the repo except numbers and neutral words. Never ask a critic to identify a person.
 - **Two critics per lens at a milestone, three before the owner sees it.** If two differ by more than 10 points, add one more. The median decides.
 - **A finding needs a place:** the picture, the region and the part. "The lighting could be better" is not a finding.
+- **The bar carries the rules.** A critic asks for what a code-made model lacks: fins, lettering, a stand down. The bar's "must not" lines stop that; the verifier rejects a finding that breaks one.
 
 ## Lenses
 
@@ -54,7 +56,7 @@ A cap holds a dimension down whatever the median says, until the fault is fixed 
 
 ## Noise and stopping
 
-- Critics vary from round to round. A change counts only when it holds over two rounds.
+- Critics vary from round to round: the same pictures scored about 5 points apart between two critics, and the means moved less than that over several kept changes. A change counts only when it holds over two rounds.
 - A plain question per picture is steadier than a score: "At normal viewing, does this read as a real object in a good game?" Count the yes answers over the rounds.
 - When the scores stop rising: at most two more rounds, each with a different method, then stop and write the faults that remain, honestly.
 - Calibrate: have one critic score a real photo of the subject blind on the same prompt. If the game picture beats the photo while the owner says it is worse, the panel is too kind: raise the bar.
