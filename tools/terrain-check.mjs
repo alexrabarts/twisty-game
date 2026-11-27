@@ -12,7 +12,7 @@
 // Probes: legs snapshot raycast surface parts frames traj gates look shortcuts runoff fog pages budget frametime scene submit mutate atmostate draws atmo
 // World probes (the streamed world, `?world=<id>`; --world <id> picks it, default tremola; --worldData <path> picks the data folder):
 //   world-near-ground world-cover-off world-toggle-ride world-ground-flip world-ground-scan world-ground-off world-window world-haze world-budget world-ground world-junction world-wrongway world-credit world-net world-finish world-restart world-cut world-camera world-frustum world-camera-smooth world-camera-chicane world-camera-frames world-camera-walls world-hud world-shots world-hairpin-shots world-buildings world-frametime world-ride-shots world-hairpin-assist world-floating world-watertight world-trees world-stones world-quality world-fall-shots world-group-shots world-place-shots
-//   node tools/terrain-check.mjs world-camera-chicane --world gotthard-north [--modes near,far] [--speed 20] [--from s --to s] [--dump <file>]   (the chase camera's yaw rate, yaw acceleration and sway over the whole stage, its worst places and every chicane)
+//   node tools/terrain-check.mjs world-camera-chicane --world gotthard-north [--modes near,far] [--speed 20] [--from s --to s] [--dump <file>]   (the chase camera's yaw rate, yaw acceleration and sway over the whole stage, its worst places and every chicane; ridden alone, the crew dropped)
 //   node tools/terrain-check.mjs camera-swing --legs id,id [--modes near,far] [--speed 25]   (the same on the classic legs)
 //   node tools/terrain-check.mjs world-camera-walls --world tremola --gpu [--modes near,far] [--lane M] [--swing K] [--far K] [--apex s,s] [--off] [--shots s,s,s --out <dir>]   (nothing drawn between the chase camera and the bike in any hairpin)
 //   node tools/terrain-check.mjs world-fall-shots --world tremola --gpu --out <dir> [--at s] [--speeds 6,14,28] [--moments 0.15,0.5,1.2]   (the rider's fall of each kind, beside him)
@@ -4623,6 +4623,11 @@ const WORLD = {
                 const route = env.route;
                 const cam = game.camera;
                 twistyDev.freeze();
+                // The ride is the camera's, ridden alone (the crew dropped, as free roam ridden alone): the pilot holds
+                // its cruise and its bend speeds and never brakes for a vehicle ahead, so it rode into the group where
+                // the group took a hairpin slower than it (leg 6, s 6 224: the riders on their lane at 11 to 15 m/s, the
+                // pilot on the road's middle at 20). The crash it left also stood into the next view's ride
+                if (game.traffic && game.traffic.dropCrew) game.traffic.dropCrew();
                 game.setCameraView(mode);
                 const start = from || Math.max(20, (env.startS ?? 0) + 20);
                 const end = to || Math.min(route.length - 30, (env.endS ?? route.length) - 30);
@@ -4660,7 +4665,7 @@ const WORLD = {
                 } finally {
                     game.updateCamera = update;
                 }
-                return { start: Math.round(start), end: Math.round(end), reached: Math.round(v.routeS), crashed: v.crashed, rows };
+                return { start: Math.round(start), end: Math.round(end), reached: Math.round(v.routeS), crashed: v.crashed, cause: v.crashed ? v.crashCause || null : null, rows };
             }, placeAt.toString(), pilotWorld.toString(), tubeRoom.toString(), mode, Number(option('speed') || 20), Number(option('from') || 0), Number(option('to') || 0));
             // (from 60 m in: the pilot sets off from a stand at the start and the camera settles)
             const rows = swingOf(ride.rows.map(r => ({ s: r[0], yaw: r[1], screen: r[2], room: r[3], speed: r[4], under: r[5] ?? Infinity, ey: r[6], up: r[7], back: r[8] }))).filter(r => r.s >= ride.start + 60);
@@ -4688,7 +4693,7 @@ const WORLD = {
             const round = n => Math.round(n * 100) / 100;
             const peaks = peaksOf(rows);
             out.modes[mode] = {
-                start: ride.start, end: ride.end, reached: ride.reached, crashed: ride.crashed, frames: rows.length,
+                start: ride.start, end: ride.end, reached: ride.reached, crashed: ride.crashed, cause: ride.cause, frames: rows.length,
                 rate: round(peaks.rate), accel: round(peaks.accel), sway: round(peaks.sway), room: round(peaks.room),
                 tube: { under: under === Infinity ? null : round(under), underAt, bounce: Math.round(bounce * 10000) / 10000, bounceAt },
                 boom: { up: centile('up', 0.5), up90: centile('up', 0.9), back: centile('back', 0.5), back90: centile('back', 0.9) },
@@ -9407,7 +9412,7 @@ function worldChecks(report) {
     const chicane = results['world-camera-chicane'];
     if (chicane) {
         for (const [mode, m] of Object.entries(chicane.modes || {})) {
-            if (m.crashed) failures.push(`world-camera-chicane: the ride in view ${mode} crashed at s ${m.reached}`);
+            if (m.crashed) failures.push(`world-camera-chicane: the ride in view ${mode} crashed at s ${m.reached}${m.cause ? ` (${m.cause})` : ''}`);
             if (m.reached < m.end) failures.push(`world-camera-chicane: the ride in view ${mode} stopped at s ${m.reached}, before ${m.end}`);
             if (!(m.accel <= CHASE_LIMITS.accel)) failures.push(`world-camera-chicane: view ${mode}: a yaw acceleration of ${m.accel} rad/s^2, want ${CHASE_LIMITS.accel} or less: ${JSON.stringify(m.places.slice(0, 3))}`);
             if (!(m.room >= CHASE_LIMITS.room)) failures.push(`world-camera-chicane: view ${mode}: the bike came within ${m.room} of a side of the view, want ${CHASE_LIMITS.room} or more`);
