@@ -79,9 +79,8 @@ class WorldGraph {
         return this.stubNodes;
     }
 
-    // The node's other edge where the road only goes on through it (degree 2), or null
-    onwardEdge(edgeId, nodeId) {
-        if (!this.nodes || !this.nodes.degree || this.nodes.degree[nodeId] !== 2) return null;
+    // Every edge that ends at the node
+    edgesAt(nodeId) {
         if (!this.byNode) {
             this.byNode = new Map();
             for (const e of this.edges) for (const n of [e.a, e.b]) {
@@ -89,7 +88,13 @@ class WorldGraph {
                 this.byNode.get(n).push(e);
             }
         }
-        const next = (this.byNode.get(nodeId) || []).find(e => e.id !== edgeId);
+        return this.byNode.get(nodeId) || [];
+    }
+
+    // The node's other edge where the road only goes on through it (degree 2), or null
+    onwardEdge(edgeId, nodeId) {
+        if (!this.nodes || !this.nodes.degree || this.nodes.degree[nodeId] !== 2) return null;
+        const next = this.edgesAt(nodeId).find(e => e.id !== edgeId);
         return next && !next.onRide ? next : null;
     }
 

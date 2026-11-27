@@ -1798,7 +1798,13 @@ class RoadMesh {
                 // corner past the side road), and the land lay in the corner between the two roads (the run-in's pits
                 // at km 1.1, 11.0 and 14.08)
                 const near = [k - 1, k, k + 1, k + 2].some(j => paved[j] && paved[j][key]);
-                if (!near || !foot || !foot.gore || sides[k].bits & 7 || sides[k + 1].bits & 7 || !sides[k].lc || !sides[k + 1].lc) continue;
+                // (and on to a bridge's first row from the open row before it: a side road that leaves just before a
+                // bridge lay beside the segment to the deck's first row with the land 1.4 m down between the two, leg
+                // 3's j35. The bridge row's own end reads no side road, so the paving closes to the edge there, and the
+                // lines between are turned toward the side road where square to the ride they meet none: edgeFoot `gore`)
+                const open = j => !(sides[j].bits & 7), bridged = j => !(sides.owner >= 0) && (sides[j].bits & 7) === 2 && !sides[j].viaduct;
+                const bridging = (open(k) && bridged(k + 1)) || (bridged(k) && open(k + 1));
+                if (!near || !foot || !foot.gore || !((open(k) && open(k + 1)) || bridging) || !sides[k].lc || !sides[k + 1].lc) continue;
                 const ca = sides[k][key + 'c'], cb = sides[k + 1][key + 'c'];
                 const oa = RoadMesh.outward(sides[k])[key], ob = RoadMesh.outward(sides[k + 1])[key];
                 const steps = Math.max(1, Math.ceil(Math.hypot(cb[0] - ca[0], cb[2] - ca[2]) / RoadMesh.PAVING_STEP_M));
@@ -1810,7 +1816,7 @@ class RoadMesh {
                     const ol = Math.hypot(ox, oz) || 1;
                     ox /= ol; oz /= ol;
                     // (the rows' own reads at the ends, so two segments meet on one line)
-                    const g = j === 0 ? paved[k] && paved[k][key] : j === steps ? paved[k + 1] && paved[k + 1][key] : foot.gore(c[0], c[1], c[2], ox, oz);
+                    const g = j === 0 ? paved[k] && paved[k][key] : j === steps ? paved[k + 1] && paved[k + 1][key] : foot.gore(c[0], c[1], c[2], ox, oz, bridging);
                     line.push({ c, g: g || null });
                 }
                 const c = RoadMesh.PAVING_LINEAR;
@@ -1834,12 +1840,22 @@ class RoadMesh {
                     const a0 = edgeOf(qa, ga), b0 = edgeOf(qb, gb);
                     const an = qa.g ? nearOf(qa.g) : a0, bn = qb.g ? nearOf(qb.g) : b0;
                     strip(a0, b0, an, bn);
+                    // (on the segment to a bridge's first row, where it closes to the edge, the side from the edge out to the
+                    // side road comes down to the land: it ended over the land under the abutment, 1.2 to 2 m down, leg 3's
+                    // j35)
+                    if (bridging && !qa.g !== !qb.g && landAt) {
+                        const [p, q] = qa.g ? [b0, an] : [a0, bn];
+                        const lp = landAt(p[0], p[2]), lq = landAt(q[0], q[2]);
+                        if (lp !== null && lq !== null && (lp < p[1] - 0.05 || lq < q[1] - 0.05)) RoadMesh.quad(pavingOut, p, q, [q[0], Math.min(q[1], lq - 0.2), q[2]], [p[0], Math.min(p[1], lp - 0.2), p[2]], [c, c, c, c]);
+                    }
                     // (then on under the side road's edge at its own height, PAVING_TUCK_M: the ribbon closes the rest. Laid
                     // on under the whole road to its far edge, flat or along the road, it stood over the ribbon where the
                     // road beside the ride bends or dips)
                     const prof = (g, n) => (g && g.under && g.under.length ? [n, g.under[0]] : [n]);
                     const pa = prof(qa.g, an), pb = prof(qb.g, bn), m = Math.max(pa.length, pb.length);
-                    if (m < 2) continue;
+                    // (and there not where the paving closes to the edge: closed to the edge too, the piece under the road
+                    // stood as a sliver from under the side road back to the ride's edge, open over the land, leg 3's j35)
+                    if (m < 2 || (bridging && (!qa.g || !qb.g))) continue;
                     const at = (list, i) => { const f = (i * (list.length - 1)) / (m - 1), lo = Math.floor(f), hi = Math.min(list.length - 1, lo + 1); return mix(list[lo], list[hi], f - lo); };
                     for (let i = 0; i + 1 < m; i++) strip(at(pa, i), at(pb, i), at(pa, i + 1), at(pb, i + 1));
                 }
