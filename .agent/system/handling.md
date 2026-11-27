@@ -359,6 +359,18 @@ Measured (`tests/unit/world-wall-brush.test.js`):
 - Round the outside rock of a 12 m bend, leaned 50 degrees into the bend: at 17 to 22 m/s the bike brushes 1 to 3 times and rides on at about 9 m/s; at 25 and 30 m/s it crashes.
 - The shipped stage: 15 of the 35 hairpins have a wall within 4 m of the outside edge, 14 of them a parapet 0.9 m past the edge. Ridden wide at the advised speed, 13 brush the wall once and ride on (the lean is 7 to 21 degrees), 2 never reach the wall, and none crashes. The fixture world has 2 such hairpins: one brush, and one ride that ends in a roadworks board on the wide line.
 
+## A stop ends with a foot down
+
+The owner fell over three times in 15 minutes when he stopped on an easy road (Tremola km 1.7, 1.8 and 5.2): "Fell over at walking pace: too much lean to put a foot down". The cause: he held a steer key while he braked to a stop, as in a bend. At walking pace the lean limit rose to `lowLeanDeg` (40 degrees), so the held key laid the bike over as it slowed. Under `fallSpeed` it was past `tipLeanDeg` and fell. A scripted stop from 10 m/s with the key held and the brake on fell in 0.5 s.
+
+The rule (`Vehicle.updateWorldPhysics`, `WorldPhysics.stopLean`):
+
+- **On the brake, no counterbalance lean.** With the brake on, the low-speed lean (`lowLeanDeg`) does not apply. The limit is the lean of the tightest turn at that speed, and it falls to nothing as the bike slows. The lean comes back with it.
+- **Under `fallSpeed` the steering turns the handlebar.** It leans the bike no further than `stopLean` (0.8) of `tipLeanDeg`. A lean the bike already has is kept.
+- **Real lean still falls.** A full-lock U-turn at 2 m/s with the throttle shut tips over, as before.
+
+`tests/unit/world-stop-foot.test.js` holds it: a stop from 10 m/s with the key held, half held or tapped, at full or half brake, and a tap at 3, 2, 1.5 and 1 m/s, each end with a foot down at 0 m/s. Stopped, a key held for 2 s leans the bike no further than `stopLean` of `tipLeanDeg`.
+
 ## A wheelie by the bike
 
 Two facts of each bike shape its wheelie. They are in the catalogue entry (`BIKE_MODELS`) and in each procedural kind (`Vehicle.BIKES`). No code names a bike: one rule reads the two facts.

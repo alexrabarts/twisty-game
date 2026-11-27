@@ -3423,10 +3423,17 @@ class Vehicle {
         const hold = this.offroad > 0 && this.runoff && !this.isJumping && this.worldBrake <= world.slideBrake
             ? this.offroad * this.worldThrottle : 0;
         const capLean = hold > 0 ? Math.atan(Math.tan(capEff) * (1 + world.slideLean * hold)) : capEff;
-        // At walking pace the rider lays the bike over and counterbalances: the limit rises to lowLeanDeg
-        const low = this.lowLeanShare(v);
+        // At walking pace the rider lays the bike over and counterbalances: the limit rises to lowLeanDeg. Not on the
+        // brake: a rider stopping stands the bike up, and the limit is the lean of the tightest turn at this speed, which
+        // falls to nothing with it (the owner fell over three times in 15 minutes, braking to a stop on an easy road
+        // with a steer key held: the lean rose to lowLeanDeg as the bike slowed, and it tipped under fallSpeed)
+        const low = this.worldBrake > 0 ? 0 : this.lowLeanShare(v);
         // (and never past what the bike itself leans: leanMostRad, Infinity for a bike held by the grip alone)
-        const leanLimit = Math.min(capLean, this.leanMostRad, Math.max(Math.atan(v2 / (g * radiusFloor)), low * world.lowLeanDeg * Math.PI / 180));
+        let leanLimit = Math.min(capLean, this.leanMostRad, Math.max(Math.atan(v2 / (g * radiusFloor)), low * world.lowLeanDeg * Math.PI / 180));
+        // Under fallSpeed the steering turns the handlebar and leans the bike no further than stopLean x tipLeanDeg: a
+        // rider with a foot down does not lay the bike over. A lean it already has (a U-turn that ran out of speed) is
+        // kept, and tips it as before
+        if (v < world.fallSpeed) leanLimit = Math.min(leanLimit, Math.max(Math.abs(lean), world.stopLean * world.tipLeanDeg * Math.PI / 180));
 
         // The steering torque falls with speed as the legacy speedFactor does, and picking the bike up is quicker
         const speedFactor = v > world.steerSpeed ? Math.max(0.3, Math.pow(world.steerSpeed / v, world.steerFalloff)) : 1;
