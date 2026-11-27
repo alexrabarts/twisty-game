@@ -3,8 +3,10 @@
 // line clear of every solid thing, the repair surface only between the tapers, and no more triangles in the whole
 // stage than its roadworks cost before. The lights, the contact and the rides are tests/unit/world-roadworks.test.js.
 import { describe, test, expect, beforeAll } from '@jest/globals';
+import { readFileSync } from 'node:fs';
 import { loadGame, loadScript } from '../helpers/load-game.js';
 import { diskFetch } from '../helpers/world-fetch.js';
+import { modelStats } from '../../tools/model-stats.mjs';
 
 const game = loadGame();
 const { THREE, WorldEnvironment, Roadworks, RoadSurface, Vehicle } = game;
@@ -316,5 +318,38 @@ describe('the triangles', () => {
             expect(works.meshes[kind]).toBeTruthy();
             expect(works.meshes[kind].instanceMatrix.count).toBe(works.elements.filter(e => e.kind === kind).length);
         }
+    });
+
+    // The digger's model is dearer than the plain digger it replaces (Roadworks.dressDigger), so it is drawn at its
+    // levels by its distance from the bike (DIGGER_LOD_M) and only the sites within REACH_M are drawn: at every place
+    // of the stage, what is drawn stays within the stage's whole roadworks budget, so the window keeps its room
+    test('with the digger\'s model, what is drawn at any place of the stage stays within that budget', () => {
+        const levels = modelStats(readFileSync(new URL('../../' + Roadworks.DIGGER_FILE, import.meta.url))).levels;
+        const digger = [levels.lod0.triangles, levels.lod1.triangles, levels.lod2.triangles];
+        const lamp = trianglesOf('lamp');
+        const [near, far] = Roadworks.DIGGER_LOD_M;
+        const p = {};
+        let most = 0, at = 0;
+        for (let s = 0; s <= env.route.length; s += 5) {
+            env.route.sample(s, p);
+            let n = 0;
+            for (const site of works.sites) {
+                if (!site.elements.some(e => Math.hypot(e.x - p.x, e.z - p.z) < Roadworks.REACH_M)) continue;
+                for (const e of site.elements) {
+                    if (e.kind === 'digger') {
+                        const d = Math.hypot(e.x - p.x, e.z - p.z);
+                        n += digger[d < near ? 0 : d < far ? 1 : 2];
+                        continue;
+                    }
+                    n += trianglesOf(e.kind);
+                    if (e.board) n += trianglesOf('beaconBoard');
+                    if (e.face) n += trianglesOf('signFace');
+                    if (e.kind === 'light') n += 3 * lamp;
+                }
+            }
+            if (n > most) { most = n; at = s; }
+        }
+        console.log(`roadworks drawn: at most ${most} triangles (s ${at}), the digger ${digger.join(', ')} by level`);
+        expect(most).toBeLessThanOrEqual(TRIANGLES_BEFORE);
     });
 });

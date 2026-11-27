@@ -137,6 +137,11 @@ class Roadworks {
     static get COPING_CLEAR_M() { return 0.05; }
     // A site is drawn while the bike is within this many metres of it (in plan)
     static get REACH_M() { return 230; }
+    // The digger's model (tools/blender/roadworks_digger.py): three levels, each inside the procedural digger's box,
+    // which the physics and the layout keep reading. A digger is drawn at lod1 from the first distance from the bike
+    // and at lod2 from the second (in plan); the procedural digger stands in until the file arrives, or if it fails
+    static get DIGGER_FILE() { return 'assets/roadworks/digger.glb'; }
+    static get DIGGER_LOD_M() { return [40, 110]; }
     // The lights: green for GREEN_S, amber for AMBER_S, then all red for as long as a car at CLEAR_SPEED_MS (the
     // slowest car's lane speed) needs to clear the single lane from a rolling start, plus CLEAR_LAG_S; and longer while
     // anything is still in the lane
@@ -1034,6 +1039,8 @@ class Roadworks {
             for (const [x, z] of [[-0.55, -0.75], [0.33, -0.75], [-0.55, 0.08], [0.33, 0.08]]) B(out, x, x + 0.04, 1.25, 2.3, z, z + 0.04, C.yellow);
             B(out, -0.53, 0.35, 1.3, 2.25, -0.73, 0.1, C.glass);
             B(out, -0.6, 0.4, 2.3, 2.38, -0.8, 0.15, C.yellow);
+            // The beacon on the roof, as the model has it (its box is the one the physics reads)
+            B(out, -0.55, -0.45, 2.38, 2.42, -0.3, -0.2, C.orange);
             B(out, 0.4, 0.6, 1.0, 2.0, 0.6, 0.85, C.yellow);
             B(out, 0.44, 0.56, 1.5, 1.95, 0.86, 0.92, C.metal);
             B(out, 0.42, 0.58, 0.35, 1.1, 0.9, 1.1, C.yellow);
@@ -1352,7 +1359,102 @@ class Roadworks {
         this.group.visible = false;
         this.near = [];
         this.placedKey = null;
+        this.diggerLevels = null;
+        if (this.meshes.digger && typeof SceneAssets !== 'undefined' && SceneAssets.loadModel) {
+            SceneAssets.loadModel(Roadworks.DIGGER_FILE).then(model => this.dressDigger(model))
+                .catch(error => console.warn(`roadworks: the digger's model did not load (${error.message}); the plain one stands in`));
+        }
     }
+
+    // The digger's model in place of the plain one: an instanced mesh for each finish of each level, as many instances
+    // as there are diggers. The opaque finishes cast and take the sun's shadow; the glass takes the smoked glass
+    // (Roadworks.smokedGlass) and casts none
+    dressDigger(model) {
+        const plain = this.meshes.digger;
+        if (!plain || !this.group) return;
+        const n = plain.instanceMatrix.count;
+        const levels = ['lod0', 'lod1', 'lod2'].map(name => {
+            const group = model.groups && model.groups.get(name);
+            const parts = group && [...group.meshes.values()][0];
+            if (!parts || !parts.length) throw new Error(`the digger's file has no ${name}`);
+            return parts.map(part => {
+                const glass = part.material.name === 'glass';
+                const mesh = new THREE.InstancedMesh(part.geometry, glass ? Roadworks.smokedGlass() : part.material, n);
+                mesh.name = `roadworks:digger:${name}:${part.material.name}`;
+                mesh.count = 0;
+                mesh.visible = false;
+                mesh.frustumCulled = false;
+                mesh.castShadow = !glass;
+                mesh.receiveShadow = true;
+                mesh.userData.skipCulling = true;
+                mesh.userData.world = 'roadworks';
+                this.group.add(mesh);
+                return mesh;
+            });
+        });
+        plain.visible = false;
+        this.diggerLevels = levels;
+        this.diggerKey = null;
+        this.placeDiggers();
+    }
+
+    // Each digger drawn at its level by its distance from the bike (DIGGER_LOD_M); rewrites the instances only when
+    // a level or the set of sites changes
+    placeDiggers(x = this.lastX, z = this.lastZ) {
+        if (!this.diggerLevels) return;
+        const [near, far] = Roadworks.DIGGER_LOD_M;
+        const diggers = [];
+        for (const site of this.near || []) for (const e of site.elements) if (e.kind === 'digger') diggers.push(e);
+        const levelOf = e => {
+            if (x === undefined) return 2;
+            const d = Math.hypot(e.x - x, e.z - z);
+            return d < near ? 0 : d < far ? 1 : 2;
+        };
+        const chosen = diggers.map(levelOf);
+        const key = `${this.placedKey}|${chosen.join('')}`;
+        if (key === this.diggerKey) return;
+        this.diggerKey = key;
+        const matrix = new THREE.Matrix4();
+        this.diggerLevels.forEach((meshes, level) => {
+            let i = 0;
+            diggers.forEach((e, k) => {
+                if (chosen[k] !== level) return;
+                Roadworks.matrixOf(e, matrix);
+                for (const mesh of meshes) mesh.setMatrixAt(i, matrix);
+                i++;
+            });
+            // (a level no digger is drawn at is hidden: no draw call, and no mesh in the window's count)
+            for (const mesh of meshes) {
+                mesh.count = i;
+                mesh.visible = i > 0;
+                mesh.instanceMatrix.needsUpdate = true;
+            }
+        });
+    }
+
+    // The cab's glass: smoked, so the cab's inside shows faintly, the sky's reflection in it (the scene's environment
+    // map) and more of it toward a grazing view. Each pane faces out of the cab and is drawn one sided, so at most one
+    // pane lies in front of any pixel and the panes need no order among themselves; it writes no depth, so what is
+    // behind it is drawn as it is (the cab's inside, the land), and it casts no shadow
+    static smokedGlass() {
+        if (Roadworks.glass) return Roadworks.glass;
+        const glass = new THREE.MeshStandardMaterial({
+            name: 'glass', color: new THREE.Color(0.0024, 0.003, 0.0037), roughness: 0.08, metalness: 0,
+            envMapIntensity: 1.4, transparent: true, opacity: Roadworks.GLASS_OPACITY[0], depthWrite: false, side: THREE.FrontSide
+        });
+        const [face, edge] = Roadworks.GLASS_OPACITY;
+        glass.onBeforeCompile = (shader) => {
+            shader.fragmentShader = shader.fragmentShader.replace('#include <output_fragment>', `float glassFacing = clamp( dot( normalize( vViewPosition ), normal ), 0.0, 1.0 );
+diffuseColor.a = mix( ${edge.toFixed(3)}, ${face.toFixed(3)}, glassFacing );
+#include <output_fragment>`);
+        };
+        glass.customProgramCacheKey = () => 'roadworks-glass';
+        Roadworks.glass = glass;
+        return glass;
+    }
+
+    // The glass's opacity seen square on and at a grazing view
+    static get GLASS_OPACITY() { return [0.78, 0.95]; }
 
     // An element's matrix: its place and yaw on the road's grade (its frame's up the road's normal), tipped over by its
     // knock (a light thing knocked flat)
@@ -1384,6 +1486,8 @@ class Roadworks {
     // drawn. Rewrites the instances only when the set changes or something was knocked over
     place(x, z, reach = Roadworks.REACH_M) {
         if (!this.group) return;
+        this.lastX = x;
+        this.lastZ = z;
         const near = this.sites.filter(site => site.elements.some(e => Math.hypot(e.x - x, e.z - z) < reach));
         // A wall's plan waits on the land's tiles (WorldEnvironment.rideWalls), which arrive after the sites are built:
         // the verge pieces are fitted again whenever a plan changes
@@ -1423,6 +1527,7 @@ class Roadworks {
             if (typeof RoadSurface !== 'undefined' && RoadSurface.setWorks) RoadSurface.setWorks(near.filter(site => site.closed).slice(0, 2));
         }
         if (this.lampsDirty) this.writeLamps();
+        this.placeDiggers(x, z);
     }
 
     // The lamps of the lights drawn: each light's state in its colours
