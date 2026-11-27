@@ -608,7 +608,7 @@ class RoadMesh {
                 // (a row where the section's drawing starts or ends, or the tube's kind changes, keeps the rock's face
                 // on the wall's line, so a neighbour at another level of detail or of another kind meets it)
                 const turn = i > from && (rows[i - 1].tubeRun || plain(rows[i - 1])) !== run && !!(row.tubeRun && rows[i - 1].tubeRun);
-                tubeRows.push({ l: side(row, -1), r: side(row, 1), s: along[i], inM: depth ? depth[i] : row.tubeIn, cap: row.tubeCap, roof, floor: floor(row), pin: i === from || i === to || turn || (i < to && rows[i + 1].tubeRun !== row.tubeRun), gallery: run.gallery, rock: run.rock, open: run.open, shotcrete: run.shotcrete, profile: run.profile || 'box' });
+                tubeRows.push({ l: side(row, -1), r: side(row, 1), s: along[i], inM: depth ? depth[i] : row.tubeIn, cap: row.tubeCap, roof, floor: floor(row), pin: i === from || i === to || turn || (i < to && rows[i + 1].tubeRun !== row.tubeRun), gallery: run.gallery, rock: run.rock, open: run.open, shotcrete: run.shotcrete, profile: run.profile || 'box', mouth: { l: !!row.mouthL, r: !!row.mouthR } });
             }
             const whole = (rows[from].tubeRun || plain(rows[from])).tube;
             TubeLining.run(lining, tubeRows, { lod, groundAt, run: whole });
@@ -854,11 +854,18 @@ class RoadMesh {
     static get LOW_DECK_M() { return 5; }
     static get LOW_DECK_SINK_M() { return 0.8; }
     static lowDeck(out, rows, from, to, groundAt, guard, ends, style) {
+        // (a girder's underside steps in per segment: a low deck is a beam's, StructureStyles.overpass gives a girder
+        // only to a long or high one)
+        if (style.deck === 'girder') return;
         const D = RoadMesh.DECK_M, I = StructureBuild.BEAM_IN_M, L = RoadMesh.LOW_DECK_M, sink = RoadMesh.LOW_DECK_SINK_M;
+        // (each wall's top on the deck's own corner under its edge beam, as StructureBuild.deck lays it: its edge point
+        // moved BEAM_IN_M toward the other edge, DECK_M down, so the two share their corners)
+        const edge = (row, sign) => { const q = RoadMesh.place(row, sign * (row.width / 2 + RoadMesh.BRIDGE_DECK_M)); return [q.x, row.y, q.z]; };
         const under = (row, sign) => {
-            const p = RoadMesh.place(row, sign * (row.width / 2 + RoadMesh.BRIDGE_DECK_M - I));
-            const land = groundAt(p.x, p.z), top = row.y - D;
-            return Number.isFinite(land) && top - land < L ? { p: [p.x, top, p.z], foot: land - sink } : null;
+            const e = edge(row, sign), o = edge(row, -sign), len = Math.hypot(o[0] - e[0], o[2] - e[2]) || 1;
+            const p = [e[0] + (o[0] - e[0]) / len * I, e[1] - D, e[2] + (o[2] - e[2]) / len * I];
+            const land = groundAt(p[0], p[2]);
+            return Number.isFinite(land) && p[1] - land < L ? { p, foot: land - sink } : null;
         };
         const clear = (a, b) => !guard || [a, b].every(q => guard.clear(q.p[0], q.p[2], q.foot, q.p[1], 0.1));
         const color = RoadMesh.COLORS.deck, look = style.look;

@@ -97,15 +97,17 @@ class StructureStyles {
 
     // The style of an overpass whose deck starts at (x, z): `length` its run's metres, `height` the most its deck
     // stands over the land, `ride` whether it is the ride's own bridge. Long high decks are girders on round columns;
-    // short low ones slabs or stone-faced; a side road may have a steel rail. The ride's own bridge keeps a solid
-    // parapet (its physics wall stands there)
+    // short low ones slabs or stone-faced; a side road may have a steel rail. The ride's own bridge is a slab or
+    // stone-faced, with a solid parapet (its physics wall stands there)
     static overpass({ x = 0, z = 0, length = 0, height = 0, ride = false } = {}) {
         const h = StructureStyles.hash(x, z, ride ? 1 : 0);
         let name;
         if (length > 60 || height > 14) name = h < 0.75 ? 'girder' : 'slab';
         else if (height < 6 && length < 40) name = h < 0.4 ? 'stone' : h < 0.7 ? 'slab' : 'steel';
         else name = h < 0.45 ? 'slab' : h < 0.7 ? 'girder' : h < 0.85 ? 'stone' : 'steel';
-        if (ride && name === 'steel') name = 'slab';
+        // (picked by its block of ride, not its size, a ride bridge is a slab or stone-faced: its low deck is closed by
+        // walls under its edge beams, RoadMesh.lowDeck)
+        if (ride && (name === 'steel' || name === 'girder')) name = 'slab';
         return { name, ...StructureStyles.OVERPASS[name] };
     }
 

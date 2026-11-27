@@ -125,7 +125,9 @@ describe('the Gotthard leg: every ride tube is lined, lit and fitted, and its fi
         for (const i of near) {
             found.segments++;
             const kinds = new Set([...(linedBy.get(Math.floor((sArray[i] + 0.5) / 4)) || []), ...(linedBy.get(Math.floor((sArray[i] + 2) / 4)) || []), ...(linedBy.get(Math.floor((sArray[i + 1] - 0.5) / 4)) || [])]);
-            const missing = ['roof', 'walll', 'wallr', 'walkl', 'walkr'].filter(k => !kinds.has(k));
+            // (no wall where a side road leaves the ride through it: its mouth, RoadMesh.tunnel `mouth`)
+            const styles = env.roadStyles(), mouth = side => !!(styles[i][side] && styles[i + 1][side]);
+            const missing = ['roof', 'walll', 'wallr', 'walkl', 'walkr'].filter(k => !kinds.has(k) && !(k === 'walll' && mouth('mouthL')) && !(k === 'wallr' && mouth('mouthR')));
             if (missing.length) found.unlined.push({ s: Math.round(sArray[i]), missing });
         }
         // A lamp every lampM (the lamp whose middle is in a segment at LOD0, within 150 m of where the bike was put down)

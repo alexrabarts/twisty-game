@@ -195,11 +195,16 @@ class TubeLining {
                 const n = [-sign * (fa.rx + fb.rx) / 2, 0, -sign * (fa.rz + fb.rz) / 2];
                 const nl = Math.hypot(n[0], n[2]) || 1;
                 n[0] /= nl; n[2] /= nl;
-                if (seg.open === sign && seg.groundAt) TubeLining.openWall(lining, k, sign, rows, frames, attr, point, roofOf, n, share, { ...seg, thin: !near });
-                else if (seg.rock === sign) TubeLining.rockWall(lining, k, sign, rows, frames, attr, n, share, near, seg.shotcrete ? K.shotcrete : K.rock, seg.shotcrete ? C.shotcrete : C.rock, seg.wallCap);
-                else {
-                    const pa = a[key], pb = b[key], ta = ra - seg.wallCap, tb = rb - seg.wallCap;
-                    TubeLining.quad(lining, pa, pb, [pb[0], pb[1] + tb, pb[2]], [pa[0], pa[1] + ta, pa[2]], n, K.concrete, C.concrete, (p, j) => attr(k, j === 1 || j === 2 ? 1 : 0, sign * (j === 1 || j === 2 ? fb.half : fa.half), j >= 2 ? (j === 2 ? tb : ta) : 0), share);
+                // (where a side road leaves the ride through its wall, `mouth`, the wall opens: the side road's own tube
+                // goes on from there, and a wall across its mouth blocked it, Andermatt to Goeschenen j39)
+                const mouth = !!(a.mouth && b.mouth && a.mouth[key] && b.mouth[key]);
+                if (!mouth) {
+                    if (seg.open === sign && seg.groundAt) TubeLining.openWall(lining, k, sign, rows, frames, attr, point, roofOf, n, share, { ...seg, thin: !near });
+                    else if (seg.rock === sign) TubeLining.rockWall(lining, k, sign, rows, frames, attr, n, share, near, seg.shotcrete ? K.shotcrete : K.rock, seg.shotcrete ? C.shotcrete : C.rock, seg.wallCap);
+                    else {
+                        const pa = a[key], pb = b[key], ta = ra - seg.wallCap, tb = rb - seg.wallCap;
+                        TubeLining.quad(lining, pa, pb, [pb[0], pb[1] + tb, pb[2]], [pa[0], pa[1] + ta, pa[2]], n, K.concrete, C.concrete, (p, j) => attr(k, j === 1 || j === 2 ? 1 : 0, sign * (j === 1 || j === 2 ? fb.half : fa.half), j >= 2 ? (j === 2 ? tb : ta) : 0), share);
+                    }
                 }
                 // The walkway from where it starts out to the wall's foot (u: metres out from its inner edge)
                 if (a.floor && b.floor && a.floor[key] && b.floor[key]) {
