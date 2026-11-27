@@ -57,6 +57,8 @@ PIVOT = (0.43, -0.17)
 KNOBS = float(os.environ.get("TWISTY_KNOBS") or 0.012)
 # The engine's small parts (engine_parts). TWISTY_ENGINE=0 leaves them out, for a comparison
 ENGINE_PARTS = os.environ.get("TWISTY_ENGINE", "1") != "0"
+# The cast ribs round the barrel (engine_parts); TWISTY_RIBS sets the count for a variant build
+RIBS = int(os.environ.get("TWISTY_RIBS") or 4)
 # The spokes' finish. TWISTY_SPOKE sets it for a variant build
 SPOKE = os.environ.get("TWISTY_SPOKE") or "steel"
 
@@ -86,6 +88,12 @@ if os.environ.get("TWISTY_FINISH"):
     name, value = os.environ["TWISTY_FINISH"].split("=")
     colour, rough, metal = value.split(",")
     EXTRA[name] = (int(colour, 16), float(rough), float(metal))
+
+
+# The tank shroud's outline (z, y), and the middle its graphics and marks turn about (E.panel `about`).
+# TWISTY_ONSHROUD=0 turns them about their own middles as before, for a comparison
+SHROUD = [(0.46, 0.7), (0.56, 0.86), (0.47, 0.985), (0.24, 1.0), (0.0, 0.94), (0.05, 0.83), (0.26, 0.68)]
+on_shroud = sum(z for z, _ in SHROUD) / len(SHROUD) if os.environ.get("TWISTY_ONSHROUD", "1") != "0" else None
 
 
 def wheels(k):
@@ -172,10 +180,9 @@ def bodywork(k):
     for side in (-1, 1):
         # Tank shroud: a red wing from the tank out and forward over the
         # radiator, a white block and a black block along it
-        E.panel(k, [(0.46, 0.7), (0.56, 0.86), (0.47, 0.985), (0.24, 1.0), (0.0, 0.94), (0.05, 0.83), (0.26, 0.68)], side * 0.165, 0.028, "paint", toe=side * -0.2,
-                bevel=0.01)
-        E.panel(k, [(0.5, 0.84), (0.45, 0.93), (0.2, 0.955), (0.1, 0.9), (0.3, 0.86)], side * 0.183, 0.008, "plastic", toe=side * -0.2, bevel=0)
-        E.panel(k, [(0.47, 0.745), (0.52, 0.825), (0.3, 0.845), (0.14, 0.83), (0.27, 0.72)], side * 0.183, 0.008, "block", toe=side * -0.2, bevel=0)
+        E.panel(k, SHROUD, side * 0.165, 0.028, "paint", toe=side * -0.2, bevel=0.01)
+        E.panel(k, [(0.5, 0.84), (0.45, 0.93), (0.2, 0.955), (0.1, 0.9), (0.3, 0.86)], side * 0.183, 0.008, "plastic", toe=side * -0.2, bevel=0, about=on_shroud)
+        E.panel(k, [(0.47, 0.745), (0.52, 0.825), (0.3, 0.845), (0.14, 0.83), (0.27, 0.72)], side * 0.183, 0.008, "block", toe=side * -0.2, bevel=0, about=on_shroud)
         # The radiator behind the shroud (the left one carries the core, the right a blank)
         k.box((0.03, 0.2, 0.1), (side * 0.115, 0.77, 0.33), "vent", rot=(0, side * -0.2, 0), bevel=0.004)
         # Side panel under the seat: red, with a white board and a black block
@@ -266,6 +273,14 @@ def engine_parts(k):
     """What makes the single read as an engine close up: the joint between barrel and head, the bolts round the
     covers and on the head, the coolant hoses from the radiator and the plug cap. It is water-cooled: no fins."""
     k.box((0.134, 0.012, 0.146), (0, 0.674, 0.168), "dark_metal", rot=(0.24, 0, 0), bevel=0.002)
+    # Cast ribs round the barrel, as a water-cooled single has (shallow, square-edged), and the head's cam cover
+    # rounded over the top
+    for i in range(RIBS):
+        t = (i + 0.5) / RIBS
+        y = 0.53 + 0.13 * t
+        k.box((0.132, 0.006, 0.142), (0, y, 0.15 + (y - 0.6) * math.tan(0.24)), "casing", rot=(0.24, 0, 0), bevel=0.0015)
+    if RIBS:
+        k.loft([(0.25, 0.75, 0.775, 0.05, 2.6, 2.6), (0.18, 0.75, 0.79, 0.065, 2.6, 2.6), (0.11, 0.75, 0.775, 0.05, 2.6, 2.6)], "dark_metal", ring=12, steps=2)
     for i in range(8):
         a = 2 * math.pi * (i + 0.5) / 8
         k.cylinder(0.0055, 0.008, (0.15, 0.42 + math.cos(a) * 0.074, 0.02 + math.sin(a) * 0.074), "steel", axis="x", seg=6)
@@ -312,7 +327,7 @@ def scuffs(k):
     for side, marks in ((1, ([(0.47, 0.72), (0.555, 0.855), (0.52, 0.87), (0.44, 0.74)], [(0.3, 0.69), (0.45, 0.705), (0.43, 0.725), (0.3, 0.71)])),
                         (-1, ([(0.5, 0.8), (0.555, 0.86), (0.5, 0.94), (0.48, 0.92), (0.52, 0.86)], [(0.28, 0.685), (0.36, 0.69), (0.35, 0.705)]))):
         for mark in marks:
-            E.panel(k, mark, side * 0.189, 0.004, "scuff_plastic", toe=side * -0.2, bevel=0)
+            E.panel(k, mark, side * 0.189, 0.004, "scuff_plastic", toe=side * -0.2, bevel=0, about=on_shroud)
     E.panel(k, [(-0.12, 0.645), (-0.42, 0.665), (-0.56, 0.76), (-0.585, 0.8), (-0.54, 0.79), (-0.42, 0.69), (-0.14, 0.665)], 0.141, 0.004, "scuff_plastic", toe=0.06, bevel=0)
     E.panel(k, [(-0.3, 0.655), (-0.42, 0.662), (-0.5, 0.715), (-0.44, 0.7)], -0.141, 0.004, "scuff_plastic", toe=-0.06, bevel=0)
     # The silencer: its heat shield scraped along, a dent and bare metal behind the shield

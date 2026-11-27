@@ -87,6 +87,11 @@ describe('pictures', () => {
         expect([...crop.data.subarray(0, 3)]).toEqual([40, 40, 0]);
         expect([...crop.data.subarray(4, 7)]).toEqual([40, 40, 0]);
         expect([...crop.data.subarray(8, 11)]).toEqual([50, 40, 0]);
+        // Outside the mask, grey
+        const mask = picture(8, 8, x => (x < 5 ? [0, 0, 0] : [255, 255, 255]));
+        const masked = cropTile(image, { col: 1, row: 1 }, 2, 2, mask);
+        expect([...masked.data.subarray(0, 3)]).toEqual([128, 128, 128]);
+        expect([...masked.data.subarray(8, 11)]).toEqual([50, 40, 0]);
     });
 });
 

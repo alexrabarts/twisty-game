@@ -9,8 +9,9 @@
 //   saturation mean HSV saturation (0 to 1)
 //   flat      share of pixels whose 3 x 3 neighbourhood varies less than FLAT in luminance (bare surface)
 //   flatPale  share of pixels that are flat and lighter than PALE (bare surface the light shows up)
-//   tiles     the flat share of each tile of a GRID x GRID grid that the model covers by a quarter or more; the
-//             flattest are saved as crops, enlarged twice (`flat/<picture>-<k>.png`), for the detail critic
+//   tiles     the flat share of each tile of a GRID x GRID grid that the model covers by COVER or more; the
+//             flattest are saved as crops, enlarged twice (`flat/<picture>-<k>.png`), the backdrop in them greyed out
+//             (a crop of mostly backdrop sent a critic to judge the stage, not the model)
 // Per model file: triangles and draw calls (one per material per node) of each level (`lod0`, `lod1`, or the whole
 // file), the file's bytes and its texture bytes.
 //
@@ -20,7 +21,7 @@ import { basename, dirname, join, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { deflateSync, inflateSync } from 'node:zlib';
 
-export const CLIP = 250, CRUSH = 6, FLAT = 0.012, PALE = 0.5, COVER = 0.25;
+export const CLIP = 250, CRUSH = 6, FLAT = 0.012, PALE = 0.5, COVER = 0.6;
 
 // A PNG as { width, height, data: RGBA bytes }. Eight bits a channel, grey, RGB, grey with alpha or RGBA, not interlaced
 export function decodePng(bytes) {
@@ -171,13 +172,17 @@ export function localSpread(lum, w, h, x, y) {
     return Math.sqrt(Math.max(0, sq / 9 - mean * mean));
 }
 
-// A tile of a picture, enlarged `scale` times (nearest pixel), as an image
-export function cropTile(image, tile, grid, scale = 2) {
+// A tile of a picture, enlarged `scale` times (nearest pixel), as an image; with a mask, the pixels outside it grey
+export function cropTile(image, tile, grid, scale = 2, mask = null) {
     const x0 = Math.floor((tile.col * image.width) / grid), x1 = Math.floor(((tile.col + 1) * image.width) / grid);
     const y0 = Math.floor((tile.row * image.height) / grid), y1 = Math.floor(((tile.row + 1) * image.height) / grid);
     const width = (x1 - x0) * scale, height = (y1 - y0) * scale, data = Buffer.alloc(width * height * 4);
     for (let y = 0; y < height; y++) {
-        for (let x = 0; x < width; x++) image.data.copy(data, (y * width + x) * 4, ((y0 + Math.floor(y / scale)) * image.width + x0 + Math.floor(x / scale)) * 4, ((y0 + Math.floor(y / scale)) * image.width + x0 + Math.floor(x / scale)) * 4 + 4);
+        for (let x = 0; x < width; x++) {
+            const from = ((y0 + Math.floor(y / scale)) * image.width + x0 + Math.floor(x / scale)) * 4;
+            if (mask && mask.data[from] <= 127) data.set([128, 128, 128, 255], (y * width + x) * 4);
+            else image.data.copy(data, (y * width + x) * 4, from, from + 4);
+        }
     }
     return { width, height, data, box: [x0, y0, x1 - x0, y1 - y0] };
 }
@@ -226,7 +231,7 @@ function main() {
         const out = join(dirname(file), 'flat');
         stats.crops = stats.tiles.slice(0, crops).map((tile, k) => {
             mkdirSync(out, { recursive: true });
-            const crop = cropTile(image, tile, grid);
+            const crop = cropTile(image, tile, grid, 2, mask);
             const path = join(out, `${basename(file, '.png')}-${k + 1}.png`);
             writeFileSync(path, encodePng(crop));
             return { path, flat: tile.flat, box: crop.box };

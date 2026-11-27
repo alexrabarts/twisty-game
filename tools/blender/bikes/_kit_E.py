@@ -504,9 +504,11 @@ def wheel(k, centre, radius, width, rim, spokes="wire", count=32, hub=0.055, seg
         k.low = low
 
 
-def panel(k, outline, x, thick, mat, toe=0.0, **kw):
-    """Kit.panel turned by `toe` about its own middle, not about z = 0, so it stays at `x` where it is drawn."""
-    mid = sum(z for z, _ in outline) / len(outline)
+def panel(k, outline, x, thick, mat, toe=0.0, about=None, **kw):
+    """Kit.panel turned by `toe` about its own middle, not about z = 0, so it stays at `x` where it is drawn.
+    A graphic or a mark laid on a turned panel passes the panel's middle as `about`, so it lies on the panel's plane:
+    turned about its own middle, it stood off a toed panel by the toe times the distance between the two middles."""
+    mid = sum(z for z, _ in outline) / len(outline) if about is None else about
     return k.panel(outline, x - mid * math.sin(toe), thick, mat, toe=toe, **kw)
 
 
