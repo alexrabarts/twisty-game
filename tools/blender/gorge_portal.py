@@ -28,6 +28,10 @@ TOP = 10.2
 # Masonry infill and dressed stone, with each one's real size in metres per texture tile
 MASONRY = ("rough_block_wall", 3.0)
 DRESSED = ("rock_boulder_dry", 1.8)
+# How far a dressed stone stands into the infill it meets (its face out of every face of the infill), and how far
+# behind the infill's back the stones' backs run, past the 5 cm the coplanar check reads (tools/model-stats.mjs)
+SINK = 0.08
+DEEP = 0.12
 
 
 def ellipse(t, grow=0.0):
@@ -106,11 +110,12 @@ def headwall(masonry):
     arch = [ellipse(math.pi - math.pi * k / steps) for k in range(steps + 1)]
     outline = [Vector((-14.2, 0, -8)), Vector((-OPENING[0], 0, -8)), Vector((-OPENING[0], 0, 0))]
     outline += arch[1:-1]
-    outline += [Vector((OPENING[0], 0, 0)), Vector((OPENING[0], 0, -8)), Vector((14.2, 0, -8)), Vector((14.2, 0, TOP)), Vector((-14.2, 0, TOP))]
+    # (its top SINK up inside the cornice: no face of the two in one plane, graphics.md "No two materials fight")
+    outline += [Vector((OPENING[0], 0, 0)), Vector((OPENING[0], 0, -8)), Vector((14.2, 0, -8)), Vector((14.2, 0, TOP + SINK)), Vector((-14.2, 0, TOP + SINK))]
     # The outline above runs clockwise seen from -Y
     prism(bm, list(reversed(outline)), FRONT, BACK)
     # The parapet's infill over the cornice
-    block(bm, -14.2, 14.2, TOP + 0.55, TOP + 1.35, -0.2, 0.5)
+    block(bm, -14.2, 14.2, TOP + 0.55 - SINK, TOP + 1.35 + SINK, -0.2, 0.5)
     return mesh_object("portal_masonry", bm, masonry, MASONRY[1])
 
 
@@ -126,16 +131,17 @@ def stones(dressed):
         key = k == count // 2
         depth = 1.55 if key else 1.05
         proud = -0.75 if key else -0.5
-        quad = [ellipse(t1), ellipse(t0), ellipse(t0, depth), ellipse(t1, depth)]
-        pieces.append(prism(bm, quad, proud, BACK + 0.05))
+        # (its soffit a hand inside the opening and its back deep in the rock: neither in a face of the infill)
+        quad = [ellipse(t1, -SINK), ellipse(t0, -SINK), ellipse(t0, depth), ellipse(t1, depth)]
+        pieces.append(prism(bm, quad, proud, BACK + DEEP))
     for side in (-1, 1):
-        x0, x1 = sorted((side * OPENING[0], side * (OPENING[0] + 1.6)))
-        pieces.append(block(bm, x0, x1, -1.2, 0.35, -0.75, BACK + 0.05))
+        x0, x1 = sorted((side * (OPENING[0] - SINK), side * (OPENING[0] + 1.6)))
+        pieces.append(block(bm, x0, x1, -1.2, 0.35, -0.75, BACK + DEEP))
         # Buttress piers at the outer edges, founded deep in the rock
         x0, x1 = sorted((side * 14.0, side * 15.7))
         pieces.append(block(bm, x0, x1, -9, TOP, -0.85, BACK + 0.1))
         pieces.append(block(bm, *sorted((side * 13.85, side * 15.85)), TOP, TOP + 1.7, -0.95, BACK + 0.15))
-    pieces.append(block(bm, -14.0, 14.0, 8.95, 9.3, -0.5, BACK))
+    pieces.append(block(bm, -14.0, 14.0, 8.95, 9.3, -0.5, BACK + DEEP))
     pieces.append(block(bm, -15.9, 15.9, TOP, TOP + 0.55, -0.85, BACK + 0.2))
     pieces.append(block(bm, -14.3, 14.3, TOP + 1.35, TOP + 1.6, -0.35, 0.6))
     for faces in pieces:
@@ -164,7 +170,8 @@ def wing(masonry, dressed):
     # Coping along the sloping top, in short stones, and a pier at the far end
     stones_along = 9
     for k in range(stones_along):
-        y0 = FRONT + 0.1 - (reach + FRONT + 0.1) * k / stones_along
+        # (the first stone's end stands proud of the wall's end face)
+        y0 = FRONT + 0.1 - (reach + FRONT + 0.1) * k / stones_along + (SINK if k == 0 else 0)
         y1 = FRONT + 0.1 - (reach + FRONT + 0.1) * (k + 1) / stones_along - 0.03
         z0 = rise + (fall - rise) * (k / stones_along)
         z1 = rise + (fall - rise) * ((k + 1) / stones_along)
