@@ -196,6 +196,21 @@ export function audit(bands, things) {
 
 // Stand-ins for the modelled trees and houses (js/world/scenery.js Scenery.loadModels) in node: one box per shape,
 // the size of the shape's mesh in its .glb (the POSITION bounds of its primitives), so footprints are the models' own
+// Each house's walls in its own plan from the anchors of assets/village/houses.glb (`<house>:walls_min`, `:walls_max`,
+// village_houses.py shell): name -> { x0, x1, z0, z1, y0, y1 }, y0 the plinth's foot and y1 its top
+export function houseWallBoxes(readFileSync, root) {
+    const bytes = readFileSync(new URL('assets/village/houses.glb', root));
+    const json = JSON.parse(bytes.subarray(20, 20 + bytes.readUInt32LE(12)).toString());
+    const at = new Map(json.nodes.filter(n => n.name && n.mesh === undefined).map(n => [n.name, n.translation || [0, 0, 0]]));
+    const out = new Map();
+    for (const [name, a] of at) {
+        const m = /^(.*):walls_min$/.exec(name);
+        const b = m && at.get(`${m[1]}:walls_max`);
+        if (b) out.set(m[1], { x0: Math.min(a[0], b[0]), x1: Math.max(a[0], b[0]), z0: Math.min(a[2], b[2]), z1: Math.max(a[2], b[2]), y0: Math.min(a[1], b[1]), y1: Math.max(a[1], b[1]) });
+    }
+    return out;
+}
+
 export function modelStandIns(THREE, readFileSync, root) {
     const bounds = (file) => {
         const bytes = readFileSync(new URL(file, root));
@@ -237,7 +252,9 @@ export function modelStandIns(THREE, readFileSync, root) {
     }
     const bushes = bounds('assets/trees/bush.glb');
     if (!trees.some(t => t.kind === 'bush')) for (const name of ['bush_round', 'bush_low']) if (bushes.has(name)) trees.push({ kind: 'bush', name, parts: part(bushes.get(name)) });
-    const houses = [...bounds('assets/village/houses.glb')].filter(([name]) => name.startsWith('house_') && !name.includes(':')).sort((p, q) => p[0].localeCompare(q[0])).map(([name, b]) => ({ name, parts: part(b) }));
+    // (and each house's walls, from its anchors, as Scenery.loadModels reads them: Scenery.wallBoxOf)
+    const anchors = houseWallBoxes(readFileSync, root);
+    const houses = [...bounds('assets/village/houses.glb')].filter(([name]) => name.startsWith('house_') && !name.includes(':')).sort((p, q) => p[0].localeCompare(q[0])).map(([name, b]) => ({ name, parts: part(b), wallBox: anchors.get(name) || null }));
     // The landmark models (WorldEnvironment.load reads models.landmarks in place of loading them): asset -> {meshes}
     const assets = JSON.parse(readFileSync(new URL('tools/world/landmarks.json', root), 'utf8')).map(l => l.asset).filter(a => /\.glb$/.test(a));
     const landmarks = new Map([...new Set(assets)].map(asset => [asset, { meshes: new Map([...bounds(asset)].filter(([name]) => !name.includes(':')).map(([name, b]) => [name, part(b)])) }]));
