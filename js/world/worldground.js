@@ -104,13 +104,16 @@ class WorldGround extends Ground {
 
     // Tile height at (x, z) on the drawn triangles (cut to the retaining walls where `cutsOf(key)` gives a tile's cuts,
     // WorldEnvironment.cutsOf), or null while the tile is not resident
-    // `cut: false` reads the nodes' own triangles
+    // `cut: false` reads the nodes' own triangles (and no dam)
     tileHeight(x, z, cut = true) {
         const m = WorldData.TILE_M;
         const key = `${Math.floor(x / m)},${Math.floor(z / m)}`;
         const tile = this.data.tile(key);
         if (!tile) return null;
-        return TerrainMesh.heightAt(tile, x, z, cut && this.cutsOf ? this.cutsOf(key) : null);
+        const land = TerrainMesh.heightAt(tile, x, z, cut && this.cutsOf ? this.cutsOf(key) : null);
+        // (on a dam its top, as drawn: the land under it is cut, WorldDams)
+        const dam = cut && this.dams ? this.dams.heightAt(x, z) : null;
+        return dam === null || land === null ? land : Math.max(land, dam);
     }
 
     // Zone code at (x, z): the nearest node of the tile's zone layer; terrain where the tile is missing
