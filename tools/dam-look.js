@@ -29,14 +29,32 @@ const posesOf = dam => {
         const from = [best.p.x, best.p.y + 1.6, best.p.z];
         poses.push({ name: 'road', x: from[0], y: from[1], z: from[2], ...look(from, centre), vfov: Math.max(30, Math.min(70, 2 * Math.atan2((dam.data.length || 100) * 0.6, best.d) * 180 / Math.PI)) });
     }
-    // from below: downstream of the middle row, out as far as the dam is high, 3 m over the land
+    // (the lowest height over (x, z), 3 m or more over the land, from which the land hides none of the line to `to`)
+    const clear = (x, z, to) => {
+        const land = env.ground.groundY(x, z, null);
+        let y = (land === null || land === undefined ? to[1] : land) + 3;
+        for (let lift = 0; lift < 60; lift += 2) {
+            let open = true;
+            for (let k = 1; k < 40 && open; k++) {
+                const f = k / 40, px = x + (to[0] - x) * f, pz = z + (to[2] - z) * f, py = y + lift + (to[1] - y - lift) * f;
+                const g = env.ground.groundY(px, pz, null);
+                if (g !== null && g !== undefined && g > py + 0.5 && !(env.dams && env.dams.locate(px, pz))) open = false;
+            }
+            if (open) return y + lift;
+        }
+        return y + 60;
+    };
+    // from below: downstream of the middle row, out as far as the dam is high, over the land with the dam in sight
     const out = Math.max(40, Math.min(220, (dam.crest - mid.zd) * 1.6 + 30));
     const bx = mid.u[0] + mid.a[0] * (mid.L + out), bz = mid.u[1] + mid.a[1] * (mid.L + out);
-    const by = (env.ground.groundY(bx, bz, null) || mid.zd) + 3;
-    poses.push({ name: 'below', x: bx, y: by, z: bz, ...look([bx, by, bz], at(mid, mid.L / 2, (dam.crest + mid.zd) / 2)), vfov: 60 });
-    // the water meeting the upstream face: from over the lake, 70 m out from the middle row, 4 m over the water
-    const wy = (dam.data.water || mid.zu) + 4, wx = mid.u[0] - mid.a[0] * 70, wz = mid.u[1] - mid.a[1] * 70;
-    poses.push({ name: 'water', x: wx, y: wy, z: wz, ...look([wx, wy, wz], at(mid, 0, dam.data.water || mid.zu)), vfov: 60 });
+    const target = at(mid, mid.L / 2, (dam.crest + mid.zd) / 2), by = clear(bx, bz, target);
+    poses.push({ name: 'below', x: bx, y: by, z: bz, ...look([bx, by, bz], target), vfov: 60 });
+    // the water meeting the upstream face: from over the lake, 45 m out from the middle row and 25 m along, 5 m over
+    // the water, looking at the face at the water line
+    const level = dam.level || dam.data.water || mid.zu;
+    const e = [-mid.a[1], mid.a[0]];
+    const wx = mid.u[0] - mid.a[0] * 45 + e[0] * 25, wz = mid.u[1] - mid.a[1] * 45 + e[1] * 25, wy = level + 5;
+    poses.push({ name: 'water', x: wx, y: wy, z: wz, ...look([wx, wy, wz], at(mid, 0, level + 1)), vfov: 55 });
     // along the crest from its first end
     const end = rows[Math.min(rows.length - 1, 2)];
     const c0 = at(end, Math.min(end.c1 / 2, end.L / 2), dam.crest + 1.7), c1 = at(rows[rows.length - 1], rows[rows.length - 1].c1 / 2, dam.crest + 1.7);

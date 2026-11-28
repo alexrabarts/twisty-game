@@ -351,6 +351,8 @@ class WorldData {
             zones[i] = view.getUint8(4 + n * 2 + i);
         }
         const tile = { key, tx, tz, heights, zones };
+        // (and changed as a part of the world asks: WorldData.reshape)
+        for (const fn of this.reshapers || []) fn(tile);
         // (the data it came from, not enumerated: TerrainMesh.colours reads the tiles and covers beside it, so two tiles
         // colour the nodes they share alike)
         Object.defineProperty(tile, 'world', { value: this });
@@ -359,6 +361,14 @@ class WorldData {
         this.heldCount = (this.heldCount || 0) + 1;
         this.trim(this.tiles, WorldData.MAX_TILES, k => this.holds && this.holds(k));
         return tile;
+    }
+
+    // A change to every height tile as it is decoded, and to every tile held now (the dams make the land between a
+    // lake and a dam's face lake: WorldDams.flood)
+    reshape(fn) {
+        (this.reshapers = this.reshapers || []).push(fn);
+        // (over a copy: a change that reads a tile moves it to the end of the held list, which a live walk would meet again)
+        for (const tile of [...this.tiles.values()]) fn(tile);
     }
 
     cover(key) { return this.covers.get(key) || null; }

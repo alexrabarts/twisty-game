@@ -198,8 +198,10 @@ class WorldEnvironment {
         this.carriageways = new Carriageways(this.route, data);
         // The dams (js/world/dams.js): each a model from its own data, its land cut under it (pitsNear) and its top
         // the physics' ground (WorldGround.tileHeight); a road on a crest stays the road's own
-        this.dams = typeof WorldDams !== 'undefined' ? new WorldDams(WorldDams.listOf(data.base), { roadAt: (x, z) => this.damRoadAt(x, z), groundAt: (x, z) => this.ground.tileHeight(x, z, false) }) : null;
+        this.dams = typeof WorldDams !== 'undefined' ? new WorldDams(WorldDams.listOf(data.base), { roadAt: (x, z) => this.damRoadAt(x, z), groundAt: (x, z) => this.ground.tileHeight(x, z, false), data }) : null;
         this.ground.dams = this.dams;
+        // (and the land between each lake and its dam's face made lake, on every tile: WorldDams.flood)
+        if (this.dams) data.reshape(tile => this.dams.flood(tile));
         this.physics = WorldPhysics;
         this.roadWidth = this.route.points.length ? this.route.points[0].width : 10;
         this.trusted = data.trusted;

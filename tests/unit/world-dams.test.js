@@ -29,21 +29,17 @@ const WATER_REACH_M = 8, DOWN_M = 40;
 const THROUGH_M = 0.05, GAP_M = 1.0, GAP_OUT_M = 1.0;
 // id: {through, gap}: the places that fail today
 const KNOWN = {
-    '70BBD4F2': { through: 0, gap: 6 }, // Pfaffensprung: its foot over the gorge the land falls into past the outline
+    '70BBD4F2': { through: 0, gap: 4 }, // Pfaffensprung: its foot over the gorge the land falls into past the outline
     '268EA6B7': { through: 1, gap: 0 } // Handeck: one place at its end
 };
 
-// id: {dry, below}: the water's places that fail today (rows of a face where the outline runs along a shore or a bay
-// the water's 8 m nodes do not reach)
+// id: {dry, below}: the water's places that fail today. WorldDams.flood makes the land between the lake and each face
+// lake (the elevation model's bank there was 3 to 6 m over the water); these rows face a shore or a basin under the
+// lake's level, or a thin dam whose ring of water would stand past its foot
 const WATER_KNOWN = {
     '2A033EFB': { dry: 5, below: 0 },
-    'D0A8701D': { dry: 5, below: 0 },
-    '33718794': { dry: 30, below: 0 }, // Räterichsboden
-    '268EA6B7': { dry: 10, below: 0 }, // Handeck
-    '28C0925E': { dry: 24, below: 0 }, // Seeuferegg
-    '39DAA5D8': { dry: 1, below: 0 }, // Totensee
-    '639AFC81': { dry: 3, below: 0 }, // Spitallamm
-    '7A28909D': { dry: 9, below: 0 } // Gelmer
+    'D0A8701D': { dry: 4, below: 0 },
+    '268EA6B7': { dry: 4, below: 0 } // Handeck
 };
 
 async function loadWorld(id) {
@@ -135,8 +131,11 @@ function waterMeeting(env, dam) {
     const rows = dam.rows, from = Math.floor(rows.length * 0.2), to = Math.ceil(rows.length * 0.8);
     const reach = row => water.some(([x, , z]) => { const t = (x - row.u[0]) * row.a[0] + (z - row.u[1]) * row.a[1], side = Math.abs((x - row.u[0]) * -row.a[1] + (z - row.u[1]) * row.a[0]); return t <= 0.5 && t >= -WATER_REACH_M && side <= WorldData.CELL_M; });
     const held = rows.some(reach);
-    const dry = held ? rows.slice(from, to).filter(row => !reach(row)).length : 0;
+    const dryRows = held ? rows.slice(from, to).filter(row => !reach(row)) : [];
+    const dry = dryRows.length;
+    if (process.env.DAM_DETAIL && dry) console.log(dam.data.id, 'dry rows', dryRows.map(row => rows.indexOf(row)).join(' '));
     const below = water.filter(([x, , z]) => { const at = env.dams.locate(x, z); if (at) return false; return rows.some(row => { const t = (x - row.u[0]) * row.a[0] + (z - row.u[1]) * row.a[1], side = Math.abs((x - row.u[0]) * -row.a[1] + (z - row.u[1]) * row.a[0]); return t > row.L && t < row.L + DOWN_M && side <= 2; }); }).length;
+    if (process.env.DAM_DETAIL && below) console.log(dam.data.id, 'below', JSON.stringify(water.filter(([x, , z]) => !env.dams.locate(x, z) && rows.some(row => { const t = (x - row.u[0]) * row.a[0] + (z - row.u[1]) * row.a[1], side = Math.abs((x - row.u[0]) * -row.a[1] + (z - row.u[1]) * row.a[0]); return t > row.L && t < row.L + DOWN_M && side <= 2; })).map(p => p.map(v => +v.toFixed(1)))));
     return { held, dry, below };
 }
 

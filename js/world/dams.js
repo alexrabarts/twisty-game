@@ -43,6 +43,24 @@ class WorldDams {
     static get HOLD_M() { return 0.3; }
     // A crest under a road: its top this far under the road's surface (the ribbon lies on it)
     static get ROAD_SINK_M() { return 0.12; }
+    // Off a road the crest climbs back to its own height at this grade, so a road that leaves the dam lower takes only
+    // the crest's end down with it, not the whole crest
+    static get CREST_GRADE() { return 0.08; }
+    // The lake against an upstream face: the first water node within LAKE_M upstream of a row, at the reservoir's level
+    // (within LAKE_LEVEL_M of the data's); WorldDams.flood makes the land between it and the face lake
+    static get LAKE_M() { return 40; }
+    static get LAKE_LEVEL_M() { return 3; }
+    // A land node within this of the lake's level is the lake's surface too (the lake's outline and the elevation
+    // model's flat water part by a cell or two)
+    static get LAKE_FLAT_M() { return 0.3; }
+    // A node flooded stands no farther downstream than this past the face, and its ring of water (one cell on, Water)
+    // no farther than the downstream foot: the water stays inside the dam
+    static get FLOOD_IN_M() { return 4; }
+    // The land between the water and a face that is not flooded (a thin dam's) stands this far under the lake
+    static get LAKE_SINK_M() { return 1; }
+    // A node this far or less under the lake takes the lake's level as water (Water.LEVEL_STEP_M: the water's own
+    // level reaches it); one lower is left as land
+    static get LAKE_STEP_M() { return 1; }
 
     // The dams of a data folder (WorldDamData), or none
     static listOf(folder) {
@@ -74,16 +92,30 @@ class WorldDams {
     }
 
     // `list` the folder's dams; `roadAt(x, z)` the highest road surface whose carriageway or verge holds (x, z), or null
-    // `groundAt(x, z)` the land's own height there (the tile's nodes, before any cut), or null
-    constructor(list, { roadAt = null, groundAt = null } = {}) {
-        this.dams = list.map(d => WorldDams.plan(d, roadAt, groundAt));
+    // `groundAt(x, z)` the land's own height there (the tile's nodes, before any cut), or null; `data` the world's data
+    // (WorldData), whose water nodes show where each lake meets its dam
+    constructor(list, { roadAt = null, groundAt = null, data = null } = {}) {
+        this.roadAt = roadAt;
+        const lakeAt = data ? WorldDams.lakeReader(data) : null;
+        this.dams = list.map(d => WorldDams.plan(d, roadAt, groundAt, lakeAt));
         // The one table the lake water reads (js/world/water.js): each dam's upstream face as a line in plan, the
         // reservoir's level on it and the crest, so the water is drawn deep up to the face
         Dams.faces = this.dams.map(d => Object.freeze({ id: d.data.id, face: d.rows.map(r => [r.u[0], r.u[1]]), water: d.data.water, crest: d.crest }));
     }
 
-    // One dam laid out: its rows (each {u, a, L, H, zu, zd, f, c0, c1, road, spill, pier}), the pit and the boxes
-    static plan(data, roadAt = null, groundAt = null) {
+    // A reader of the nodes: (x, z) to the nearest node's {wet, h} (whether it is water, its height), or null
+    static lakeReader(data) {
+        const m = WorldData.TILE_M, cell = WorldData.CELL_M, n = WorldData.TILE_N;
+        return (x, z) => {
+            const tx = Math.floor(x / m), tz = Math.floor(z / m), tile = data.tile(`${tx},${tz}`);
+            if (!tile) return null;
+            const i = Math.max(0, Math.min(n - 1, Math.round((x - tx * m) / cell))), j = Math.max(0, Math.min(n - 1, Math.round((z - tz * m) / cell)));
+            return { wet: tile.zones[j * n + i] === WorldData.ZONE.water, h: tile.heights[j * n + i] };
+        };
+    }
+
+    // One dam laid out: its rows (each {u, a, L, H, zu, zd, f, c0, c1, road, spill, pier, lake}), the pit and the boxes
+    static plan(data, roadAt = null, groundAt = null, lakeAt = null) {
         const R = WorldDams.RULE, n = data.up.length;
         const rows = [];
         for (let k = 0; k < n; k++) {
@@ -116,6 +148,7 @@ class WorldDams {
         let crest = data.crest;
         for (const row of rows) {
             row.road = null;
+            row.H = crest;
             if (!roadAt) continue;
             const span = Math.max(row.L, width), steps = Math.max(4, Math.ceil(span / 1.5));
             for (let s = 0; s <= steps; s++) {
@@ -126,8 +159,42 @@ class WorldDams {
                 row.road.t0 = Math.min(row.road.t0, t);
                 row.road.t1 = Math.max(row.road.t1, t);
             }
-            if (row.road) crest = Math.min(crest, row.road.y - WorldDams.ROAD_SINK_M);
+            row.H = row.road ? Math.min(crest, row.road.y - WorldDams.ROAD_SINK_M) : crest;
         }
+        // (each row's crest no higher than a road's row plus CREST_GRADE of the way along to it: the crest takes a ramp
+        // down to a road that leaves the dam lower, and keeps its own height elsewhere)
+        const along = [0];
+        for (let k = 1; k < n; k++) along.push(along[k - 1] + Math.hypot(rows[k].u[0] - rows[k - 1].u[0], rows[k].u[1] - rows[k - 1].u[1]));
+        const low = rows.map(r => r.H);
+        rows.forEach((row, k) => { for (let j = 0; j < n; j++) if (low[j] < crest) row.H = Math.min(row.H, low[j] + WorldDams.CREST_GRADE * Math.abs(along[k] - along[j])); });
+        // The lake against the face: its level the median of the first water node at the reservoir's level upstream of
+        // each row within LAKE_M (no farther than land over the crest: the valley's side, and a lake past it is not this
+        // face's); then on each row the reach to the first node of the lake (water, or land at its level), eased (the
+        // largest of the row and its neighbours, so no row between two that reach the water falls short of it)
+        const walk = (row, take) => {
+            for (let d = 0; d <= WorldDams.LAKE_M; d += WorldData.CELL_M / 2) {
+                const node = lakeAt(row.u[0] - row.a[0] * d, row.u[1] - row.a[1] * d);
+                if (!node || node.h > row.H) return null;
+                if (take(node)) return { d, h: node.h };
+            }
+            return null;
+        };
+        const levels = [];
+        if (lakeAt && Number.isFinite(data.water)) for (const row of rows) {
+            const hit = walk(row, node => node.wet && Math.abs(node.h - data.water) <= WorldDams.LAKE_LEVEL_M);
+            if (hit) levels.push(hit.h);
+        }
+        levels.sort((a, b) => a - b);
+        const level = levels.length ? levels[Math.floor(levels.length / 2)] : null;
+        for (const row of rows) {
+            const hit = level === null ? null : walk(row, node => Math.abs(node.h - level) <= (node.wet ? WorldDams.LAKE_LEVEL_M : WorldDams.LAKE_FLAT_M));
+            row.lake = hit ? hit.d : null;
+        }
+        const reach = rows.map(r => r.lake);
+        rows.forEach((row, k) => {
+            const near = [reach[k - 1], reach[k], reach[k + 1]].filter(d => d !== null && d !== undefined);
+            row.lake = near.length && reach[k] !== null ? Math.max(...near) : null;
+        });
         // (the outline's foot eased over EASE rows either side: swissTLM3D's foot steps round outlets and stairs, and
         // drawn row by row it was a face of notches)
         const ease = (key) => {
@@ -144,7 +211,6 @@ class WorldDams {
         // Each row's section: the crest from c0 to c1 across, at least the kind's width (and the road's band), and the
         // row as wide as its crest
         for (const row of rows) {
-            row.H = crest;
             let c0 = 0, c1 = width;
             if (data.kind === 'embankment') {
                 c0 = Math.max(0, (row.L - width) / 2);
@@ -163,13 +229,15 @@ class WorldDams {
             const past = (t) => groundAt ? groundAt(row.u[0] + row.a[0] * t, row.u[1] + row.a[1] * t) : null;
             const foot = past(row.L + R.footM), lake = past(-R.footM);
             if (foot !== null) row.zd = Math.min(row.zd, foot);
-            row.zd = Math.min(row.zd, crest);
-            row.zu = Math.min(row.zu, crest);
+            row.zd = Math.min(row.zd, row.H);
+            row.zu = Math.min(row.zu, row.H);
             row.f = Math.min(row.zu, row.zd, foot === null ? Infinity : foot, lake === null ? Infinity : lake) - R.floorM;
             // (the land at the pit's edges, INSET_M in from the faces: where it stands over the dam's top there, a wall
             // holds it back, in front of the land's cut step, which stood over the crest stretched; WorldDams.holds)
             row.gu = past(WorldDams.INSET_M);
             row.gd = past(row.L - WorldDams.INSET_M);
+            // (where the lake meets the face, the land there is made lake and lake bed: WorldDams.flood)
+            if (row.lake !== null && row.gu !== null) row.gu = Math.min(row.gu, level - WorldDams.LAKE_SINK_M);
         }
         // (no two rows cross: on the inside of a bend a row is cut back short of the next one, CLEAR_M before they meet;
         // and no row stands out past both its neighbours by more than CLEAR_M, so a row cut back takes its neighbours
@@ -242,7 +310,10 @@ class WorldDams {
         }
         for (const row of drawn) for (const p of [row.u, at(row, row.L)]) { x0 = Math.min(x0, p[0]); z0 = Math.min(z0, p[1]); x1 = Math.max(x1, p[0]); z1 = Math.max(z1, p[1]); }
         const box = [x0 - 2, z0 - 2, x1 + 2, z1 + 2];
-        return { data, kind: data.kind, crest, rows, drawn, pits: { quads, box }, box, spill };
+        // (the box takes in the lake's reach upstream, which WorldDams.flood reads)
+        const reachM = rows.reduce((a, r) => Math.max(a, r.lake || 0), 0) + WorldData.CELL_M;
+        const lakeBox = [x0 - reachM, z0 - reachM, x1 + reachM, z1 + reachM];
+        return { data, kind: data.kind, crest: Math.max(...rows.map(r => r.H)), rows, drawn, pits: { quads, box }, box, spill, level, lakeBox };
     }
 
     // Where segments p0-p1 and q0-q1 ([x, z]) cross: [the share along the first, along the second], or null
@@ -345,6 +416,83 @@ class WorldDams {
     lowAt(x, z) {
         const h = this.heightAt(x, z);
         return h === null ? null : h - 0.5;
+    }
+
+    // A height tile made lake up to each dam's face (WorldData.reshape runs it on every tile as it is decoded). The
+    // elevation model is a lake's surface, and round a dam it is smeared: a bank of land 3 to 6 m over the lake and 8 to
+    // 30 m wide stood between the water and the face, over the crest in places. Each node upstream of a row that reaches
+    // the lake (row.lake), out to the first water node, is lake (a water node at the reservoir's level) as far as
+    // FLOOD_IN_M past the face and no nearer than one ring of water (a cell, diagonally) short of the downstream foot;
+    // the land between that and the face (a thin dam's) and under the dam's upstream half stands LAKE_SINK_M under the
+    // lake. No node under a road is changed
+    flood(tile) {
+        const m = WorldData.TILE_M, cell = WorldData.CELL_M, n = WorldData.TILE_N, x0 = tile.tx * m, z0 = tile.tz * m;
+        const water = WorldData.ZONE.water, ring = cell * Math.SQRT2 + 0.5;
+        for (const dam of this.dams) {
+            const b = dam.lakeBox;
+            if (dam.level === null || !b || b[2] < x0 || b[0] > x0 + m || b[3] < z0 || b[1] > z0 + m) continue;
+            const rows = dam.rows;
+            for (let j = 0; j < n; j++) {
+                const z = z0 + j * cell;
+                if (z < b[1] || z > b[3]) continue;
+                for (let i = 0; i < n; i++) {
+                    const x = x0 + i * cell;
+                    if (x < b[0] || x > b[2]) continue;
+                    // (the nearest point of the face's line, between rows k and k + 1)
+                    let best = null;
+                    for (let k = 0; k + 1 < rows.length; k++) {
+                        const p = rows[k].u, q = rows[k + 1].u, dx = q[0] - p[0], dz = q[1] - p[1], run = dx * dx + dz * dz;
+                        const raw = run ? ((x - p[0]) * dx + (z - p[1]) * dz) / run : 0, v = Math.max(0, Math.min(1, raw));
+                        const d = Math.hypot(p[0] + dx * v - x, p[1] + dz * v - z);
+                        if (!best || d < best.d) best = { k, v, raw, d, px: p[0] + dx * v, pz: p[1] + dz * v };
+                    }
+                    if (!best || (best.k === 0 && best.raw < 0) || (best.k + 2 === rows.length && best.raw > 1)) continue;
+                    const a = rows[best.k], c = rows[best.k + 1], v = best.v;
+                    if (a.lake === null && c.lake === null) continue;
+                    const reach = (a.lake || 0) + ((c.lake || 0) - (a.lake || 0)) * v;
+                    const L = a.L + (c.L - a.L) * v;
+                    const ax = a.a[0] + (c.a[0] - a.a[0]) * v, az = a.a[1] + (c.a[1] - a.a[1]) * v, al = Math.hypot(ax, az) || 1;
+                    // (metres downstream of the face; upstream is negative)
+                    const t = ((x - best.px) * ax + (z - best.pz) * az) / al;
+                    if (t < -(reach + cell / 2) || t > Math.min(L / 2, cell)) continue;
+                    const node = j * n + i;
+                    if (tile.zones[node] === water || this.nearRoad(x, z)) continue;
+                    // (lowered only, never raised: a node more than a step under the lake stays land, as it was)
+                    const h = tile.heights[node];
+                    if (t <= Math.min(WorldDams.FLOOD_IN_M, L - ring) && h >= dam.level - WorldDams.LAKE_STEP_M && this.ringHeld(dam, x, z)) {
+                        tile.zones[node] = water;
+                        tile.heights[node] = Math.min(h, dam.level);
+                    } else tile.heights[node] = Math.min(h, dam.level - WorldDams.LAKE_SINK_M);
+                }
+            }
+        }
+    }
+
+    // Whether a road's carriageway or verge holds (x, z) or any point a cell round it (the land triangles the node is a
+    // corner of): flood changes no land a road's band or its edge works stand on
+    nearRoad(x, z) {
+        if (!this.roadAt) return false;
+        const cell = WorldData.CELL_M;
+        for (let dz = -1; dz <= 1; dz += 0.5) for (let dx = -1; dx <= 1; dx += 0.5) if (this.roadAt(x + dx * cell, z + dz * cell) !== null) return true;
+        return false;
+    }
+
+    // Whether the ring of water round a node made lake at (x, z) (its eight neighbours, Water's ring) stays upstream of
+    // the dam's face or inside the dam: no ring node lies past the face's line and off the dam (past a short row's foot
+    // at a curved end, the water stood out over the valley's side)
+    ringHeld(dam, x, z) {
+        const cell = WorldData.CELL_M, rows = dam.rows;
+        for (let dz = -1; dz <= 1; dz++) for (let dx = -1; dx <= 1; dx++) {
+            if (!dx && !dz) continue;
+            const px = x + dx * cell, pz = z + dz * cell;
+            if (this.locate(px, pz)) continue;
+            for (const row of rows) {
+                const t = (px - row.u[0]) * row.a[0] + (pz - row.u[1]) * row.a[1];
+                const side = Math.abs((px - row.u[0]) * -row.a[1] + (pz - row.u[1]) * row.a[0]);
+                if (t > 0 && side <= cell) return false;
+            }
+        }
+        return true;
     }
 
     // Every dam as a level of detail: the near model and the far one (THREE.LOD), in one group
