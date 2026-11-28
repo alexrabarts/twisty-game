@@ -144,6 +144,12 @@ class WorldEnvironment {
         const stage = data.stage;
         // The side roads round the junctions and landmarks, which the landmarks keep clear of
         await data.ensureChunks(Scenery.fixtureChunks(data)).catch(error => console.warn(`world fixture chunks: ${error.message}`));
+        // and round the dams, whose crest a side road may run on (WorldDams.plan lays the crest under it)
+        if (typeof WorldDams !== 'undefined') {
+            await data.ensureChunks(WorldDams.chunksOf(data)).catch(error => console.warn(`world dam chunks: ${error.message}`));
+            // and the land under them, whose feet meet it
+            await Promise.all(WorldDams.tilesOf(data).map(key => data.ensureTile(key))).catch(error => console.warn(`world dam tiles: ${error.message}`));
+        }
         // The land and cover round the landmarks, which a landmark stands on dry and seated
         await Promise.all(Scenery.fixtureTiles(data).map(key => Promise.all([data.ensureTile(key), data.ensureCover(key)]))).catch(error => console.warn(`world fixture tiles: ${error.message}`));
         const loaded = models === undefined && typeof SceneAssets !== 'undefined' ? await Scenery.loadModels(SceneAssets.loadModel) : (models || null);
@@ -190,6 +196,10 @@ class WorldEnvironment {
         this.ground.parapetAt = (index, sign, t) => this.parapetAt(index, sign, t);
         // Every road's carriageway, which no structure of another road may stand in (RoadMesh's builders ask it)
         this.carriageways = new Carriageways(this.route, data);
+        // The dams (js/world/dams.js): each a model from its own data, its land cut under it (pitsNear) and its top
+        // the physics' ground (WorldGround.tileHeight); a road on a crest stays the road's own
+        this.dams = typeof WorldDams !== 'undefined' ? new WorldDams(WorldDams.listOf(data.base), { roadAt: (x, z) => this.damRoadAt(x, z), groundAt: (x, z) => this.ground.tileHeight(x, z, false) }) : null;
+        this.ground.dams = this.dams;
         this.physics = WorldPhysics;
         this.roadWidth = this.route.points.length ? this.route.points[0].width : 10;
         this.trusted = data.trusted;
@@ -376,6 +386,10 @@ class WorldEnvironment {
         });
         this.landmarkGroup = this.scenery.landmarks(this.data.manifest.landmarks || [], this.route);
         this.group.add(this.landmarkGroup);
+        if (this.dams && this.dams.dams.length) {
+            this.damGroup = this.dams.group();
+            this.group.add(this.damGroup);
+        }
         // The marmots of the high pastures (js/world/marmots.js): placed from this world's own land and water
         this.marmots = typeof Marmots !== 'undefined' && typeof SceneAssets !== 'undefined' ? new Marmots(this) : null;
         if (this.marmots) this.group.add(this.marmots.group);
@@ -411,6 +425,9 @@ class WorldEnvironment {
         if (lod === 0 && !cutsMade) this.cutCache.delete(key);
         const built = yield* TerrainMesh.buildSteps(tile, cover, lod, (x, y, z) => {
             const low = this.rideSurfaceAt(x, z, y);
+            // (a coarse tile has no cut: its nodes under a dam are held under the dam's top, WorldDams.lowAt)
+            const dam = lod > 0 && this.dams ? this.dams.lowAt(x, z) : null;
+            if (dam !== null) y = Math.min(y, dam);
             return low === null ? y : Math.min(y, low - TerrainMesh.SINK_M);
         }, this.nearTile, lod === 0 ? this.cutsOf(key) : null, this.tubesNear(key), this.farUnder || null);
         const old = this.tileMeshes.get(key);
@@ -1230,7 +1247,15 @@ class WorldEnvironment {
     pitsNear(tile) {
         const m = WorldData.TILE_M;
         const x0 = tile.tx * m, z0 = tile.tz * m;
-        return (this.viaducts || []).filter(via => via.box[2] >= x0 && via.box[0] <= x0 + m && via.box[3] >= z0 && via.box[1] <= z0 + m).map(via => via.pits);
+        const pits = (this.viaducts || []).filter(via => via.box[2] >= x0 && via.box[0] <= x0 + m && via.box[3] >= z0 && via.box[1] <= z0 + m).map(via => via.pits);
+        return this.dams ? pits.concat(this.dams.pitsNear(tile)) : pits;
+    }
+
+    // The highest road surface whose carriageway or verge holds (x, z), or null: a dam's crest stands under it
+    damRoadAt(x, z) {
+        let y = null;
+        this.carriageways.each(x, z, RoadSurface.VERGE_M, r => { if (r.depth >= -RoadSurface.VERGE_M && (y === null || r.y > y)) y = r.y; });
+        return y;
     }
 
     // The faces of a viaduct for the chase camera (cameraFaces) over ride rows i to i + 1: each side's face from its
