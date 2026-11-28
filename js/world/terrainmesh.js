@@ -407,9 +407,16 @@ if ( vClump < 1.0 && fract( 52.9829189 * fract( dot( gl_FragCoord.xy, vec2( 0.06
     // edge from the tile beside it.
     static colours(tile, cover) {
         const cache = TerrainMesh.colourCache || (TerrainMesh.colourCache = new WeakMap());
-        const near = TerrainMesh.around(tile, cover);
         const held = cache.get(tile);
-        if (held && held.cover === cover && held.tiles.every((t, k) => t === near.tiles[k]) && held.covers.every((c, k) => c === near.covers[k])) return held.grid;
+        // (the land is read for its colour many times a frame: the tiles beside it are looked at again only when the
+        // data has taken in or let go of a tile or a cover since)
+        const count = tile.world ? tile.world.heldCount : 0;
+        if (held && held.cover === cover && held.count === count) return held.grid;
+        const near = TerrainMesh.around(tile, cover);
+        if (held && held.cover === cover && held.tiles.every((t, k) => t === near.tiles[k]) && held.covers.every((c, k) => c === near.covers[k])) {
+            held.count = count;
+            return held.grid;
+        }
         const n = WorldData.TILE_N, cell = WorldData.CELL_M, last = n - 1;
         const baseX = tile.tx * WorldData.TILE_M, baseZ = tile.tz * WorldData.TILE_M;
         const heights = tile.heights, zones = tile.zones;
@@ -474,7 +481,7 @@ if ( vClump < 1.0 && fract( 52.9829189 * fract( dot( gl_FragCoord.xy, vec2( 0.06
                 for (let c = 0; c < 3; c++) grid[at + c] = (grid[corners[0] * 3 + c] + grid[corners[1] * 3 + c] + grid[corners[2] * 3 + c] + grid[corners[3] * 3 + c]) / 4;
             }
         }
-        cache.set(tile, { cover, tiles: near.tiles, covers: near.covers, grid });
+        cache.set(tile, { cover, tiles: near.tiles, covers: near.covers, count, grid });
         return grid;
     }
 

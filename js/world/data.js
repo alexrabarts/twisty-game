@@ -294,7 +294,7 @@ class WorldData {
     trim(map, max, keep) {
         for (const key of map.keys()) {
             if (map.size <= max) break;
-            if (!keep(key)) map.delete(key);
+            if (!keep(key)) { map.delete(key); this.heldCount = (this.heldCount || 0) + 1; }
         }
     }
 
@@ -355,6 +355,8 @@ class WorldData {
         // colour the nodes they share alike)
         Object.defineProperty(tile, 'world', { value: this });
         this.tiles.set(key, tile);
+        // (counts every tile or cover that came or went: TerrainMesh.colours reads its tiles beside it again only then)
+        this.heldCount = (this.heldCount || 0) + 1;
         this.trim(this.tiles, WorldData.MAX_TILES, k => this.holds && this.holds(k));
         return tile;
     }
@@ -368,6 +370,7 @@ class WorldData {
         const [tx, tz] = key.split(',').map(Number);
         const grid = new Uint8Array(await this.fetchBuffer(`cover/c-${WorldData.tileName(tx)}_${WorldData.tileName(tz)}.bin`));
         this.covers.set(key, grid);
+        this.heldCount = (this.heldCount || 0) + 1;
         this.trim(this.covers, WorldData.MAX_TILES, k => this.holds && this.holds(k));
         return grid;
     }
