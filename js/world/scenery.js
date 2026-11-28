@@ -703,9 +703,30 @@ class Scenery {
     // within BUILDING_REACH_M is drawn, the far ones at this level, so none comes in near the bike for the room's sake.
     // Measured once for each model; a plain hut or wall is its own far level
     static houseLevels(home) {
-        if (home.plain) return { near: home.parts, far: home.parts };
-        if (!home.farLevel) home.farLevel = [Scenery.farHouse(home.parts)];
+        if (!home.farLevel) home.farLevel = [home.plain ? Scenery.bakedPart(home.parts) : Scenery.farHouse(home.parts)];
         return { near: home.parts, far: home.farLevel };
+    }
+
+    // A plain hut or wall block (Scenery.plain) as one part with its materials' colours in its vertices, its own far
+    // level: drawn in the far houses' one mesh, a hut takes no instance. Drawn instanced at that level, a village's
+    // huts took two instances each past the parts' cap (BUILDING_CAP), and the Tremola's window stood at 1 406
+    // instances in node, over the 1 400 of LEG_BUDGET
+    static bakedPart(parts) {
+        const positions = [], colours = [];
+        for (const part of parts) {
+            const g = part.geometry.index ? part.geometry.toNonIndexed() : part.geometry;
+            const c = part.material && part.material.color ? part.material.color : new THREE.Color(1, 1, 1);
+            const pos = g.attributes.position;
+            for (let i = 0; i < pos.count; i++) {
+                positions.push(pos.getX(i), pos.getY(i), pos.getZ(i));
+                colours.push(c.r, c.g, c.b);
+            }
+        }
+        const geometry = new THREE.BufferGeometry();
+        geometry.setAttribute('position', new THREE.Float32BufferAttribute(positions, 3));
+        geometry.setAttribute('color', new THREE.Float32BufferAttribute(colours, 3));
+        geometry.computeVertexNormals();
+        return { geometry, material: Scenery.farHouseMaterial() };
     }
 
     static farHouse(parts) {
@@ -1896,11 +1917,25 @@ if ( vFadeCut != 0.0 ) {
             houseCount++;
             triangles += farCost(e);
         }
+        // The houses take no more of the window than they took before the far level, so the trees keep their room: the
+        // share they spend (`spend`) is what the whole houses nearest first within their share and cap came to, the far
+        // ones included. Spent to the share's last triangle, the far houses took the room the whole ones had left
+        // unspent, which the trees had: at the Gotthard leg's km 3, 21 far trees at 743 m and more, 11 of them in view
+        let spend = 0;
+        {
+            let parts = 0;
+            for (const e of houses) {
+                if (e.d > Scenery.BUILDING_REACH_M) break;
+                if (e.shut || parts + e.c.parts > Scenery.BUILDING_CAP || spend + e.c.cost > houseCap) continue;
+                parts += e.c.parts;
+                spend += e.c.cost;
+            }
+            spend = Math.max(spend, triangles);
+        }
         // (a model no dearer than its far level is drawn near whatever the room)
         const extra = e => Math.max(0, e.c.cost - farCost(e));
         const up = e => {
-            if (e.c.home.plain) return false;
-            if (extra(e) && (instances + e.c.parts > Scenery.BUILDING_CAP || triangles + extra(e) > houseCap)) return false;
+            if (instances + e.c.parts > Scenery.BUILDING_CAP || (extra(e) && triangles + extra(e) > spend)) return false;
             e.level = 'near';
             instances += e.c.parts;
             triangles += extra(e);
@@ -1911,7 +1946,7 @@ if ( vFadeCut != 0.0 ) {
             if (!e.take || !e.keep || levelOf(e) !== 'near') continue;
             if (still || up(e)) {
                 if (e.level !== 'near') { e.level = 'near'; instances += e.c.parts; triangles += extra(e); }
-            } else if (triangles + extra(e) <= houseCap + Scenery.HOLD_OVER) {
+            } else if (triangles + extra(e) <= spend + Scenery.HOLD_OVER) {
                 e.level = 'near';
                 instances += e.c.parts;
                 triangles += extra(e);
@@ -2052,7 +2087,7 @@ if ( vFadeCut != 0.0 ) {
         // (the far levels of every model in one mesh of their own, each house a run of its vertices: farHousesMesh)
         const farList = [];
         for (const [key, { home, level, homes }] of byHome) {
-            if (level === 'far' && !home.plain) {
+            if (level === 'far') {
                 for (const c of homes) farList.push(c);
                 continue;
             }
@@ -2087,7 +2122,7 @@ if ( vFadeCut != 0.0 ) {
             // (the level it fades from: the second; a fade that has ended since leaves it at none of its pixels)
             const [own] = levels.get(c);
             for (const level of levels.get(c)) {
-                if (level === 'far' && !c.home.plain) {
+                if (level === 'far') {
                     const run = farMesh.userData.runs.get(c);
                     this.slotFade(st, farMesh.geometry.attributes.fadeCut, run.first, 1, run.count, level !== own);
                     continue;
@@ -2171,7 +2206,7 @@ if ( vFadeCut != 0.0 ) {
             // (a house at its far level: its far level's parts and triangles; Scenery.houseLevels)
             const far = pick.houseLevels && pick.houseLevels[k] === 'far';
             // (a model's far level is a run of the far houses' one mesh, no instance: farHousesMesh)
-            parts += far ? (house.home.plain ? house.parts : 0) : house.parts;
+            parts += far ? 0 : house.parts;
             houseTriangles += far && house.farCost !== undefined ? house.farCost : house.cost;
         });
         const before = group.children.length;
