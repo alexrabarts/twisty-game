@@ -8389,7 +8389,8 @@ function seamChecks(results, failures) {
 //          over a black sky. Down each column of pixels, the sky under land (the nearest thing drawn over it is land)
 //          is the sky seen through the land: a land surface is a height field and an upright camera sees it under
 //          the sky in every column. Pixels so found, joined (4 ways) into a patch of FAR_SEAM_HOLE_PX or more (in a
-//          900 px high frame), are a crack and one fails. The owner's white wedge on a far ridge (airolo-lookout,
+//          900 px high frame) two columns wide or more, are a crack and one fails. A tile's forest clumps are trees,
+//          not land (a canopy on a skyline has the sky under it). The owner's white wedge on a far ridge (airolo-lookout,
 //          km 7.6) was one: far.bin's rim standing in the air over the 250 m level
 //   tone   every FAR_SEAM_TONE_EVERY_M along the box of each far grid with a level round it (where it is in view),
 //          the land's tone a quarter of the outer level's cell in from the edge and as far out, (out less in)
@@ -8434,10 +8435,20 @@ async function farSeamView(placeSource, s, mode, turnDeg, place, keep, rule) {
     // The pass of kinds: a tile 1, the far grid 2, far level k 3 + k, anything else 9, the sky 0; the distance in blue
     const grids = [env.horizon, ...(env.farLand || [])].filter(Boolean);
     const kindOf = o => (o === env.horizon ? 2 : (env.farLand || []).includes(o) ? 3 + env.farLand.indexOf(o) : null);
+    // (a tile's forest clumps are trees, not land: the vertices past its ground and skirts when it has no cuts, as
+    // world-seams reads them. A canopy on a skyline 1 km off has the sky under it, as a tree does)
+    const clumpOf = mesh => {
+        const g = mesh.geometry;
+        if (g.attributes.farSeamClump) return;
+        const count = g.attributes.position.count, out = new Float32Array(count);
+        const side = (WorldData.TILE_N - 1) / (1 << (mesh.userData.lod || 0)) + 1, ground = side * side + side * 4;
+        if (!mesh.userData.cuts) for (let k = ground; k < count; k++) out[k] = 1;
+        g.setAttribute('farSeamClump', new THREE.BufferAttribute(out, 1));
+    };
     const tileMat = new THREE.ShaderMaterial({
         side: THREE.DoubleSide,
-        vertexShader: 'varying float vD; void main(){ vec4 mv = modelViewMatrix * vec4(position, 1.0); vD = length(mv.xyz); gl_Position = projectionMatrix * mv; }',
-        fragmentShader: `varying float vD; void main(){ gl_FragColor = vec4(1.0 / 255.0, 0.0, ${DIST_CODE}, 1.0); }`
+        vertexShader: 'attribute float farSeamClump; varying float vClump; varying float vD; void main(){ vClump = farSeamClump; vec4 mv = modelViewMatrix * vec4(position, 1.0); vD = length(mv.xyz); gl_Position = projectionMatrix * mv; }',
+        fragmentShader: `varying float vClump; varying float vD; void main(){ gl_FragColor = vec4((vClump > 0.5 ? 9.0 : 1.0) / 255.0, 0.0, ${DIST_CODE}, 1.0); }`
     });
     // (dropped with the Earth's curvature as drawn, LandShade.patch `curvature`)
     const farMats = new Map();
@@ -8464,7 +8475,7 @@ async function farSeamView(placeSource, s, mode, turnDeg, place, keep, rule) {
         saved.set(o, o.material);
         const k = kindOf(o);
         if (k) o.material = farMat(k);
-        else if (inside(o, env.tileGroup) && o.userData.world === 'terrain') o.material = tileMat;
+        else if (inside(o, env.tileGroup) && o.userData.world === 'terrain') { clumpOf(o); o.material = tileMat; }
         else {
             const own = Array.isArray(o.material) ? o.material[0] : o.material;
             if (own && own.polygonOffset) {
@@ -8527,7 +8538,10 @@ async function farSeamView(placeSource, s, mode, turnDeg, place, keep, rule) {
             if (y + 1 < H && !hole[p + W]) { const k = kind(x, y + 1); below[k] = (below[k] || 0) + 1; }
             for (const q of [x > 0 ? p - 1 : -1, x + 1 < W ? p + 1 : -1, y > 0 ? p - W : -1, y + 1 < H ? p + W : -1]) if (q >= 0 && hole[q] === 1) { hole[q] = 2; stack.push(q); }
         }
-        if (px >= minPx) patches.push({ px, box: [x0, y0, x1, y1], above, below, farM: farN ? Math.round(Math.pow(2, far / farN / 16)) : null });
+        // (one column wide is the edge of a steep spike on the skyline: a column of the frame leans from the upright
+        // by up to a few degrees at its sides when the camera looks down, and a face steeper than that lean has sky
+        // under its edge in that column. A crack in the land is two columns wide or more)
+        if (px >= minPx && x1 > x0) patches.push({ px, box: [x0, y0, x1, y1], above, below, farM: farN ? Math.round(Math.pow(2, far / farN / 16)) : null });
     }
     patches.sort((a, b) => b.px - a.px);
     const holePx = patches.reduce((n, p) => n + p.px, 0);
@@ -8557,7 +8571,9 @@ async function farSeamView(placeSource, s, mode, turnDeg, place, keep, rule) {
         const q = project(x, y, z);
         if (!q || q[0] < 2 || q[1] < 2 || q[0] >= W - 2 || q[1] >= H - 2) return null;
         const u = Math.round(q[0]), w = Math.round(q[1]);
-        if (Math.abs(distAt(u, w) - Math.round(Math.log2(Math.max(1, q[2])) * 16)) > 2) return null;
+        // (the pass's distance within one step, about 4%, of the point's own: a point hidden behind a ridge a few hundred
+        // metres nearer is another hillside's tone, lit another way, and is no step at the edge)
+        if (Math.abs(distAt(u, w) - Math.round(Math.log2(Math.max(1, q[2])) * 16)) > 1) return null;
         let sum = 0;
         for (let dy = -1; dy <= 1; dy++) for (let dx = -1; dx <= 1; dx++) { if (kind(u + dx, w + dy) !== want) return null; sum += lum(u + dx, w + dy); }
         return sum / 9;
