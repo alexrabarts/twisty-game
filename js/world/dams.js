@@ -242,6 +242,7 @@ class WorldDams {
         // (no two rows cross: on the inside of a bend a row is cut back short of the next one, CLEAR_M before they meet;
         // and no row stands out past both its neighbours by more than CLEAR_M, so a row cut back takes its neighbours
         // down with it in a smooth dip, not a notch the land showed through)
+        const full = rows.map(r => r.L);
         for (let pass = 0; pass < 40; pass++) {
             let moved = false;
             for (let k = 0; k + 1 < n; k++) {
@@ -258,6 +259,16 @@ class WorldDams {
             }
             if (!moved) break;
         }
+        // (a row cut back has its foot where it now ends: its foot's height and the land at its pit's edge were read at
+        // the foot before, lower down the valley's side, so its face ran down under the land and the pit's cut step stood
+        // up to 22 m over it at Räterichsboden, its texture stretched)
+        if (groundAt) rows.forEach((row, k) => {
+            if (row.L >= full[k] - 1e-6) return;
+            const past = t => groundAt(row.u[0] + row.a[0] * t, row.u[1] + row.a[1] * t);
+            const foot = past(row.L + R.footM);
+            if (foot !== null) row.zd = Math.max(row.zd, Math.min(row.H, foot));
+            row.gd = past(row.L - WorldDams.INSET_M);
+        });
         // The ends: the land at the pit's end edges, every metre across
         const endGround = (k, j) => {
             const a = rows[k], b = rows[j], dx = b.u[0] - a.u[0], dz = b.u[1] - a.u[1], len = Math.hypot(dx, dz) || 1, e = [dx / len, dz / len];

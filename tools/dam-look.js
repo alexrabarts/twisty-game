@@ -62,7 +62,8 @@ const posesOf = dam => {
     return poses;
 };
 const dams = env.dams ? env.dams.dams : [];
-const list = opts.poses || dams.map(d => ({ id: d.data.id, name: d.data.name, kind: d.kind, poses: posesOf(d) }));
+const all = opts.poses || dams.map(d => ({ id: d.data.id, name: d.data.name, kind: d.kind, poses: posesOf(d) }));
+const list = opts.slice ? all.slice(opts.slice[0], opts.slice[1]) : all;
 for (const item of list) {
     if (opts.ids && !opts.ids.includes(item.id)) continue;
     for (const pose of item.poses) {
