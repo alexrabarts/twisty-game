@@ -10,6 +10,9 @@
 // layer: the carved road and bench are bare ground, a wall or drop is rock.
 class TerrainMesh {
     static get SKIRT_M() { return 3; }
+    // Metres a skirt reaches under the far grid drawn under its edge (`farY`): at the edge of the window of tiles the
+    // far grid is the land past it, and drawn 8 m and more under the tiles' land (far/sink0.bin, up to 63 m)
+    static get FAR_UNDER_M() { return 2; }
 
     // Metres the carved road and bench are drawn under the height the physics reads, so the ribbon always wins the depth test over it
     static get SINK_M() { return 0.12; }
@@ -1399,12 +1402,12 @@ if ( vClump < 1.0 && fract( 52.9829189 * fract( dot( gl_FragCoord.xy, vec2( 0.06
     // resident neighbouring tile or null (TerrainMesh.node): the tile reads its neighbours' nodes across its edges.
     // `cuts` (TerrainMesh.cuts) are the full-detail triangles cut to the retaining walls: drawn at LOD0 in place of the
     // nodes' own.
-    static build(tile, cover, lod, holdY = null, near = null, cuts = null, tubes = null) {
-        return TerrainMesh.drain(TerrainMesh.buildSteps(tile, cover, lod, holdY, near, cuts, tubes));
+    static build(tile, cover, lod, holdY = null, near = null, cuts = null, tubes = null, farY = null) {
+        return TerrainMesh.drain(TerrainMesh.buildSteps(tile, cover, lod, holdY, near, cuts, tubes, farY));
     }
 
     // The same in steps, a row of nodes at a time (WorldStreamer)
-    static *buildSteps(tile, cover, lod, holdY = null, near = null, cuts = null, tubes = null) {
+    static *buildSteps(tile, cover, lod, holdY = null, near = null, cuts = null, tubes = null, farY = null) {
         if (lod !== 0) cuts = null;
         if (near && !near.ring) near = TerrainMesh.ring(tile, near);
         const n = WorldData.TILE_N;
@@ -1578,6 +1581,12 @@ if ( vClump < 1.0 && fract( 52.9829189 * fract( dot( gl_FragCoord.xy, vec2( 0.06
                         const low = laidEdge.get(j * n + i);
                         if (low !== undefined) depth = Math.max(depth, positions[from * 3 + 1] - low + 0.5);
                     }
+                }
+                // (and under the far grid drawn there: a tile at the window's edge on a ridge stood 8 m and more over
+                // it, its skirt 3 m deep, and the sky showed under the tile's rim, 2 km off: world-far-seams)
+                if (farY) {
+                    const below = farY(positions[from * 3], positions[from * 3 + 2]);
+                    if (below !== null) depth = Math.max(depth, positions[from * 3 + 1] - (below - TerrainMesh.FAR_UNDER_M));
                 }
                 copy(first + k, from, depth);
             }
