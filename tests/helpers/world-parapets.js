@@ -25,21 +25,23 @@ export function parapetWindow(game, env, store, rules = PARAPET_RULES) {
     const H = RoadMesh.PARAPET_H_M, deep = RoadMesh.PARAPET_W_M + RoadMesh.STONE_PROUD_M;
     // The structures drawn now, every corner of their triangles hashed in plan (a structure may be another section's)
     // (and the steel rails a wall carries in its parapet's place, StructureStyles.WALLS `guard`: their panels' corners,
-    // marked as StructureShade's `rail` kind in wallFace x)
+    // in the wall's stone with wallFace y 4 plus their height over 10, LandShade's railPanel)
     const built = new Map(), rails = new Map(), cellS = 2;
     for (const group of [...env.roadMeshes.values(), ...env.sideMeshes.values()]) {
         group.traverse(o => {
             if (!o.isMesh || o.name !== 'road-works') return;
             o.updateMatrixWorld(true);
             const pos = o.geometry.attributes.position, mark = o.geometry.attributes.wallFace;
-            const RAIL = game.StructureShade ? game.StructureShade.KIND.rail : -1;
             for (const part of o.geometry.groups) {
-                if (part.materialIndex !== 1 && part.materialIndex !== 4) continue;
+                const rail = part.materialIndex === 2 && mark;
+                if (part.materialIndex !== 1 && part.materialIndex !== 4 && !rail) continue;
                 for (let i = part.start; i < part.start + part.count; i++) {
+                    const y = mark ? mark.getY(i) : 0;
+                    if (part.materialIndex === 2 && !(y > 3.5 && y < 4.5)) continue;
                     v.fromBufferAttribute(pos, i).applyMatrix4(o.matrixWorld);
                     const h = Math.floor(v.x / cellS) * 65536 + Math.floor(v.z / cellS);
-                    (built.get(h) || built.set(h, []).get(h)).push([v.x, v.y, v.z]);
-                    if (mark && part.materialIndex === 1 && Math.round(mark.getX(i)) % 16 === RAIL) (rails.get(h) || rails.set(h, []).get(h)).push([v.x, v.y, v.z]);
+                    (part.materialIndex === 2 ? rails : built).get(h) || (part.materialIndex === 2 ? rails : built).set(h, []);
+                    (part.materialIndex === 2 ? rails : built).get(h).push([v.x, v.y, v.z]);
                 }
             }
         });

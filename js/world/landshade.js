@@ -562,8 +562,17 @@ float landNoise(vec2 p) {
     // The underside of an arch (wallFace y over 2.5: RoadMesh.BARREL plus its metres across the road) is a barrel: its
     // courses run across from face to face and step round the curve by the arch's own metres (wallFace x), so the
     // crown is not one course drawn out into long level stripes
-    bool barrel = vWallFace.y > 2.5;
-    if (vWallFace.y > 1.5 && !barrel && dot(vViewPosition, vNormal) < 0.0) discard;
+    // A steel rail in a wall's parapet's place (wallFace y 4 plus its metres up from its upstand over 10, RoadMesh
+    // edgeWorks, StructureStyles.WALLS 'rail'): a top rail and a mid rail on posts, the rest of its panel cut away
+    bool railPanel = vWallFace.y > 3.5 && vWallFace.y < 4.5;
+    if (railPanel) {
+        float rh = (vWallFace.y - 4.0) * 10.0, ru = vWallFace.x;
+        float onRail = max(1.0 - step(0.035, abs(rh - ${f(typeof StructureShade !== 'undefined' ? StructureShade.RAIL.top : 0.46)})), 1.0 - step(0.03, abs(rh - ${f(typeof StructureShade !== 'undefined' ? StructureShade.RAIL.mid : 0.24)})));
+        float onPost = 1.0 - step(0.035, abs(fract(ru / ${f(typeof StructureShade !== 'undefined' ? StructureShade.RAIL.postM : 2)} + 0.5) - 0.5) * ${f(typeof StructureShade !== 'undefined' ? StructureShade.RAIL.postM : 2)});
+        if (max(onRail, onPost) < 0.5) discard;
+    }
+    bool barrel = vWallFace.y > 20.0;
+    if (vWallFace.y > 1.5 && !barrel && !railPanel && dot(vViewPosition, vNormal) < 0.0) discard;
     float u = barrel ? vWallFace.y - ${f(typeof RoadMesh !== 'undefined' ? RoadMesh.BARREL : 50)} : vWallFace.y > 0.5 ? vWallFace.x : dot(vLandPos.xz, t);
     float rise = barrel ? vWallFace.x : vLandPos.y;
     // A retaining wall's style (StructureStyles.WALLS, wallFace): its code and its metres down from the top. The
@@ -603,7 +612,7 @@ float landNoise(vec2 p) {
     face *= vec3(1.0 + 0.025 * wallTint, 1.0, 1.0 - 0.03 * wallTint);
     vec4 base = wallBase(floor(wallCode / 4.0), wallDown, vWallFace.x, vLandPos.y, 1.0 - far);
     face = mix(face, base.rgb, base.a);
-    diffuseColor.rgb *= mix(face, vec3(0.84 + 0.2 * (stain - 0.5)) * mix(vec3(1.0), base.rgb / max(0.4, dot(base.rgb, vec3(0.333))) * 0.9, base.a * 0.5), far);
+    diffuseColor.rgb *= railPanel ? vec3(0.9 + 0.2 * landNoise(vec2(vWallFace.x * 3.0, 1.0))) : mix(face, vec3(0.84 + 0.2 * (stain - 0.5)) * mix(vec3(1.0), base.rgb / max(0.4, dot(base.rgb, vec3(0.333))) * 0.9, base.a * 0.5), far);
 }` : '#include <color_fragment>')
                 // The land is lit by its own normals from either side. A skirt (TerrainMesh.build) carries the normal of
                 // the land above it, and half the skirts face away from the eye: three's two-sided flip turned their
