@@ -300,3 +300,25 @@ describe('the crown clumps of a middle tile fade with its distance', () => {
         TerrainMesh.setClumpView({ x: 0, z: 0 });
     });
 });
+
+describe('a tile built again', () => {
+    test('the trees in view its new build no longer has fade out, as a tile let go of does', () => {
+        const scenery = new Scenery(ground, data, levelled());
+        scenery.setView(cameraOnHalf());
+        scenery.buildTile(tile, forest, [], bike);
+        for (let k = 0; k < 4; k++) { scenery.stepFades(Scenery.FADE_S); scenery.rankTrees(bike); }
+        const before = drawn(scenery);
+        // (built again with every place west of x = 60 under a road: its trees there are gone from the new build)
+        const clear = scenery.clear.bind(scenery);
+        scenery.clear = (x, z, ...rest) => x >= 60 && clear(x, z, ...rest);
+        scenery.buildTile(tile, forest, [], bike);
+        const gone = [...before.keys()].filter(key => Number(key.split(',')[0]) < 60 && seen(scenery, key));
+        expect(gone.length).toBeGreaterThan(3);
+        const now = drawn(scenery);
+        for (const key of gone) expect({ key, drawn: now.has(key) }).toEqual({ key, drawn: true });
+        scenery.stepFades(Scenery.FADE_S * 2);
+        scenery.rankTrees(bike, true);
+        const later = drawn(scenery);
+        for (const key of gone) expect(later.has(key)).toBe(false);
+    });
+});

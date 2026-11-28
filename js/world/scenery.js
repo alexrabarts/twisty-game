@@ -1158,6 +1158,8 @@ class Scenery {
         const was = this.perTile.get(tile.key);
         const carried = was ? was.group.children.filter(o => o.name === 'tufts') : [];
         for (const mesh of carried) was.group.remove(mesh);
+        // (what the old build had and the new has not fades out in view, as a tile let go of does)
+        if (was) this.leave(was, { trees: new Set(taken.map(q => q.key)), boulders: new Set(boulders.map(Scenery.placeKey)), houses: new Set(houses.map(Scenery.placeKey)) });
         this.disposeTile(tile.key, !!was);
         // A tile that holds nothing is kept too, with an empty group: what stands on a tile is made again when a side
         // road near it changes (WorldEnvironment.restandScenery), which reads only the tiles kept. Left out, a tile whose
@@ -1452,7 +1454,10 @@ class Scenery {
 
     // The things of a tile the window lets go of that are drawn and in view: they fade out, drawn from `left` until they
     // have gone (rankTrees, rankCapsSteps). The land under them goes with the tile, at the window's edge
-    leave(held) {
+    // `kept`: of a tile built again, the places its new build still has ({trees, boulders, houses}: sets of keys and
+    // places, Scenery.placeKey), which stay; the rest went with the old build, at once (world-pops: a far tree at 674 m
+    // on leg 3, where a side road drawn again took its place)
+    leave(held, kept = null) {
         const fades = this.fades;
         if (!fades || !this.view) return;
         const left = this.left || (this.left = { trees: [], boulders: [], houses: [] });
@@ -1463,11 +1468,15 @@ class Scenery {
             st.old = null;
             return true;
         };
-        for (const site of held.treeSites || []) if (going(fades.get(site.key), this.inView(site.x, site.cy, site.z, site.r))) left.trees.push(site);
+        for (const site of held.treeSites || []) if (!(kept && kept.trees.has(site.key)) && going(fades.get(site.key), this.inView(site.x, site.cy, site.z, site.r))) left.trees.push(site);
         const c = held.candidates;
         if (!c) return;
-        for (const b of c.boulders) if (b.fk && going(fades.get(b.fk), this.inView(b.x, b.matrix.elements[13], b.z, 3))) left.boulders.push({ c: b, shape: c.boulderShape });
-        for (const h of c.houses) if (h.fk && going(fades.get(h.fk), this.inView(h.x, h.matrix.elements[13] + 5, h.z, 12))) left.houses.push(h);
+        for (const b of c.boulders) if (b.fk && !(kept && kept.boulders.has(Scenery.placeKey(b))) && going(fades.get(b.fk), this.inView(b.x, b.matrix.elements[13], b.z, 3))) left.boulders.push({ c: b, shape: c.boulderShape });
+        for (const h of c.houses) if (h.fk && !(kept && kept.houses.has(Scenery.placeKey(h))) && going(fades.get(h.fk), this.inView(h.x, h.matrix.elements[13] + 5, h.z, 12))) left.houses.push(h);
+    }
+
+    static placeKey(thing) {
+        return `${Math.round(thing.x * 10)},${Math.round(thing.z * 10)}`;
     }
 
     // What is still fading out of `left`'s list of a kind, stamped as read by this choice; what has gone is let go
