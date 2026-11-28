@@ -873,10 +873,12 @@ class WorldEnvironment {
                     const key = lean > 0 ? 'right' : 'left';
                     // (and the rows the side road's own tube opens across, out to its verges' edges: a ride tube's wall is left
                     // out there only, TubeLining.run `mouth`)
-                    // (half a row's spacing more: the ride's wall opens between two rows, both of them in it)
-                    const tube = Math.min(16, (width / 2 + RoadSurface.VERGE_M) / Math.max(0.4, Math.abs(lean)) + WorldEnvironment.MOUTH_ROW_M);
+                    // (each row of a segment the mouth reaches into carries its metres along the ride, [s0, s1]: the wall
+                    // there stands either side of them only, TubeLining.run)
+                    const tube = Math.min(16, (width / 2 + RoadSurface.VERGE_M) / Math.max(0.4, Math.abs(lean)));
+                    const span = [pass.sIn - tube, pass.sIn + tube];
                     points.forEach((p, i) => {
-                        if (Math.abs(p.s - pass.sIn) <= tube) styles[i][key === 'right' ? 'tubeMouthR' : 'tubeMouthL'] = true;
+                        if (Math.abs(p.s - pass.sIn) <= tube + WorldEnvironment.MOUTH_ROW_M * 2) styles[i][key === 'right' ? 'tubeMouthR' : 'tubeMouthL'] = span;
                         if (Math.abs(p.s - pass.sIn) > reach) return;
                         styles[i][key === 'right' ? 'mouthR' : 'mouthL'] = true;
                         if (styles[i][key] === E.solid) styles[i][key] = E.broken;
@@ -3355,7 +3357,8 @@ class WorldEnvironment {
         return low;
     }
 
-    // Half the ride's row spacing, by which a side tube's mouth in the ride's tube wall reaches past its verges
+    // Half the ride's row spacing: the rows within two of it past a side tube's mouth carry the mouth, so every segment
+    // it reaches into knows it (roadStyles tubeMouthL/R)
     static get MOUTH_ROW_M() { return 2; }
 
     // Whether a tube's box (a tunnel's or a gallery's, or the box in front of a portal, up to the roof) holds (x, z) in

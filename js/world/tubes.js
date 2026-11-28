@@ -197,7 +197,18 @@ class TubeLining {
                 n[0] /= nl; n[2] /= nl;
                 // (where a side road leaves the ride through its wall, `mouth`, the wall opens: the side road's own tube
                 // goes on from there, and a wall across its mouth blocked it, Andermatt to Goeschenen j39)
-                const mouth = !!(a.mouth && b.mouth && a.mouth[key] && b.mouth[key]);
+                // ([s0, s1]: the side tube's own width along the ride; the wall stands either side of it, concrete)
+                const span = (a.mouth && a.mouth[key]) || (b.mouth && b.mouth[key]) || null;
+                const mouth = !!span && span[1] > a.s && span[0] < b.s;
+                if (mouth) {
+                    const len = b.s - a.s, tOf = v => Math.min(1, Math.max(0, (v - a.s) / len));
+                    for (const [t0, t1] of [[0, tOf(span[0])], [tOf(span[1]), 1]]) {
+                        if (t1 - t0 < 0.02) continue;
+                        const lat = t => sign * (fa.half + (fb.half - fa.half) * t), roof = t => ra + (rb - ra) * t - seg.wallCap;
+                        const P = (t, h) => across(k, t, lat(t), h);
+                        TubeLining.quad(lining, P(t0, 0), P(t1, 0), P(t1, roof(t1)), P(t0, roof(t0)), n, K.concrete, C.concrete, (p, j) => attr(k, [t0, t1, t1, t0][j], [lat(t0), lat(t1), lat(t1), lat(t0)][j], [0, 0, roof(t1), roof(t0)][j]), share);
+                    }
+                }
                 if (!mouth) {
                     if (seg.open === sign && seg.groundAt) TubeLining.openWall(lining, k, sign, rows, frames, attr, point, roofOf, n, share, { ...seg, thin: !near });
                     else if (seg.rock === sign) TubeLining.rockWall(lining, k, sign, rows, frames, attr, n, share, near, seg.shotcrete ? K.shotcrete : K.rock, seg.shotcrete ? C.shotcrete : C.rock, seg.wallCap);

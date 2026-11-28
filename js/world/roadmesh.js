@@ -611,7 +611,7 @@ class RoadMesh {
                 // (a row where the section's drawing starts or ends, or the tube's kind changes, keeps the rock's face
                 // on the wall's line, so a neighbour at another level of detail or of another kind meets it)
                 const turn = i > from && (rows[i - 1].tubeRun || plain(rows[i - 1])) !== run && !!(row.tubeRun && rows[i - 1].tubeRun);
-                tubeRows.push({ l: side(row, -1), r: side(row, 1), s: along[i], inM: depth ? depth[i] : row.tubeIn, cap: row.tubeCap, roof, floor: floor(row), pin: i === from || i === to || turn || (i < to && rows[i + 1].tubeRun !== row.tubeRun), gallery: run.gallery, rock: run.rock, open: run.open, shotcrete: run.shotcrete, profile: run.profile || 'box', mouth: { l: !!row.tubeMouthL, r: !!row.tubeMouthR } });
+                tubeRows.push({ l: side(row, -1), r: side(row, 1), s: along[i], inM: depth ? depth[i] : row.tubeIn, cap: row.tubeCap, roof, floor: floor(row), pin: i === from || i === to || turn || (i < to && rows[i + 1].tubeRun !== row.tubeRun), gallery: run.gallery, rock: run.rock, open: run.open, shotcrete: run.shotcrete, profile: run.profile || 'box', mouth: { l: row.tubeMouthL || null, r: row.tubeMouthR || null } });
             }
             const whole = (rows[from].tubeRun || plain(rows[from])).tube;
             TubeLining.run(lining, tubeRows, { lod, groundAt, run: whole });
