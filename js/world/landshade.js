@@ -95,12 +95,22 @@ class LandShade {
 
     // Rock, scree and snow over a base colour, by slope (0 flat, 1 vertical: 1 - normal.y), north (the normal's
     // share facing north, -z) and height. Snow only lies in patches high up and out of the sun (late summer).
-    static weather(base, x, z, y, slope, north, out = base) {
+    // `soft`: rock and scree meet over a band of the noise, not at a line (the near tiles' 8 m nodes, TerrainMesh.colours:
+    // split at 0.5, their meeting was a step inside one cell; the far land keeps the split its haze was matched with)
+    static weather(base, x, z, y, slope, north, out = base, soft = false) {
         const p = LandShade.PALETTE;
         // Steep ground is bare rock: from about 40 degrees, all of it by 55 (grass holds on the steep flanks here)
         const steep = Math.min(1, Math.max(0, (slope - 0.234) / 0.193));
         const bare = Math.max(steep, Math.min(1, Math.max(0, (y - 2350) / 500)) * 0.7);
-        if (bare > 0) LandShade.mix(out, LandShade.noise(x, z, 60, 5) > 0.5 ? p.rock : p.scree, bare, out);
+        if (bare > 0) {
+            const split = LandShade.noise(x, z, 60, 5);
+            if (!soft) LandShade.mix(out, split > 0.5 ? p.rock : p.scree, bare, out);
+            else {
+                const t = Math.min(1, Math.max(0, (split - 0.38) / 0.24)), k = t * t * (3 - 2 * t);
+                const stone = LandShade.stoneScratch || (LandShade.stoneScratch = [0, 0, 0]);
+                LandShade.mix(out, LandShade.mix(p.scree, p.rock, k, stone), bare, out);
+            }
+        }
         if (y > 2600 && slope < 0.45) {
             const patch = LandShade.noise(x, z, 90, 6);
             const snow = Math.min(1, Math.max(0, (y - 2700) / 500 + north * 0.9 + patch - 1.3) * 2);

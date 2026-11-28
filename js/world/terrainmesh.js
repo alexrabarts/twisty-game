@@ -236,29 +236,157 @@ if ( vClump < 1.0 && fract( 52.9829189 * fract( dot( gl_FragCoord.xy, vec2( 0.06
         return cells * cells * 2 + cells * 4 * 2;
     }
 
+    // The land cover's blend. A cover cell stands for the node on its north-west corner (tools/world/landcover.mjs),
+    // and the land between the nodes it stands for is a smooth blend of the cells round it: a cubic B-spline over the
+    // 16 m cells, so a change of cover is spread over about 32 m, read at a place moved by noise (two scales, up to
+    // the sum of COVER_WARP_M), so no change of cover runs along a straight line. Taken node by node from the cell
+    // under it, a change of cover was a step inside one 8 m cell along the cells' north-south and east-west edges,
+    // and at a tile's edge a step of no width at all: the two tiles coloured the nodes they share from different cells
+    // (each its own last or first column), a straight line 500 m long (leg 1 km 4.3, forest against dry grass). The
+    // cells and heights across a tile's edge are read from the tile beside it (TerrainMesh.around), so two tiles
+    // colour the nodes they share alike. Water is not blended: a node shows water where its own cell is water, as
+    // before (tools/world/verify.mjs drawnWetNode)
+    static get COVER_WARP_M() { return [6, 2]; }
+    static get COVER_WARP_SCALE_M() { return [80, 30]; }
+    // A bench (the cut and fill the importer carved beside a road) weathers into the land it meets: its nodes this many
+    // nodes from the land take this share of the land's own colour
+    static get BENCH_WEATHER() { return [0.5, 0.25]; }
+
+    // The tile and the eight beside it (index (dz + 1) * 3 + dx + 1) with their covers, each null where the data does
+    // not hold it (a tile made without data has none beside it)
+    static around(tile, cover) {
+        const tiles = [null, null, null, null, tile, null, null, null, null];
+        const covers = [null, null, null, null, cover || null, null, null, null, null];
+        const world = tile.world;
+        if (world && world.tiles && world.covers) {
+            for (let dz = -1; dz <= 1; dz++) {
+                for (let dx = -1; dx <= 1; dx++) {
+                    if (!dx && !dz) continue;
+                    const key = `${tile.tx + dx},${tile.tz + dz}`;
+                    tiles[(dz + 1) * 3 + dx + 1] = world.tiles.get(key) || null;
+                    covers[(dz + 1) * 3 + dx + 1] = world.covers.get(key) || null;
+                }
+            }
+        }
+        return { tile, tiles, covers };
+    }
+
+    // The cover class of world cell (gx, gz) (cell k of tile t is gx = t * COVER_N + k): read from the tile that holds
+    // it, or from this tile's nearest cell where that tile is not held. A tile held with no cover is open grass (5)
+    static coverClass(near, gx, gz) {
+        const cn = WorldData.COVER_N, tile = near.tile;
+        let tx = Math.floor(gx / cn), tz = Math.floor(gz / cn);
+        let dx = tx - tile.tx, dz = tz - tile.tz;
+        if (Math.abs(dx) > 1 || Math.abs(dz) > 1 || (dx || dz) && !near.tiles[(dz + 1) * 3 + dx + 1]) {
+            dx = 0; dz = 0; tx = tile.tx; tz = tile.tz;
+        }
+        const ci = Math.max(0, Math.min(cn - 1, gx - tx * cn)), cj = Math.max(0, Math.min(cn - 1, gz - tz * cn));
+        const grid = near.covers[(dz + 1) * 3 + dx + 1];
+        return grid ? grid[cj * cn + ci] || 5 : 5;
+    }
+
+    // The zone of node (i, j) of the tile, read across its edge from the tile beside it (or clamped where not held)
+    static zoneNear(near, i, j) {
+        const n = WorldData.TILE_N, last = n - 1;
+        const dx = i < 0 ? -1 : i > last ? 1 : 0, dz = j < 0 ? -1 : j > last ? 1 : 0;
+        const other = dx || dz ? near.tiles[(dz + 1) * 3 + dx + 1] : near.tile;
+        if (!other) return near.tile.zones[Math.max(0, Math.min(last, j)) * n + Math.max(0, Math.min(last, i))];
+        return other.zones[(j - dz * last) * n + (i - dx * last)];
+    }
+
+    // The weights of the cover classes at node (i, j) (out: COVER_COLORS.length shares that sum to 1, water left out)
+    static coverWeights(near, i, j, out) {
+        const cell = WorldData.CELL_M, step = WorldData.TILE_M / WorldData.COVER_N;
+        const x = near.tile.tx * WorldData.TILE_M + i * cell, z = near.tile.tz * WorldData.TILE_M + j * cell;
+        const [a, b] = TerrainMesh.COVER_WARP_M, [sa, sb] = TerrainMesh.COVER_WARP_SCALE_M;
+        const px = x + (LandShade.noise(x, z, sa, 31) - 0.5) * 2 * a + (LandShade.noise(x, z, sb, 32) - 0.5) * 2 * b;
+        const pz = z + (LandShade.noise(x, z, sa, 33) - 0.5) * 2 * a + (LandShade.noise(x, z, sb, 34) - 0.5) * 2 * b;
+        const u = px / step, v = pz / step;
+        const i0 = Math.floor(u), j0 = Math.floor(v);
+        const spline = (t, k) => k === 0 ? (1 - t) ** 3 / 6 : k === 1 ? (3 * t ** 3 - 6 * t * t + 4) / 6 : k === 2 ? (-3 * t ** 3 + 3 * t * t + 3 * t + 1) / 6 : t ** 3 / 6;
+        out.fill(0);
+        let total = 0;
+        for (let b2 = 0; b2 < 4; b2++) {
+            const wz = spline(v - j0, b2);
+            for (let a2 = 0; a2 < 4; a2++) {
+                const cls = TerrainMesh.coverClass(near, i0 - 1 + a2, j0 - 1 + b2);
+                if (cls === 7) continue;
+                const w = wz * spline(u - i0, a2);
+                out[cls] += w;
+                total += w;
+            }
+        }
+        if (total <= 1e-9) return null;
+        for (let k = 0; k < out.length; k++) out[k] /= total;
+        return out;
+    }
+
+    // The land's own colour at node (i, j) from its cover blend, slope and facing (no zone)
+    static landColour(near, cls, weights, x, z, y, slope, north, out) {
+        const set = c => { out[0] = c[0]; out[1] = c[1]; out[2] = c[2]; return out; };
+        const colours = TerrainMesh.COVER_COLORS;
+        let single = -1;
+        if (!weights) single = cls;
+        else for (let k = 0; k < weights.length; k++) if (weights[k] > 1 - 1e-9) single = k;
+        if (single >= 0) {
+            if (single === 5) LandShade.grass(x, z, y, out);
+            else set(colours[single] || colours[5]);
+            // Forest holds on steeper ground than grass does; glacier and water keep their own colour
+            if (single !== 6 && single !== 7) LandShade.weather(out, x, z, y, single === 1 || single === 2 ? slope * 0.6 : slope, north, out, true);
+            return out;
+        }
+        // A blend: each cover's colour weathered as it would be alone, then mixed by the weights. (Weathered after the
+        // mix, forest's steeper hold on a slope turned the blend from forest to rock inside one 8 m cell where a
+        // forest's edge crossed a steep slope)
+        const one = TerrainMesh.blendScratch || (TerrainMesh.blendScratch = [0, 0, 0]);
+        out[0] = 0; out[1] = 0; out[2] = 0;
+        for (let k = 0; k < weights.length; k++) {
+            const w = weights[k];
+            if (!w) continue;
+            if (k === 5 || k === 0) LandShade.grass(x, z, y, one);
+            else { const c = colours[k]; one[0] = c[0]; one[1] = c[1]; one[2] = c[2]; }
+            if (k !== 6 && k !== 7) LandShade.weather(one, x, z, y, k === 1 || k === 2 ? slope * 0.6 : slope, north, one, true);
+            out[0] += one[0] * w; out[1] += one[1] * w; out[2] += one[2] * w;
+        }
+        return out;
+    }
+
     // The colour of vertex (i, j) at height y. `slope` is 1 - normal.y, `north` how far the ground faces north
-    // (-1 to 1), (x, z) the vertex in world metres for the noise. Writes into `out` when given.
-    static colorAt(tile, cover, i, j, y, slope = 0, north = 0, x = 0, z = 0, out = [0, 0, 0]) {
+    // (-1 to 1), (x, z) the vertex in world metres for the noise. Writes into `out` when given. `near`
+    // (TerrainMesh.around) is the tiles beside it; TerrainMesh.mixed says afterwards whether the node took a blend
+    static colorAt(tile, cover, i, j, y, slope = 0, north = 0, x = 0, z = 0, out = [0, 0, 0], near = null) {
         const n = WorldData.TILE_N;
         const zone = tile.zones[j * n + i];
         const zones = WorldData.ZONE;
         const set = c => { out[0] = c[0]; out[1] = c[1]; out[2] = c[2]; return out; };
-        // The road's own cells show only past the ribbon's edge, and a bench is the cut and fill beside it: both are
-        // grassed verges with worn ground, not a bare band wider than the road
-        if (zone === zones.road || zone === zones.bench) return LandShade.mix(LandShade.grass(x, z, y, out), TerrainMesh.BARE, zone === zones.road ? 0.6 : 0.35, out);
+        TerrainMesh.mixed = false;
         if (zone === zones.wall || zone === zones.drop) return set(TerrainMesh.ROCK);
         if (zone === zones.water) return set(TerrainMesh.COVER_COLORS[7]);
-        let cls = 5;
-        if (cover) {
-            const ci = Math.min(WorldData.COVER_N - 1, Math.floor((i * WorldData.CELL_M) / 16));
-            const cj = Math.min(WorldData.COVER_N - 1, Math.floor((j * WorldData.CELL_M) / 16));
-            cls = cover[cj * WorldData.COVER_N + ci] || 5;
+        near = near || TerrainMesh.around(tile, cover);
+        const step = WorldData.TILE_M / WorldData.COVER_N, cell = WorldData.CELL_M;
+        // The node's own cell: the one whose corner it stands on or the nearest to the north-west (water is drawn only
+        // where it is mapped)
+        const own = cover || near.tiles.some((t, k) => k !== 4 && t) ? TerrainMesh.coverClass(near, Math.floor((tile.tx * WorldData.TILE_M + i * cell) / step), Math.floor((tile.tz * WorldData.TILE_M + j * cell) / step)) : 5;
+        // The road's own cells show only past the ribbon's edge, and a bench is the cut and fill beside it: both are
+        // grassed verges with worn ground, not a bare band wider than the road. A bench weathers into the land it
+        // meets (BENCH_WEATHER): a cut bank greens over at its top
+        if (zone === zones.road || zone === zones.bench) {
+            LandShade.mix(LandShade.grass(x, z, y, out), TerrainMesh.BARE, zone === zones.road ? 0.6 : 0.35, out);
+            if (zone === zones.road) return out;
+            let reach = 0;
+            for (let d = 1; d <= TerrainMesh.BENCH_WEATHER.length && !reach; d++) {
+                for (let b = -d; b <= d && !reach; b++) for (let a = -d; a <= d && !reach; a++) if (TerrainMesh.zoneNear(near, i + a, j + b) === zones.terrain) reach = d;
+            }
+            if (!reach) return out;
+            const weights = own === 7 ? null : TerrainMesh.coverWeights(near, i, j, TerrainMesh.weightScratch || (TerrainMesh.weightScratch = new Float64Array(TerrainMesh.COVER_COLORS.length)));
+            const land = TerrainMesh.landColour(near, own === 7 ? 5 : own, weights, x, z, y, slope, north, TerrainMesh.landScratch || (TerrainMesh.landScratch = [0, 0, 0]));
+            TerrainMesh.mixed = true;
+            return LandShade.mix(out, land, TerrainMesh.BENCH_WEATHER[reach - 1], out);
         }
-        if (cls === 5) LandShade.grass(x, z, y, out);
-        else set(TerrainMesh.COVER_COLORS[cls] || TerrainMesh.COVER_COLORS[5]);
-        // Forest holds on steeper ground than grass does; glacier and water keep their own colour
-        if (cls !== 6 && cls !== 7) LandShade.weather(out, x, z, y, cls === 1 || cls === 2 ? slope * 0.6 : slope, north, out);
-        return out;
+        if (own === 7) return set(TerrainMesh.COVER_COLORS[7]);
+        const weights = TerrainMesh.coverWeights(near, i, j, TerrainMesh.weightScratch || (TerrainMesh.weightScratch = new Float64Array(TerrainMesh.COVER_COLORS.length)));
+        if (weights) TerrainMesh.mixed = !weights.some(w => w > 1 - 1e-9);
+        return TerrainMesh.landColour(near, own, weights, x, z, y, slope, north, out);
     }
 
     // sRGB to linear through a table: a tile decodes 13 000 values
@@ -270,47 +398,83 @@ if ( vClump < 1.0 && fract( 52.9829189 * fract( dot( gl_FragCoord.xy, vec2( 0.06
         return table[Math.round(Math.min(1, Math.max(0, v)) * 4096)];
     }
 
-    // The linear colour of every full-detail vertex of a tile (65 x 65 x 3), made once for the tile and its cover and
-    // kept with it: an LOD change rebuilds the mesh, not the colours. The land is coloured every other vertex (16 m,
-    // the cover's own cells) and the vertices between take the mean of their coloured neighbours, unless their own
-    // zone differs (road, bench, wall, water): those are coloured themselves. Slope and facing come from the 8 m grid.
+    // The linear colour of every full-detail vertex of a tile (65 x 65 x 3), made once for the tile, its cover and the
+    // tiles beside it as held (TerrainMesh.around) and kept with it: an LOD change rebuilds the mesh, not the colours,
+    // unless a tile or cover beside it came or went since. The land is coloured every other vertex (16 m, the cover's
+    // own cells) and the vertices between take the mean of their coloured neighbours, unless their own zone differs
+    // (road, bench, wall, water), or a corner took a blend of covers (TerrainMesh.colorAt, the 8 m nodes carry the
+    // blend's wander): those are coloured themselves. Slope and facing come from the 8 m grid, read across the tile's
+    // edge from the tile beside it.
     static colours(tile, cover) {
         const cache = TerrainMesh.colourCache || (TerrainMesh.colourCache = new WeakMap());
+        const near = TerrainMesh.around(tile, cover);
         const held = cache.get(tile);
-        if (held && held.cover === cover) return held.grid;
-        const n = WorldData.TILE_N, cell = WorldData.CELL_M;
+        if (held && held.cover === cover && held.tiles.every((t, k) => t === near.tiles[k]) && held.covers.every((c, k) => c === near.covers[k])) return held.grid;
+        const n = WorldData.TILE_N, cell = WorldData.CELL_M, last = n - 1;
         const baseX = tile.tx * WorldData.TILE_M, baseZ = tile.tz * WorldData.TILE_M;
         const heights = tile.heights, zones = tile.zones;
         const grid = new Float32Array(n * n * 3);
+        const mixed = new Uint8Array(n * n);
         const colour = [0, 0, 0];
+        // The height of node (i, j), one node past the edge read from the tile beside it
+        const height = (i, j) => {
+            const dx = i < 0 ? -1 : i > last ? 1 : 0, dz = j < 0 ? -1 : j > last ? 1 : 0;
+            const other = dx || dz ? near.tiles[(dz + 1) * 3 + dx + 1] : tile;
+            if (!other) return heights[Math.max(0, Math.min(last, j)) * n + Math.max(0, Math.min(last, i))];
+            return other.heights[(j - dz * last) * n + (i - dx * last)];
+        };
+        // The slope and facing the colour reads at each node, one node past the edge too: the gradient over the nodes
+        // either side, then the mean over the nodes two either side (1 4 6 4 1 each way). Read node by node, a crease
+        // in the land (a bank laid back from a road meeting the slope over it) turned grass to rock inside one 8 m cell
+        // in a straight line along the crease
+        const w = n + 4;
+        const rawSlope = new Float32Array(w * w), rawNorth = new Float32Array(w * w);
+        for (let j = -2; j <= n + 1; j++) {
+            for (let i = -2; i <= n + 1; i++) {
+                const gx = (height(i + 1, j) - height(i - 1, j)) / (2 * cell), gz = (height(i, j + 1) - height(i, j - 1)) / (2 * cell);
+                const len = Math.sqrt(gx * gx + gz * gz + 1);
+                const across = Math.sqrt(gx * gx + gz * gz) / len;
+                rawSlope[(j + 2) * w + i + 2] = 1 - 1 / len;
+                // The ground faces north (-z) where it rises toward +z
+                rawNorth[(j + 2) * w + i + 2] = across > 0.02 ? (gz / len / across) * Math.min(1, across * 4) : 0;
+            }
+        }
+        const binomial = [1, 4, 6, 4, 1];
+        const smooth = (grid, i, j) => {
+            let sum = 0;
+            for (let b = -2; b <= 2; b++) for (let a = -2; a <= 2; a++) sum += grid[(j + 2 + b) * w + i + 2 + a] * binomial[a + 2] * binomial[b + 2];
+            return sum / 256;
+        };
         const paint = (i, j) => {
-            const up = Math.max(0, j - 1) * n, down = Math.min(n - 1, j + 1) * n;
-            const left = Math.max(0, i - 1), right = Math.min(n - 1, i + 1);
-            const gx = (heights[j * n + right] - heights[j * n + left]) / (2 * cell), gz = (heights[down + i] - heights[up + i]) / (2 * cell);
-            const len = Math.sqrt(gx * gx + gz * gz + 1);
-            const across = Math.sqrt(gx * gx + gz * gz) / len;
-            // The ground faces north (-z) where it rises toward +z
-            const north = across > 0.02 ? (gz / len / across) * Math.min(1, across * 4) : 0;
-            TerrainMesh.colorAt(tile, cover, i, j, heights[j * n + i], 1 - 1 / len, north, baseX + i * cell, baseZ + j * cell, colour);
+            TerrainMesh.colorAt(tile, cover, i, j, heights[j * n + i], smooth(rawSlope, i, j), smooth(rawNorth, i, j), baseX + i * cell, baseZ + j * cell, colour, near);
+            mixed[j * n + i] = TerrainMesh.mixed ? 1 : 0;
             const at = (j * n + i) * 3;
             grid[at] = TerrainMesh.toLinear(colour[0]); grid[at + 1] = TerrainMesh.toLinear(colour[1]); grid[at + 2] = TerrainMesh.toLinear(colour[2]);
         };
+        const water = TerrainMesh.COVER_COLORS[7].map(TerrainMesh.toLinear);
+        const wet = at => grid[at * 3] === water[0] && grid[at * 3 + 1] === water[1] && grid[at * 3 + 2] === water[2];
         for (let j = 0; j < n; j += 2) for (let i = 0; i < n; i += 2) paint(i, j);
         for (let j = 0; j < n; j++) {
             for (let i = 0; i < n; i++) {
                 if (i % 2 === 0 && j % 2 === 0) continue;
                 const zone = zones[j * n + i];
                 const i0 = i - (i % 2), j0 = j - (j % 2);
-                const i1 = Math.min(n - 1, i0 + (i % 2 ? 2 : 0)), j1 = Math.min(n - 1, j0 + (j % 2 ? 2 : 0));
-                if (zone !== WorldData.ZONE.terrain || [[i0, j0], [i1, j0], [i0, j1], [i1, j1]].some(([u, w]) => zones[w * n + u] !== zone)) {
+                const i1 = Math.min(last, i0 + (i % 2 ? 2 : 0)), j1 = Math.min(last, j0 + (j % 2 ? 2 : 0));
+                const corners = [j0 * n + i0, j0 * n + i1, j1 * n + i0, j1 * n + i1];
+                if (zone !== WorldData.ZONE.terrain || corners.some(c => zones[c] !== zone)) {
+                    paint(i, j);
+                    continue;
+                }
+                // (a corner of mapped water keeps the mean: water's tint fades out as it always did)
+                if (!corners.some(wet) && corners.some(c => mixed[c])) {
                     paint(i, j);
                     continue;
                 }
                 const at = (j * n + i) * 3;
-                for (let c = 0; c < 3; c++) grid[at + c] = (grid[(j0 * n + i0) * 3 + c] + grid[(j0 * n + i1) * 3 + c] + grid[(j1 * n + i0) * 3 + c] + grid[(j1 * n + i1) * 3 + c]) / 4;
+                for (let c = 0; c < 3; c++) grid[at + c] = (grid[corners[0] * 3 + c] + grid[corners[1] * 3 + c] + grid[corners[2] * 3 + c] + grid[corners[3] * 3 + c]) / 4;
             }
         }
-        cache.set(tile, { cover, grid });
+        cache.set(tile, { cover, tiles: near.tiles, covers: near.covers, grid });
         return grid;
     }
 

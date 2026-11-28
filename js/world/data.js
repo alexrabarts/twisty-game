@@ -351,6 +351,9 @@ class WorldData {
             zones[i] = view.getUint8(4 + n * 2 + i);
         }
         const tile = { key, tx, tz, heights, zones };
+        // (the data it came from, not enumerated: TerrainMesh.colours reads the tiles and covers beside it, so two tiles
+        // colour the nodes they share alike)
+        Object.defineProperty(tile, 'world', { value: this });
         this.tiles.set(key, tile);
         this.trim(this.tiles, WorldData.MAX_TILES, k => this.holds && this.holds(k));
         return tile;

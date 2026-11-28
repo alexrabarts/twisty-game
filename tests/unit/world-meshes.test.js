@@ -672,9 +672,13 @@ describe('TerrainMesh', () => {
         t.zones[4 * N + 4] = 5;
         expect(TerrainMesh.colorAt(t, cover, 4, 4, 1200)).toEqual(TerrainMesh.COVER_COLORS[7]);
         const grass = new Uint8Array(32 * 32).fill(5);
-        // A 60 degree slope of grass is rock
+        // A 60 degree slope of grass is rock: rock, scree or a blend of the two (LandShade.weather soft)
         const steep = TerrainMesh.colorAt(tile(), grass, 4, 4, 1500, 0.5, 0, 100, 100);
-        expect([LandShade.PALETTE.rock, LandShade.PALETTE.scree]).toContainEqual(steep);
+        const { rock, scree } = LandShade.PALETTE;
+        const share = (steep[0] - scree[0]) / (rock[0] - scree[0]);
+        expect(share).toBeGreaterThanOrEqual(-1e-9);
+        expect(share).toBeLessThanOrEqual(1 + 1e-9);
+        steep.forEach((v, k) => expect(v).toBeCloseTo(scree[k] + (rock[k] - scree[k]) * share, 9));
         // High ground facing north in late summer carries snow somewhere; facing south it carries none
         const brightest = north => Math.max(...Array.from({ length: 40 }, (_, k) => TerrainMesh.colorAt(tile(), grass, 4, 4, 3100, 0.1, north, k * 37, k * 53)[2]));
         expect(brightest(1)).toBeGreaterThan(0.85);
