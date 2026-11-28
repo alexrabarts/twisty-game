@@ -13,8 +13,9 @@
 //   - each rider's way (wayOf): from where it is, on the right half of the road (or round, for a stop behind it), the
 //     stop's own path in, along the aisle behind the row, and forward into its bay; the corners rounded (chaikin) and
 //     the way read every stepM metres with its heading and its bend.
-//   - the ride in (ride): every rider at once, frame by frame at frameHz, at a calm pace for the player (its own pace,
-//     at most crewMostMs, for the group): no faster than the bend allows (latMs2), braking for the bay, and never
+//   - the ride in (ride): every rider at once, frame by frame at frameHz, at the group's pace where the way is
+//     straight (fastMs; a rider of the group at its own) and calm into the bay (calmMs over the last calmLastM): no
+//     faster than the bend allows (latMs2), braking for the bay, and never
 //     closer to a bike ahead of it than followGapM (parkedGapM to one parked). Leaned as the bend and the speed ask.
 //   - the view (views, compose): the way the land opens furthest from the bays (or the stop's own view: a lookout's,
 //     a photo's hold), and a camera behind and beside the bays that holds them in the lower third, to one side of the
@@ -30,10 +31,11 @@ class EndShot {
             // Who comes in: a rider behind the player at the line within keepM and keepS of riding at its own speed
             // (at least keepLeastMs); one ahead of it no more than aheadPastM past the turn-in
             keepM: 300, keepS: 20, keepLeastMs: 8, aheadPastM: 150,
-            // The pace: the player calmMs (a long way in is ridden in longMostS at the most), the group its own pace from
-            // calmMs to crewMostMs, a long way at most longMostMs; speeding up at gainMs2, easing down at brakeMs2 (more where the line was crossed fast
-            // and close to the bay), round a bend at latMs2 across, never under leastMs until the bay
-            calmMs: 8, crewMostMs: 16, longMostS: 24, longMostMs: 22, gainMs2: 2, brakeMs2: 3, latMs2: 2.2, leastMs: 1.4,
+            // The pace: on the way in at the group's pace (fastMs; a rider of the group at its own, from calmMs to
+            // fastMs) where the way is straight, and calmMs over its last calmLastM into the bay; speeding up at
+            // gainMs2, easing down at brakeMs2 (more where the line was crossed fast and close to the bay), round a bend
+            // at latMs2 across, never under leastMs until the bay
+            calmMs: 8, fastMs: 16, calmLastM: 60, gainMs2: 2, brakeMs2: 3, latMs2: 2.2, leastMs: 1.4,
             // Following: a bike that stands within followClearM of a rider's way ahead is kept followGapM off along the way
             // (parkedGapM when it is parked), braking at followMs2
             followGapM: 6, parkedGapM: 2.6, followMs2: 4, followClearM: 1.5,
@@ -51,9 +53,12 @@ class EndShot {
             // of a wall or the land, read where it is and where it will be foreseeS on
             joinS: 2.5, turnRate: 2.2, turnMostDegS: 50, headM: 1.2, lookUpM: 1.0, lookAheadM: 4, boomIn: 4, boomOut: 1.5, clearM: 0.6, foreseeS: 0.8,
             // The crane: from craneLeadS before the player parks, at craneMs on average and turning at craneTurnDegS
-            // (craneLeastS to craneMostS), up
+            // (craneLeastS to craneMostS); on a long way in from followMostS at the latest, so the shot follows no more
+            // than about 25 s of access road (the rest of the ride runs fast while unseen: StopScene.WARP), and a crane
+            // from far away at craneFarMs on average at the most (up to craneLongMostS); it rises over its first
+            // craneRise and goes across from craneAcross on (cranePlace); up
             // by the least of `arcs` that clears the land, the walls and the houses on the way
-            craneLeadS: 2.5, craneLeastS: 6, craneMostS: 14, craneMs: 5, craneTurnDegS: 25, arcs: [0, 2, 4, 7, 11, 16, 24, 35],
+            craneLeadS: 2.5, craneLeastS: 6, craneMostS: 14, craneMs: 5, craneTurnDegS: 25, followMostS: 22, craneFarMs: 22, craneLongMostS: 32, craneRise: 0.4, craneAcross: 0.25, arcs: [0, 2, 4, 7, 11, 16, 24, 35],
             // The composed view: hfov across; the bays' middle at groupY (picture height, -1 the foot) and sideX to one
             // side; the view at most yawMostDeg from the way the land opens; pitched pitchLeastDeg to pitchMostDeg; tried
             // at these distances back, heights over the bays and shifts across
@@ -299,11 +304,14 @@ class EndShot {
         return out;
     }
 
-    // The most speed at each point of a way: the bend's (latMs2 across), and braking at `brake` for what follows, to a
-    // stop at its end
-    static caps(way, brake) {
+    // The most speed at each point of a way: the bend's (latMs2 across), `calm` over its last calmLastM, and braking at
+    // `brake` for what follows, to a stop at its end
+    static caps(way, brake, calm = Infinity) {
         const T = EndShot.TUNING, n = way.n, cap = new Float64Array(n);
-        for (let i = 0; i < n; i++) cap[i] = Math.max(T.leastMs, Math.sqrt(T.latMs2 / Math.max(1e-4, Math.abs(way.k[i]))));
+        for (let i = 0; i < n; i++) {
+            cap[i] = Math.max(T.leastMs, Math.sqrt(T.latMs2 / Math.max(1e-4, Math.abs(way.k[i]))));
+            if (way.length - way.m[i] <= T.calmLastM) cap[i] = Math.min(cap[i], calm);
+        }
         cap[n - 1] = 0;
         for (let i = n - 2; i >= 0; i--) cap[i] = Math.min(cap[i], Math.sqrt(cap[i + 1] * cap[i + 1] + 2 * brake * (way.m[i + 1] - way.m[i])));
         return cap;
@@ -321,7 +329,7 @@ class EndShot {
             for (let i = 1; i < way.n; i++) if (r.v0 > raw[i]) brake = Math.max(brake, (r.v0 * r.v0 - raw[i] * raw[i]) / (2 * Math.max(0.5, way.m[i])));
             // (a rider parked already, `parked`: in its bay from the start)
             if (r.parked) return { r, way, cap: raw, m: way.length, v: 0, lean: 0, parked: true, at: {}, parkedAt: 0, track: [] };
-            return { r, way, cap: EndShot.caps(way, brake * 1.02), m: 0, v: Math.max(0, r.v0), lean: r.lean0 || 0, parked: false, at: {}, parkedAt: Infinity, track: [] };
+            return { r, way, cap: EndShot.caps(way, brake * 1.02, T.calmMs), m: 0, v: Math.max(0, r.v0), lean: r.lean0 || 0, parked: false, at: {}, parkedAt: Infinity, track: [] };
         });
         const most = Math.ceil(T.mostS * T.frameHz);
         let frame = 0;
@@ -487,6 +495,16 @@ class EndShot {
         return { x: x1 / (depth * tv * aspect), y: y2 / (depth * tv), depth };
     }
 
+    // The crane's place at share u (0 to 1) of its time from `a` to `b` ({x, y, z}), over an arc of arcM: it rises
+    // over its first craneRise and goes across from craneAcross on, so it is over the walls and the banks beside a road
+    // before it leaves it (a crane started on a long way in, from followMostS, went through a wall beside the road at
+    // Göschenen as it began to go across)
+    static cranePlace(a, b, u, arcM) {
+        const T = EndShot.TUNING;
+        const rise = EndShot.ease(u / T.craneRise), across = EndShot.ease((u - T.craneAcross) / (1 - T.craneAcross));
+        return { x: a.x + (b.x - a.x) * across, y: a.y + (b.y - a.y) * across + arcM * rise * (1 - across), z: a.z + (b.z - a.z) * across };
+    }
+
     // The aim of a camera at `eye` looking at `look`: {yaw, pitch}
     static aimOf(eye, look) {
         const dx = look.x - eye.x, dy = look.y - eye.y, dz = look.z - eye.z;
@@ -605,7 +623,7 @@ EndShot.Camera = class {
     // The follow camera behind the bike ({x, y, z, heading}): its boom turned after the bike's heading, drawn in short of
     // a wall, a house or the land, and already drawing in for one that the boom will meet foreseeS on (`ahead`, the
     // bike then), so it is drawn in on its spring and not caught in a frame. `dt` 0 sets it where it is
-    follow(bike, dt, ahead = null) {
+    follow(bike, dt, ahead = null, soft = false) {
         const T = this.T;
         if (this.hs === undefined) {
             // (its first heading: the chase camera's boom, so its first place is the chase camera's own)
@@ -639,9 +657,13 @@ EndShot.Camera = class {
         // (held at once short of a wall or a house only: the land is kept off by the shot's soft floor, and a bank that
         // stands over the boom's head, where the way steps up onto a stop, drew it in to the head in a frame)
         const hard = wall < 1 ? Math.max(0.1, wall - 0.25 / len) : 1;
-        if (dt > 0) this.share += (want - this.share) * Math.min(1, (want < this.share ? T.boomIn : T.boomOut) * dt);
-        else this.share = want;
-        this.share = Math.min(this.share, hard);
+        // (held while the crane goes: the camera has left the boom, and the boom's own draw in and out at the walls
+        // and banks beside the way carried into the crane's path as kinks)
+        if (!soft) {
+            if (dt > 0) this.share += (want - this.share) * Math.min(1, (want < this.share ? T.boomIn : T.boomOut) * dt);
+            else this.share = want;
+            this.share = Math.min(this.share, hard);
+        }
         const eye = { x: head.x + (end.x - head.x) * this.share, y: head.y + (end.y - head.y) * this.share, z: head.z + (end.z - head.z) * this.share };
         const look = { x: bike.x + fx * T.lookAheadM, y: bike.y + T.lookUpM, z: bike.z + fz * T.lookAheadM };
         return { ...eye, ...EndShot.aimOf(eye, look), roll: 0, fov: this.from.fov };
@@ -667,26 +689,37 @@ EndShot.Camera = class {
     at(t, bike, dt, ahead = null) {
         const T = this.T, from = this.from;
         const chase = { x: bike.x + from.offset.x, y: bike.y + from.offset.y, z: bike.z + from.offset.z, yaw: from.yaw, pitch: from.pitch, roll: from.roll, fov: from.fov };
-        const w1 = EndShot.ease(t / T.joinS), w2 = EndShot.ease((t - this.craneAt) / this.craneS);
+        const u = (t - this.craneAt) / this.craneS;
+        const w1 = EndShot.ease(t / T.joinS), w2 = EndShot.ease(u);
         let c;
         if (w2 >= 1) c = { x: this.hold.eye.x, y: this.hold.eye.y, z: this.hold.eye.z, yaw: this.hold.yaw, pitch: this.hold.pitch, roll: 0, fov: this.hold.fov };
         else {
-            const follow = this.follow(bike, dt, ahead);
+            const follow = this.follow(bike, dt, ahead, u > 0);
             const held = { x: this.hold.eye.x, y: this.hold.eye.y, z: this.hold.eye.z, yaw: this.hold.yaw, pitch: this.hold.pitch, roll: 0, fov: this.hold.fov };
             if (!(w2 > 0)) { this.gaps.holdyaw = undefined; this.gaps.holdroll = undefined; }
-            c = this.mix('hold', this.mix('join', chase, follow, w1), held, w2);
-            c.y += this.arcM * 4 * w2 * (1 - w2);
+            const near = this.mix('join', chase, follow, w1);
+            c = this.mix('hold', near, held, w2);
+            // (the place by the crane's own path: up first, then across, EndShot.cranePlace; the aim, roll and lens by w2)
+            const at = EndShot.cranePlace(near, held, u, this.arcM);
+            c.x = at.x; c.y = at.y; c.z = at.z;
             // (never under the land: a soft floor on a spring that follows the ground, eased in from none at the line
             // and out as the crane comes to the hold, which keeps its own clearance)
             let under = this.ground(c.x, c.z);
             if (Number.isFinite(under)) {
+                // (the faster the camera goes across the land, the faster the spring: a long crane went 30 m/s over
+                // land that rose under it and the spring at 6 lagged it into the hill; read with a hard limit, the ground
+                // under a deck's edge kinked its path)
+                const fast = this.lastX === undefined || !(dt > 0) ? 0 : Math.hypot(c.x - this.lastX, c.z - this.lastZ) / dt;
+                this.lastX = c.x;
+                this.lastZ = c.z;
                 if (this.floorY === undefined) { this.floorY = under; this.floorRate = 0; } else if (dt > 0) {
-                    const w = 6;
+                    const w = Math.min(30, 6 + 0.6 * fast);
                     this.floorRate += (w * w * (under - this.floorY) - 2 * w * this.floorRate) * dt;
                     this.floorY += this.floorRate * dt;
                 }
                 under = this.floorY;
-                const share = w1 * (1 - w2), knee = Math.max(1e-6, 0.6 * share);
+                // (held whole until the crane is near its end: a long crane comes down to the hold over the land)
+                const share = w1 * (1 - EndShot.ease((u - 0.85) / 0.15)), knee = Math.max(1e-6, 0.6 * share);
                 const floor = under + 1.2 * share, x = (c.y - floor) / knee;
                 c.y = floor + knee * (x > 30 ? x : Math.log1p(Math.exp(x)));
             }

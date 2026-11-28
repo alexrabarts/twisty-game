@@ -68,6 +68,11 @@ class StopScene {
         });
     }
 
+    // What the held shot builds over the level (RAISE: the land's reach, the trees) is raised in RAISE_STEPS over the
+    // scene's first RAISE_RAMP_S, so what it brings into view comes over several frames, not in the first
+    static get RAISE_RAMP_S() { return 3; }
+    static get RAISE_STEPS() { return 6; }
+
     // GET_OFF_S after it stops (a foot down, upright, the engine idling) the rider stands beside the bike, STAND_SIDE_M
     // to its left
     static get GET_OFF_S() { return 1.6; }
@@ -297,11 +302,11 @@ class StopScene {
             const actions = (r.bike.character && r.bike.character.stop) || [];
             return { ...r, slot, way, early: !!first, stood: false, actions, nextPuff: StopScene.PUFF_EVERY_S * (0.3 + ((k * 7 + seed) % 5) / 10) };
         });
-        // The ride in, planned whole: the player at a calm pace, the group at its own
+        // The ride in, planned whole: the player at the group's pace where the way is straight, the group at its own,
+        // and everyone calm into the bay
         this.ride = EndShot.ride(this.riders.map((r) => {
             const speed = Number.isFinite(r.speed) ? r.speed : T.calmMs;
-            const long = Math.min(T.longMostMs, Math.max(0, r.way.length - 40) / T.longMostS);
-            const cruise = r.player ? Math.max(T.calmMs, long) : Math.max(T.calmMs, long, Math.min(T.crewMostMs, speed));
+            const cruise = r.player ? T.fastMs : Math.max(T.calmMs, Math.min(T.fastMs, speed));
             return r.early ? { way: r.way, v0: 0, cruise, parked: true } : { way: r.way, v0: speed, cruise, h0: r.yaw, lean0: r.lean };
         }));
         this.playerIndex = Math.max(0, this.riders.findIndex(r => r.player));
@@ -318,8 +323,9 @@ class StopScene {
         this.hold = EndShot.compose(stop, bays, ground, aspect, near, visible) || StopScene.holdOf(stop, ground, aspect, bays.length);
         this.composed = !!this.hold.view || !!this.hold.hand;
         this.hold.haze = (own && own.haze) || null;
-        // The crane: from craneLeadS before the player parks, as long as its way needs, over the least arc that clears
-        this.craneAt = Math.max(T.joinS + 0.5, this.playerParkedS - T.craneLeadS);
+        // The crane: from craneLeadS before the player parks (followMostS at the latest: a long way in is not followed
+        // whole), as long as its way needs, over the least arc that clears
+        this.craneAt = Math.max(T.joinS + 0.5, Math.min(T.followMostS, this.playerParkedS - T.craneLeadS));
         this.from = camera;
         this.camera = null;
         if (camera) {
@@ -330,6 +336,8 @@ class StopScene {
             // (and no faster a turn than craneTurnDegS on average: a held view that looks back the way the player came)
             const turn = Math.abs(EndShot.turn(bike.heading + Math.PI, this.hold.yaw)) * 180 / Math.PI;
             this.camera.craneS = Math.max(T.craneLeastS, Math.min(T.craneMostS, Math.max(far / T.craneMs, turn / T.craneTurnDegS)));
+            // (a crane from far away, a long way in's: no faster than craneFarMs on average)
+            this.camera.craneS = Math.max(this.camera.craneS, Math.min(T.craneLongMostS, far / T.craneFarMs));
             this.camera.arcM = StopScene.arcOf(fe, this.hold.eye, ground, StopScene.facesNear(faces, (fe.x + this.hold.eye.x) / 2, (fe.z + this.hold.eye.z) / 2, far / 2 + 30));
             this.flyS = this.craneAt + this.camera.craneS;
         } else this.flyS = 0;
@@ -379,8 +387,7 @@ class StopScene {
         for (const arc of arcs) {
             let ok = true, prev = null;
             for (let k = 0; k <= 40 && ok; k++) {
-                const w = EndShot.ease(k / 40);
-                const p = { x: a.x + (b.x - a.x) * w, y: a.y + (b.y - a.y) * w + arc * 4 * w * (1 - w), z: a.z + (b.z - a.z) * w };
+                const p = EndShot.cranePlace(a, b, k / 40, arc);
                 const g = ground(p.x, p.z);
                 if (k > 0 && k < 40 && Number.isFinite(g) && p.y < g + 1) ok = false;
                 if (prev && EndShot.faceShare(faces, prev, p, 0.3) < 1) ok = false;
@@ -409,33 +416,63 @@ class StopScene {
     // player parked
     get cardAt() { return Math.max(this.flyS + EndShot.TUNING.holdFirstS, this.allParkedS + StopScene.GET_OFF_S + 0.3, this.playerParkedS + StopScene.CARD_AFTER_S); }
 
+    // Whether the card is due: the camera held for holdFirstS, and on the ride's own clock every rider off and
+    // CARD_AFTER_S since the player parked (cardAt is when, with no part of the ride run fast: WARP)
+    get cardDue() {
+        const T = EndShot.TUNING;
+        return this.t >= this.flyS + T.holdFirstS && this.rideT >= Math.max(this.allParkedS + StopScene.GET_OFF_S + 0.3, this.playerParkedS + StopScene.CARD_AFTER_S);
+    }
+
     // Skips to where the scene rests: everyone parked and stood, the camera held, the card up
     skip() {
         this.skipped = true;
         this.t = Math.max(this.t, this.cardAt);
+        this.rideT = Math.max(this.rideT || 0, this.cardAt);
+    }
+
+    // Once the camera holds, the ride runs WARP times as fast while no rider still riding is in the held view: on a long
+    // way in (Göschenen's 500 m of access road) the player came into the held view 20 s after the camera held. Seen,
+    // a rider rides at its own pace; the camera does not move, so nothing shows the clock that ran fast
+    static get WARP() { return 4; }
+
+    // Whether a rider ({x, y, z}) still riding is in the held view (with a margin round it)
+    inHold(at) {
+        const q = EndShot.project(this.hold.eye, this.hold.yaw, this.hold.pitch, this.hold.fov, this.aspect, { x: at.x, y: (at.y || 0) + 0.9, z: at.z });
+        return !!q && Math.abs(q.x) < 1.2 && Math.abs(q.y) < 1.2;
     }
 
     // One frame: each rider's place on its way in ({x, y, z, heading, speed, lean, parked, stand, shown}), and the camera
     step(dt) {
-        this.t += Math.max(0, dt);
-        const out = this.riders.map((r, k) => {
-            const at = EndShot.trackAt(this.ride, k, this.t, {});
+        dt = Math.max(0, dt);
+        this.t += dt;
+        if (!Number.isFinite(this.rideT)) this.rideT = 0;
+        const ridersAt = t => this.riders.map((r, k) => {
+            const at = EndShot.trackAt(this.ride, k, t, {});
             const on = EndShot.wayAt(r.way, at.m, {});
             at.y = on.y;
             at.s = on.s;
             at.shown = true;
-            at.parked = this.t >= r.parkedAt;
-            at.stand = at.parked && this.t - r.parkedAt >= StopScene.GET_OFF_S;
+            at.parked = t >= r.parkedAt;
+            at.stand = at.parked && t - r.parkedAt >= StopScene.GET_OFF_S;
             return at;
         });
+        // (the ride's clock: fast while the camera holds and every rider still riding is out of its view)
+        let rate = 1;
+        if (this.t - dt >= this.flyS && this.camera && !this.skipped) {
+            const now = ridersAt(this.rideT);
+            const riding = now.filter(at => !at.parked);
+            if (riding.length && !riding.some(at => this.inHold(at))) rate = StopScene.WARP;
+        }
+        this.rideT = this.skipped ? Math.max(this.rideT, this.t) : this.rideT + dt * rate;
+        const out = ridersAt(this.rideT);
         const lead = out[this.playerIndex];
         if (lead) this.hintS = lead.s;
         const hold = this.hold;
         const held = { eye: hold.eye, yaw: hold.yaw, pitch: hold.pitch, roll: 0, fov: hold.fov };
         const camera = this.camera && !this.skipped && lead
-            ? this.camera.at(this.t, { x: lead.x, y: lead.y, z: lead.z, heading: lead.heading }, dt, this.playerAt(this.t + EndShot.TUNING.foreseeS))
+            ? this.camera.at(this.t, { x: lead.x, y: lead.y, z: lead.z, heading: lead.heading }, dt, this.playerAt(this.rideT + EndShot.TUNING.foreseeS))
             : held;
-        return { riders: out, camera, card: this.t >= this.cardAt, held: this.t >= this.flyS };
+        return { riders: out, camera, card: this.skipped ? this.t >= this.cardAt : this.cardDue, held: this.t >= this.flyS };
     }
 
     // ---- in the page: the bars, the riders off the bike, the vape clouds ----

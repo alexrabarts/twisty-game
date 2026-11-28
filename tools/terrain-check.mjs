@@ -6829,7 +6829,8 @@ const stepsRide = async (page) => page.evaluate(async (every, deep) => {
 // draw and its wait, the GPU timer), and saves the held shot at each. --phone is world-quality's phone (390 x 844 at
 // 3, touch, the CPU 4 times slower). It fails on a step from the chase camera (SHOT_STEP), no bars, or a held shot
 // with the camera under the ground. It reports what the held shot draws (counts, by kind of mesh).
-//   node tools/terrain-check.mjs world-shot --world gotthard-north --gpu [--desk] [--phone] [--levels] [--fly 0,1,3,5,7,9] [--out <dir>]
+// `--group-close` puts the group's riders SHOT_GROUP_GAP_M apart behind the player at the line, so they ride in with it.
+//   node tools/terrain-check.mjs world-shot --world gotthard-north --gpu [--group-close] [--desk] [--phone] [--levels] [--fly 0,1,3,5,7,9] [--out <dir>]
 const SHOT_RIDE_MS = 14;
 // The ride into the line starts this far before it, so the scene's kinds of mesh have been drawn as in a real ride
 const SHOT_APPROACH_M = 800;
@@ -6840,6 +6841,8 @@ const SHOT_FRAME_MS = 50;
 // be fast (the Tremola's hold is 644 m back), never sudden. The first frame is held to the chase camera's own move
 const SHOT_STEP = { moveM: 0.1, aimDeg: 0.05, lensDeg: 0.02 };
 const SHOT_OUT = join(process.env.HOME || '.', 'Library/Caches/twisty-world/end-shots');
+// --group-close puts the group's riders this far apart behind the player at the line
+const SHOT_GROUP_GAP_M = 12;
 WORLD_PROBES.push('world-shot');
 WORLD['world-shot'] = async (page) => {
     const phone = flag('phone');
@@ -6861,7 +6864,7 @@ WORLD['world-shot'] = async (page) => {
     const tryHold = option('hold') ? option('hold').split(',').map(Number) : null;
     // --no-raise: the scene with no raise at any level, to tell the raise's cost from the scene's own
     if (flag('no-raise')) await page.evaluate(() => Object.defineProperty(StopScene, 'RAISE', { configurable: true, get: () => ({}) }));
-    const begun = await page.evaluate(async (placeSource, ride, tryHold, SHOT_APPROACH_M) => {
+    const begun = await page.evaluate(async (placeSource, ride, tryHold, SHOT_APPROACH_M, groupClose, gap) => {
         const placeAt = new Function('game', `return (${placeSource})`)(game);
         const env = game.environment;
         if (typeof StopScene === 'undefined' || !StopScene.stopAt(env)) return { error: `no stop at the end of ${env.stage ? env.stage.id : 'the ride'}` };
@@ -6888,11 +6891,28 @@ WORLD['world-shot'] = async (page) => {
         const aim = new THREE.Euler().setFromQuaternion(cam.quaternion, 'YXZ');
         const before = { x: cam.position.x, y: cam.position.y, z: cam.position.z, yaw: aim.y, pitch: aim.x, roll: aim.z, fov: cam.fov };
         const speed = game.vehicle.speed;
+        // (--group-close: the group's riders put on the road SHOT_GROUP_GAP_M apart behind the player at the line, at
+        // its speed, so the shot is the one with the group kept up)
+        let group = null;
+        if (groupClose && game.traffic) {
+            const route = env.route, s0 = game.vehicle.projection && Number.isFinite(game.vehicle.projection.s) ? game.vehicle.projection.s : game.vehicle.routeS;
+            const crew = game.traffic.motorcycles.filter(bike => bike.direction === 1 && bike.bikeGroup && bike.rider);
+            crew.forEach((bike, k) => {
+                const u = route.toUnits(Math.max(0, s0 - gap * (k + 1)));
+                bike.currentSegment = Math.floor(u);
+                bike.segmentProgress = u - Math.floor(u);
+                bike.currentSpeed = speed;
+                if (bike.updatePosition) bike.updatePosition();
+                bike.bikeGroup.visible = true;
+            });
+            group = crew.length;
+        }
         game.finishRun();
         if (!game.stopScene) return { error: 'the finish started no stop scene' };
+        if (groupClose && !(game.stopScene.riders.length > 1)) return { error: `--group-close put ${group} riders behind the player, and ${game.stopScene.riders.length - 1} came in` };
         const depthPrograms = (game.graphics.renderer.info.programs || []).filter(pr => pr.name === 'MeshDepthMaterial').map(pr => String(pr.cacheKey).slice(0, 120));
         return { warmed: game.stopShadowsWarmed || null, depthPrograms, shadowsOn: game.renderer.shadowMap.enabled, cascades: !!(game.distantLight && game.distantLight.castShadow), stop: StopScene.stopAt(env).id, before, speed, hold: game.stopScene.hold, raised: game.stopScene.raised };
-    }, placeAt.toString(), SHOT_RIDE_MS, tryHold, SHOT_APPROACH_M);
+    }, placeAt.toString(), SHOT_RIDE_MS, tryHold, SHOT_APPROACH_M, flag('group-close'), SHOT_GROUP_GAP_M);
     if (begun.error) return { error: begun.error };
     // The fly, frame by frame at 60 frames a second, every frame drawn: the steps of the camera and the worst frame
     // (in runs to each moment, the picture taken there as the frame was: the riders where they were then)
@@ -6953,7 +6973,9 @@ WORLD['world-shot'] = async (page) => {
             // susten-gadmen 13.5 s, where each frame drew in 15 to 18 ms; profileFrame)
             gl.readPixels(0, 0, 1, 1, gl.RGBA, gl.UNSIGNED_BYTE, pixel);
             const t4 = performance.now();
-            frames.push(t4 - t0);
+            // (the frames of the shot until it holds: the held view's own raise, Game.raiseShot's drawRaised, costs its
+            // first frame on a still view by design)
+            if (scene.t <= scene.flyS || !scene.drawRaised) frames.push(t4 - t0);
             // (a program compiled in the draw: which objects draw with it)
             const known = renderer.info.programs ? new Set(renderer.info.programs.slice(0, programs)) : new Set();
             const compiled = renderer.info.programs ? renderer.info.programs.filter(pr => !known.has(pr)) : [];
@@ -6968,7 +6990,7 @@ WORLD['world-shot'] = async (page) => {
             const nowNear = frameMs < Infinity ? casters() : new Map();
             const came = [...nowNear.keys()].filter(k => !before.has(k)).map(k => nowNear.get(k));
             near = new Set(nowNear.keys());
-            if (t4 - t0 > frameMs) slow.push({ scene: was === is ? is : `${was} -> ${is}`, came: [...new Set(came)].slice(0, 8), compiled: compiled.map(pr => `${pr.name} ${String(pr.cacheKey || "").slice(0, 400)}`), users, keys: compiled.map(pr => [String(pr.cacheKey), ...[...known].filter(o => String(o.cacheKey || '').split(',')[0] === String(pr.cacheKey).split(',')[0]).map(o => String(o.cacheKey))]), keyDiff: compiled.map((pr) => {
+            if (t4 - t0 > frameMs && (scene.t <= scene.flyS || !scene.drawRaised)) slow.push({ scene: was === is ? is : `${was} -> ${is}`, came: [...new Set(came)].slice(0, 8), compiled: compiled.map(pr => `${pr.name} ${String(pr.cacheKey || "").slice(0, 400)}`), users, keys: compiled.map(pr => [String(pr.cacheKey), ...[...known].filter(o => String(o.cacheKey || '').split(',')[0] === String(pr.cacheKey).split(',')[0]).map(o => String(o.cacheKey))]), keyDiff: compiled.map((pr) => {
                 // (what sets the new program apart from the nearest one made before: the fields of its key that differ)
                 const mine = String(pr.cacheKey || '').split(',');
                 let best = null, bestN = Infinity;
@@ -7644,8 +7666,12 @@ WORLD['hill-look'] = async (page) => {
 // Fails on a pop in view of the ride, or a thing that comes or goes in view on a stand. `--out <dir>` writes frame
 // strips round the first --strips pops and fades in view (the frame before, the frame of the change, then 8, 16 and
 // 32 frames on, cropped round it)
-//   node tools/terrain-check.mjs world-pops --world tremola --gpu [--from s] [--to s] [--speed 18] [--mode far] [--level <id>] [--stand 90] [--stands s,s] [--villages] [--speeds 15,30] [--out <dir>] [--strips 24]
+// `--end` rides the stage's last END_LEAD_M over the line and on through the whole shot at its end stop (StopScene,
+// EndShot) to the card, every frame logged by the same rules: what changes in a minute's shot changes by a fade.
+//   node tools/terrain-check.mjs world-pops --world tremola --gpu [--from s] [--to s] [--speed 18] [--mode far] [--level <id>] [--stand 90] [--stands s,s] [--villages] [--speeds 15,30] [--end] [--out <dir>] [--strips 24]
 const POP_STEP = 0.5;
+// --end rides the stage's last END_LEAD_M, over the line, and logs the whole shot at its end stop with the same rules
+const END_LEAD_M = 400;
 const STAND_EVERY_M = 1000;
 const VILLAGE_M = 300;
 const VILLAGE_HOUSES = 15;
@@ -7661,9 +7687,12 @@ function popRide(placeSource, pilotSource, opts) {
         twistyDev.freeze();
         game.setCameraView(opts.mode);
         if (opts.level) game.quality.fix(opts.level);
-        const start = opts.from || Math.max(20, (env.startS ?? 0) + 20);
+        // (--end: the last END_LEAD_M of the stage, over the line and the whole shot at its end stop, StopScene)
+        const start = opts.from || (opts.end ? Math.max(20, (env.endS ?? route.length) - opts.endLead) : Math.max(20, (env.startS ?? 0) + 20));
         // (with --villages and no --to, the villages alone)
-        const end = opts.villages && !opts.to ? start : Math.min(route.length - 30, opts.to || start + 4000, (env.endS ?? route.length) - 30);
+        const end = opts.end ? (env.endS ?? route.length) + 50 : opts.villages && !opts.to ? start : Math.min(route.length - 30, opts.to || start + 4000, (env.endS ?? route.length) - 30);
+        // (a stepped ride ends the stop scene it starts; this one plays it, frame by frame as Game.animate does)
+        if (opts.end) twistyDev.keepStop = true;
         await placeAt(start);
         game.worldCamera.reset(v.yawAngle);
         new Function('game', 'cruise', `return (${pilotSource})(game, cruise)`)(game, opts.speed);
@@ -7722,7 +7751,9 @@ function popRide(placeSource, pilotSource, opts) {
                 if (!list) clumpsOf.set(mesh, list = TerrainMesh.clumps(env.data.tile(key), env.data.cover(key), 1));
                 // (each at the share the land's shader draws it at, by its tile's distance from the bike: TerrainMesh.clumpShare;
                 // a build without that fade draws them whole)
-                const limits = env.streamer.tileLodM || WorldStreamer.TILE_LOD_M;
+                // (the reach the land's shader reads, Game.stepSceneryView eases it to the streamer's)
+                const lu = TerrainMesh.clumpUniforms && TerrainMesh.clumpUniforms.uLodLimits ? TerrainMesh.clumpUniforms.uLodLimits.value : null;
+                const limits = lu ? [lu.x, lu.y] : env.streamer.tileLodM || WorldStreamer.TILE_LOD_M;
                 const entry = TerrainMesh.drawnClumps ? TerrainMesh.drawnClumps().get(key) : null;
                 const byTime = entry && entry.mesh === mesh ? entry.share : 1;
                 for (const c of list) put('clump', `c${c.x.toFixed(1)},${c.z.toFixed(1)}`, 'clump', TerrainMesh.clumpShare ? byTime * TerrainMesh.clumpShare(c.x, c.z, v.position, limits) : 1, c.x, c.y + c.h / 2, c.z, Math.max(c.r, c.h / 2));
@@ -7846,8 +7877,13 @@ function popRide(placeSource, pilotSource, opts) {
         };
         let ticks = 0, crashes = 0, checked = 0;
         const t0 = performance.now();
-        while (v.routeS < end && !game.finished && ticks < 60 * 60 * 30) {
-            twistyDev.step(1, { render: true });
+        const ended = () => !opts.end || !game.stopScene || game.stopScene.t > game.stopScene.cardAt + 1;
+        while (((v.routeS < end && !game.finished) || (game.finished && !ended())) && ticks < 60 * 60 * 30) {
+            if (game.stopScene) {
+                game.paused = false;
+                game.accumulatedTime = 0;
+                game.animate();
+            } else twistyDev.step(1, { render: true });
             ticks++;
             frame++;
             if (v.crashed) crashes++;
@@ -7998,7 +8034,8 @@ WORLD_PROBES.push('world-pops');
 WORLD['world-pops'] = async (page) => {
     const opts = { mode: option('mode') || 'far', speed: Number(option('speed') || 18), from: Number(option('from') || 0), to: Number(option('to') || 0), strips: Number(option('strips') || (option('out') ? 24 : 0)), popStep: POP_STEP,
         level: option('level') || null, stand: Number(option('stand') || 0), stands: option('stands') ? option('stands').split(',').map(Number) : [], standPixel: STAND_PIXEL, standEvery: STAND_EVERY_M, standQuiet: STAND_QUIET,
-        villages: flag('villages'), speeds: (option('speeds') || '15,30').split(',').map(Number), villageM: VILLAGE_M, villageHouses: VILLAGE_HOUSES, villageLead: VILLAGE_LEAD_M, houseNearM: HOUSE_NEAR_M };
+        villages: flag('villages'), speeds: (option('speeds') || '15,30').split(',').map(Number), villageM: VILLAGE_M, villageHouses: VILLAGE_HOUSES, villageLead: VILLAGE_LEAD_M, houseNearM: HOUSE_NEAR_M,
+        end: flag('end'), endLead: END_LEAD_M };
     const ride = await page.evaluate(popRide, placeAt.toString(), pilotWorld.toString(), opts);
     const files = [];
     if (ride.strips.length) {

@@ -3056,6 +3056,8 @@ class Game {
             // (the crew comes in from wherever it was: what the distance cull hid round it is shown again)
             this.updatePerformanceCulling();
             if (this.environment && this.environment.isWorld) this.environment.update(this.vehicle.position, this.stopScene.stop.s, null, Game.SECTION_BUDGET_MS, rawDeltaTime);
+            if (this.weatherSystem) this.weatherSystem.update(rawDeltaTime, this.vehicle.position);
+            this.stepSceneryView(rawDeltaTime);
             this.graphics.render(this.scene, this.camera);
             return;
         }
@@ -3427,17 +3429,7 @@ class Game {
 
         // The light, sky, fog and far ring follow the ride along the track
         this.applyAtmosphere();
-        // Everything a world draws takes the haze of this frame's air, also what a build step added since the last
-        // frame, before it is first drawn (js/world/landshade.js)
-        LandShade.update(this.scene, this.graphics, this.weatherSystem, this.environment.group);
-        // (the crown clumps fade by their tile's distance from the bike, as the streamer reads it: TerrainMesh.clumpFade)
-        if (this.vehicle) {
-            const streamer = this.environment.streamer;
-            TerrainMesh.setClumpView(this.vehicle.position, (streamer && streamer.tileLodM) || WorldStreamer.TILE_LOD_M);
-            TerrainMesh.stepClumps(rawDeltaTime, streamer ? key => { const tile = streamer.tiles.get(key); return !tile || tile.zeroSince !== null; } : null);
-        }
-        this.budgetWindow();
-        this.watchWindow(rawDeltaTime);
+        this.stepSceneryView(rawDeltaTime);
         if (this.effectLevels) Effects.frame(this);
         this.graphics.update(
             rawDeltaTime,
@@ -3500,6 +3492,31 @@ class Game {
         }
     }
     
+    // How fast the crown clumps' reach follows the streamer's (m/s): a clump crosses its CLUMP_FADE_M band over 14 frames
+    static get CLUMP_LIMIT_MS() { return 500; }
+
+    // The scenery's own frame, in a ride and in the stop scene alike: everything a world draws takes the haze of this
+    // frame's air, also what a build step added since the last frame, before it is first drawn (js/world/landshade.js);
+    // the crown clumps fade by their tile's distance from the bike, as the streamer reads it (TerrainMesh.clumpFade);
+    // the window's budget, and the fades of what comes and goes in view of the camera (Scenery.stepFades). The stop
+    // scene ran none of them: a tile that changed in a minute's shot came or went at once
+    stepSceneryView(dt) {
+        LandShade.update(this.scene, this.graphics, this.weatherSystem, this.environment.group);
+        if (this.vehicle) {
+            const streamer = this.environment.streamer;
+            // (toward the streamer's reach at CLUMP_LIMIT_MS: the held shot raises that reach in steps, Game.raiseShot,
+            // and set at once each step put the clumps by a band's edge in or out in a frame)
+            const want = (streamer && streamer.tileLodM) || WorldStreamer.TILE_LOD_M;
+            const held = this.clumpLimits || (this.clumpLimits = want.slice());
+            const most = Game.CLUMP_LIMIT_MS * dt;
+            for (let k = 0; k < 2; k++) held[k] += Math.max(-most, Math.min(most, want[k] - held[k]));
+            TerrainMesh.setClumpView(this.vehicle.position, held);
+            TerrainMesh.stepClumps(dt, streamer ? key => { const tile = streamer.tiles.get(key); return !tile || tile.zeroSince !== null; } : null);
+        }
+        this.budgetWindow();
+        this.watchWindow(dt);
+    }
+
     // The line is crossed: the time is frozen, recorded and shown
     finishRun() {
         // Taken before `finished` is set: raceElapsed() returns the frozen time after
@@ -3565,6 +3582,7 @@ class Game {
         this.stopScene = new StopScene({ stop, route, riders, ground: groundY, camera: from, aspect: cam.aspect, faces, visible });
         // (the riders that did not keep up arrive later, out of the shot)
         for (const r of this.stopScene.left) if (r.bike.bikeGroup) r.bike.bikeGroup.visible = false;
+        this.stopScene.raiseShare = 0;
         this.raiseShot();
         this.stopScene.view = { bars: StopScene.showBars(document), puffs: [] };
         document.body.classList.add('stop-scene');
@@ -3682,6 +3700,12 @@ class Game {
                 this.speedBlurOverlay.style.display = opacity === '0.00' ? 'none' : 'block';
             }
         }
+        // (the raise of what is built, in RAISE_STEPS over RAISE_RAMP_S: Game.raiseShot)
+        const ramp = Math.min(1, Math.ceil(Math.min(1, scene.t / StopScene.RAISE_RAMP_S) * StopScene.RAISE_STEPS) / StopScene.RAISE_STEPS);
+        if (Number.isFinite(scene.raiseShare) && ramp > scene.raiseShare) {
+            scene.raiseShare = ramp;
+            this.raiseShot();
+        }
         // The sun's shadow box goes with the player into the stop, and the ladder holds its level through the scene
         this.updateShadowCamera();
         this.holdQuality(1000);
@@ -3769,8 +3793,18 @@ class Game {
             if (Array.isArray(most) && Array.isArray(own[key])) raise[key] = own[key].map((m, k) => Math.min(m, most[k]));
             else if (Number.isFinite(most) && Number.isFinite(own[key])) raise[key] = Math.min(own[key], most);
         }
+        // (what is built is raised in steps over the scene's first RAISE_RAMP_S, `raiseShare`: raised at once, the land's
+        // reach, the trees' and the side roads' edge works came into the first frame together, 60 to 100 ms of it)
+        const share = Number.isFinite(scene.raiseShare) ? scene.raiseShare : 1;
+        const from = { tileLodM: typeof WorldStreamer !== 'undefined' ? WorldStreamer.TILE_LOD_M : null, treeNearM: typeof Scenery !== 'undefined' ? Scenery.TREE_NEAR_M : null, treeMidM: typeof Scenery !== 'undefined' ? Scenery.TREE_MID_M : null, triangleScale: 1, treeShare: level.treeShare, treeNear: level.treeNear };
+        for (const [key, base] of Object.entries(from)) {
+            const to = raise[key];
+            if (to === undefined || base === null || base === undefined) continue;
+            if (Array.isArray(to) && Array.isArray(base)) raise[key] = to.map((m, k) => base[k] + (m - base[k]) * share);
+            else if (Number.isFinite(to) && Number.isFinite(base)) raise[key] = base + (to - base) * share;
+        }
         const draw = !!scene.drawRaised;
-        scene.raised = { level: level.id, draw, ...raise };
+        scene.raised = { level: level.id, draw, share, ...raise };
         const renderer = this.renderer;
         if (env && env.isWorld) {
             if (env.streamer) env.streamer.tileLodM = raise.tileLodM || null;

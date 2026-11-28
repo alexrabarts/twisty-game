@@ -130,9 +130,14 @@ describe('the scene', () => {
             expect(Math.hypot(end[k].x - r.slot.x, end[k].z - r.slot.z)).toBeLessThan(0.05);
             expect(Math.abs(EndShot.turn(end[k].heading, r.slot.heading))).toBeLessThan(0.02);
         });
-        // The player at a calm pace: never faster than it crossed the line, and calmMs once it has eased down
+        // The player at the group's pace once eased down from the line, and calm over the last calmLastM into its bay
         const T = EndShot.TUNING;
-        for (let t = 4; t < scene.playerParkedS; t += 0.25) expect(EndShot.trackAt(scene.ride, scene.playerIndex, t).speed).toBeLessThanOrEqual(Math.max(T.calmMs, T.leastMs) + 1e-6);
+        const way = scene.riders[scene.playerIndex].way;
+        for (let t = 4; t < scene.playerParkedS; t += 0.25) {
+            const at = EndShot.trackAt(scene.ride, scene.playerIndex, t);
+            expect(at.speed).toBeLessThanOrEqual(T.fastMs + 1e-6);
+            if (way.length - at.m <= T.calmLastM) expect(at.speed).toBeLessThanOrEqual(T.calmMs + 1e-6);
+        }
         expect(player.slot).toBe(scene.plan.bays[scene.playerIndex]);
     });
 
@@ -254,6 +259,46 @@ describe('the scene', () => {
         expect(views[0].x).toBeCloseTo(1, 6);
         const held = EndShot.compose(photo, EndShot.bays(photo, 4, views[0]).bays, flat, 16 / 9);
         expect(Math.abs(EndShot.turn(held.yaw, -Math.PI / 2))).toBeLessThanOrEqual(EndShot.TUNING.yawMostDeg * Math.PI / 180 + 1e-9);
+    });
+
+    // The owner's shots at Goschenen and the Tremola followed 60 to 80 s of access road. A long way in is ridden at the
+    // group's pace where it is straight, and the camera follows at most followMostS before it cranes to the held view
+    // (the rest of the ride, unseen, runs fast: the next test)
+    test('a long way in: the group\'s pace on the straight, and the crane from followMostS', () => {
+        const T = EndShot.TUNING;
+        const far = { ...stop, keepLine: true };
+        const scene = new StopScene({ stop: far, route, riders: [{ bike: {}, s: 1140, player: true, at: { x: -2.5, z: 1140 }, speed: 14, yaw: 0 }], ground: flat, camera: chase });
+        expect(scene.playerParkedS).toBeGreaterThan(T.followMostS + T.craneLeadS);
+        expect(scene.craneAt).toBeLessThanOrEqual(T.followMostS + 1e-9);
+        expect(scene.flyS).toBeLessThanOrEqual(T.followMostS + T.craneLongMostS + 1e-6);
+        let top = 0;
+        for (let t = 0; t < scene.playerParkedS; t += 0.25) top = Math.max(top, EndShot.trackAt(scene.ride, 0, t).speed);
+        expect(top).toBeGreaterThan(T.calmMs + 4);
+        expect(top).toBeLessThanOrEqual(Math.max(14, T.fastMs) + 1e-6);
+    });
+
+    // Once the camera holds, a ride that no one sees runs WARP times as fast: the held view does not wait 20 s for a
+    // player still on the access road. Seen, every rider rides at its own pace
+    test('once held, the ride runs fast while nobody riding is in the held view, and at its own pace while seen', () => {
+        const far = { ...stop, keepLine: true };
+        const scene = new StopScene({ stop: far, route, riders: [{ bike: {}, s: 1140, player: true, at: { x: -2.5, z: 1140 }, speed: 14, yaw: 0 }], ground: flat, camera: chase });
+        let card = null, fast = 0, seenFast = 0, last = 0;
+        while (scene.t < scene.cardAt + 1 && card === null) {
+            const frame = scene.step(1 / 60);
+            const ran = scene.rideT - last;
+            last = scene.rideT;
+            if (ran > 1 / 60 + 1e-9) {
+                fast++;
+                if (scene.inHold(frame.riders[0]) && !frame.riders[0].parked) seenFast++;
+            }
+            if (frame.card) card = scene.t;
+        }
+        expect(card).not.toBeNull();
+        expect(card).toBeGreaterThanOrEqual(scene.flyS + EndShot.TUNING.holdFirstS);
+        // (the card before the ride's own clock would have had it: the unseen part of the ride ran fast)
+        if (fast) expect(card).toBeLessThan(scene.cardAt);
+        // (a frame that ran fast had nobody riding in view at its start: at most the one frame a rider rides into view)
+        expect(seenFast).toBeLessThanOrEqual(1);
     });
 
     test('a hold with its own air eases the haze from the ride\'s with the crane, never in one frame', () => {
