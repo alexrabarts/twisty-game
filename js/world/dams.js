@@ -171,15 +171,24 @@ class WorldDams {
             row.gu = past(WorldDams.INSET_M);
             row.gd = past(row.L - WorldDams.INSET_M);
         }
-        // (no two rows cross: on the inside of a bend a row is cut back short of the next one, CLEAR_M before they meet)
-        for (let pass = 0; pass < 3; pass++) {
+        // (no two rows cross: on the inside of a bend a row is cut back short of the next one, CLEAR_M before they meet;
+        // and no row stands out past both its neighbours by more than CLEAR_M, so a row cut back takes its neighbours
+        // down with it in a smooth dip, not a notch the land showed through)
+        for (let pass = 0; pass < 40; pass++) {
+            let moved = false;
             for (let k = 0; k + 1 < n; k++) {
                 const a = rows[k], b = rows[k + 1];
                 const hit = WorldDams.meet(a.u, [a.u[0] + a.a[0] * a.L, a.u[1] + a.a[1] * a.L], b.u, [b.u[0] + b.a[0] * b.L, b.u[1] + b.a[1] * b.L]);
                 if (!hit) continue;
                 a.L = Math.max(a.c1, hit[0] * a.L - WorldDams.CLEAR_M);
                 b.L = Math.max(b.c1, hit[1] * b.L - WorldDams.CLEAR_M);
+                moved = true;
             }
+            for (let k = 0; k < n; k++) {
+                const near = Math.min(k > 0 ? rows[k - 1].L : Infinity, k + 1 < n ? rows[k + 1].L : Infinity) + WorldDams.CLEAR_M * 2;
+                if (rows[k].L > near + 1e-6) { rows[k].L = Math.max(rows[k].c1, near); moved = true; }
+            }
+            if (!moved) break;
         }
         // The ends: the land at the pit's end edges, every metre across
         const endGround = (k, j) => {
@@ -367,7 +376,7 @@ class WorldDams {
     // The parts of one dam: {positions, shades, mark} (StructureShade's marks). `far` the far model: every farRows row
     static build(dam, far = false) {
         const R = WorldDams.RULE, out = { positions: [], shades: [], mark: [] };
-        const kind = dam.kind, wall = kind !== 'embankment', look = wall ? 'board' : 'stone';
+        const kind = dam.kind, wall = kind !== 'embankment', look = wall ? 'cast' : 'stone';
         const all = dam.drawn;
         const rows = far ? all.filter((_, k) => k === 0 || k === all.length - 1 || k % R.farRows === 0) : all;
         const concrete = [0.64, 0.63, 0.6], rock = [0.55, 0.53, 0.5];
@@ -425,8 +434,8 @@ class WorldDams {
             const mid = at(row, row.L / 2, row.f);
             for (let j = 0; j + 1 < s.length; j++) {
                 const p = at(row, s[j][0], s[j][1]), q = at(row, s[j + 1][0], s[j + 1][1]);
-                if (flip) StructureShade.quad(out, mid, q, p, mid, tint(base, 0.85), 'pier', look);
-                else StructureShade.quad(out, mid, p, q, mid, tint(base, 0.85), 'pier', look);
+                StructureShade.quad(out, mid, q, p, mid, tint(base, 0.85), 'pier', look);
+                StructureShade.quad(out, mid, p, q, mid, tint(base, 0.85), 'pier', look);
             }
         }
         if (far) return out;
@@ -443,9 +452,12 @@ class WorldDams {
         const strip = (pa, pb, ya, yb, ha, hb, ia, ib) => {
             if (ha <= ya + 1e-3 && hb <= yb + 1e-3) return;
             const A = [pa[0], ya, pa[1]], B = [pb[0], yb, pb[1]], C = [pb[0], Math.max(yb, hb), pb[1]], D = [pa[0], Math.max(ya, ha), pa[1]];
+            // (both ways round: it is seen from the dam and from the slope)
             StructureShade.quad(out, A, B, C, D, color, 'pier', look, [D[1] - A[1], C[1] - B[1], 0, 0]);
+            StructureShade.quad(out, B, A, D, C, color, 'pier', look, [C[1] - B[1], D[1] - A[1], 0, 0]);
             const Ci = [C[0] + ib[0] * W, C[1], C[2] + ib[1] * W], Di = [D[0] + ia[0] * W, D[1], D[2] + ia[1] * W];
             StructureShade.quad(out, D, C, Ci, Di, color, 'cap', look);
+            StructureShade.quad(out, C, D, Di, Ci, color, 'cap', look);
         };
         for (let k = 0; k + 1 < rows.length; k++) {
             const a = rows[k], b = rows[k + 1];
