@@ -171,6 +171,9 @@ export function spikeWindow(game, env, store, at, nearM = 350, rules = { rideM: 
                 }
                 if (pairs.length !== 2) continue;
                 const [a, b] = pairs;
+                // (a steel rail's panel in a wall's stone is no piece of wall: its posts and rails are drawn on it and the
+                // rest cut away, LandShade's railPanel, wallFace y 4 plus its height over 10)
+                if (flag && flag.getY(i) > 3.5 && flag.getY(i) < 4.5) continue;
                 held.push({ a, b, len: Math.hypot(b.x - a.x, b.z - a.z), owner: owners ? owners[i / 3] : -1, parapet: [a, b].every(p => Math.abs(p.top - p.foot - 0.8) < 2e-3), faced: !flag || flag.getY(i) > 0.5, past: !!flag && Math.round(flag.getY(i)) === 2, side: !!flag && Math.round(flag.getY(i)) === 3 });
             }
             store.works.set(id, held);
