@@ -231,7 +231,9 @@ class WorldGround extends Ground {
             const edge = half + this.vergeAt(loc.index, loc.lateral, loc.t), t = Math.max(0, Math.min(1, loc.t || 0));
             // (and at the end of a run, coming down to the land at the next row)
             const run = a ? (b ? a.run + (b.run - a.run) * t : a.run) : b ? b.run : 0;
-            if ((a || b) && reach > edge && reach - edge <= run) return Math.max(land, a && b ? a.y + (b.y - a.y) * t : a ? a.y + (Math.min(a.y, land) - a.y) * t : b.y + (Math.min(b.y, land) - b.y) * (1 - t));
+            // (beside a slope of the ride the higher of the two is drawn: the slope falls from the verge's edge to the
+            // fill and under it)
+            if ((a || b) && reach > edge && reach - edge <= run) return Math.max(land, a && b ? a.y + (b.y - a.y) * t : a ? a.y + (Math.min(a.y, land) - a.y) * t : b.y + (Math.min(b.y, land) - b.y) * (1 - t), band || this.bridgeOrDrop(loc, half) ? -Infinity : this.earthworkY(loc, half, reach, lift));
         }
         // (on the verge the drawn verge is the top: the land is held under it, and at a tube's portal it is cut away.
         // Read as the higher of the two, the physics stood on the land's uncut height 4 m over the verge drawn at leg

@@ -78,6 +78,9 @@ class WorldEnvironment {
     // road's height (cleftAt), laid CLEFT_TUCK_M on into the side road's band, where the side road stands on a wall
     static get CLEFT_GAP_M() { return 2.5; }
     static get CLEFT_DIP_M() { return 0.25; }
+    // ... and under a side road over the ride, where the ride may lie on a slope that falls along the gap: read at the
+    // rows (3 to 4 m apart), the land between two of them lay 0.1 m deeper than at either (leg 6's j85)
+    static get CLEFT_OVER_DIP_M() { return 0.15; }
     static get CLEFT_TUCK_M() { return 0.3; }
     static get RIDE_NEAR_M() { return 0.5; }
     static get CLEFT_ROWS() { return 4; }
@@ -826,12 +829,19 @@ class WorldEnvironment {
             // (only where the ride's own wall holds it up on that side, on the segment either side of the row: a side
             // road beside the ride's slope or level with it has a slope or land there, not a cleft. The side road has
             // no wall on that side, edgeFoot `facesRideWall`: the ride's wall is the one face between the two)
-            if (walled && !this.rideWalledAt(index, sign)) return null;
-            // (the side road the lower of the two, by no more than CLEFT_STEP_M: the fill lies at its height and the
-            // ride's wall stands over it; a side road over the ride holds its own fill)
-            if (hit.side > y + RoadMesh.APRON_UNDER_M || hit.side < y - WorldEnvironment.CLEFT_STEP_M) return null;
+            // A side road over the ride by more than the paving rises to it (SIDE_GORE_RISE_M), and by no more than
+            // CLEFT_STEP_M, closes the gap at the ride's height whatever the ride stands on: two carriageways less than
+            // 4 m apart with the land sunk between them were a trench by the ride's slope, under a side road on its
+            // wall (leg 6's j85, 0.34 m)
+            const over = hit.side > y + WorldEnvironment.SIDE_GORE_RISE_M && hit.side <= y + WorldEnvironment.CLEFT_STEP_M;
+            if (!over) {
+                if (walled && !this.rideWalledAt(index, sign)) return null;
+                // (the side road the lower of the two, by no more than CLEFT_STEP_M: the fill lies at its height and the
+                // ride's wall stands over it)
+                if (hit.side > y + RoadMesh.APRON_UNDER_M || hit.side < y - WorldEnvironment.CLEFT_STEP_M) return null;
+            }
             const top = Math.min(y, hit.side);
-            if (!(low < top - WorldEnvironment.CLEFT_DIP_M)) return null;
+            if (!(low < top - (over ? WorldEnvironment.CLEFT_OVER_DIP_M : WorldEnvironment.CLEFT_DIP_M))) return null;
             // (under the side road's centre line as far as the ground under the ride's verge lies: its edge is held a
             // little lower, RoadMesh.SIDE_GROUND_UNDER_M)
             const fy = Math.min(y - RoadMesh.APRON_UNDER_M, hit.side - RoadMesh.SIDE_GROUND_UNDER_M), run = hit.t + WorldEnvironment.CLEFT_TUCK_M;

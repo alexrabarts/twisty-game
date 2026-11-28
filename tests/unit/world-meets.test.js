@@ -27,9 +27,9 @@ const SIDE_NODE_M = 250;
 // (measured when the check was first run, 2026-11-27, on the builders of 4abac70; `proud` again on 2026-11-28 with the
 // check reading a wall's end, not the side of its top: every row before was that)
 export const KNOWN = Object.freeze({
-    'tremola': { bands: 11, ledges: 14, see: 7, steps: 17, holes: 1, overlaps: 23, loose: 11, markings: 20, landIn: 8 },
+    'tremola': { bands: 10, ledges: 14, see: 7, steps: 17, holes: 1, overlaps: 23, loose: 11, markings: 20, landIn: 8 },
     'gotthard-north': { bands: 5, ledges: 7, see: 8, steps: 15, overlaps: 9, loose: 12, markings: 9, landIn: 16 },
-    'airolo-lookout': { bands: 6, ledges: 9, see: 3, steps: 15, holes: 1, overlaps: 21, loose: 3, markings: 14, landIn: 7 },
+    'airolo-lookout': { bands: 5, ledges: 9, see: 3, steps: 15, holes: 1, overlaps: 21, loose: 3, markings: 14, landIn: 7 },
     'lookout-andermatt': { bands: 7, ledges: 8, see: 5, proud: 1, steps: 17, overlaps: 10, loose: 12, markings: 10, landIn: 17 },
     'andermatt-goeschenen': { bands: 10, ledges: 6, see: 7, proud: 2, steps: 15, holes: 3, overlaps: 21, loose: 2, markings: 17, landIn: 3 },
     'goeschenen-susten': { bands: 10, ledges: 11, see: 5, steps: 15, overlaps: 35, loose: 2, markings: 35, landIn: 3 },
