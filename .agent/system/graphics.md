@@ -346,7 +346,7 @@ The cost: a tile's colours take about 2 ms (6.5 ms at most) against 0.5 ms befor
 
 ## The dams
 
-A dam (`js/world/dams.js`; `.agent/system/world.md`, "Dams") is one `THREE.LOD` in the structures' material: one draw call at either level. On the Grimsel stage, the seven dams are 19 878 triangles near and 2 276 far, all built at load. `world-budget` passes on `guttannen-grimsel`.
+A dam (`js/world/dams.js`; `.agent/system/world.md`, "Dams") is one `THREE.LOD` in the structures' material: one draw call at either level. On the Grimsel stage, the seven dams are 20 770 triangles near and 2 684 far, all built at load. At desk size (2 880 by 1 800, level 6, the mini) the frame time at each dam's nearest place on the ride is the same with the dams drawn, hidden or casting no shadow, to within the run's noise (the medians differ by -1.0 to +0.4 ms on 13 to 18 ms frames). `world-budget` passes on `guttannen-grimsel`.
 
 ## What was not checked
 

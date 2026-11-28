@@ -67,7 +67,12 @@ const list = opts.slice ? all.slice(opts.slice[0], opts.slice[1]) : all;
 for (const item of list) {
     if (opts.ids && !opts.ids.includes(item.id)) continue;
     for (const pose of item.poses) {
-        await twistyDev.viewPose({ x: pose.x, y: pose.y, z: pose.z, bearing: pose.bearing, pitch: pose.pitch, vfov: pose.vfov });
+        const view = { x: pose.x, y: pose.y, z: pose.z, bearing: pose.bearing, pitch: pose.pitch, vfov: pose.vfov };
+        await twistyDev.viewPose(view);
+        // (the water builds one tile a frame: without these frames the lake was its paint alone, read as a meadow)
+        for (let i = 0; i < 60; i++) twistyDev.step(1);
+        env.streamer.pump(Infinity);
+        await twistyDev.viewPose(view);
         grab(`${item.id}-${pose.name}`);
     }
     said.dams.push({ id: item.id, name: item.name, kind: item.kind });
