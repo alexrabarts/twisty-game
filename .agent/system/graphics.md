@@ -308,6 +308,10 @@ The shading normals are not changed. The geometry and the physics are not change
 
 The cost: a tile's colours take about 2 ms (6.5 ms at most) against 0.5 ms before, once for each tile and the tiles beside it (Tremola, the mini). The frame time on the Tremola does not change (`world-frametime`: median 12.1 ms before, 11.3 ms after; the shader is the same).
 
+## The dams
+
+A dam (`js/world/dams.js`; `.agent/system/world.md`, "Dams") is one `THREE.LOD` in the structures' material: one draw call at either level. On the Grimsel stage, the seven dams are 19 878 triangles near and 2 276 far, all built at load. `world-budget` passes on `guttannen-grimsel`.
+
 ## What was not checked
 
 - No real phone was used. The CPU throttle makes the CPU slower, but the GPU was a computer's GPU. A phone GPU is slower and pays more for each pixel, the samples and the shadow map. Thus the measured order of the pixel ratio, the samples and the shadow map is a lower bound of their real cost.
