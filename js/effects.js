@@ -92,6 +92,16 @@ const Effects = {
             }
         },
         {
+            // Its cost is the frame with a lake in view (the Gotthard summit's), not the Tremola's: water drawn costs
+            // nothing where no lake is (.agent/system/graphics.md, "The lakes")
+            id: 'water', name: 'Lake water', group: 4,
+            hint: 'Moving water on the lakes: layered waves, the sky in it and the sun\'s glint (Low, Medium), and the mountains mirrored (High)',
+            levels: ['off', 'low', 'medium', 'high'], default: 'high', presets: { low: 'low', balanced: 'medium', high: 'high' },
+            cost: { low: 0.2, medium: 0.3, high: 1.0 }, cpu: 0.3, needs: null,
+            switch: 'Water.set(game, level): uniforms of the one water material (octaves, swell, streaks); High draws the planar reflection, a mirrored camera into a reduced target, only with a lake near and in view; nothing compiles again',
+            apply: (game, level) => { if (typeof Water !== 'undefined') Water.set(game, level); }
+        },
+        {
             id: 'grade', name: 'Colour grade', group: 5,
             hint: 'Contrast, warm highlights and cool shadows by the time of day',
             levels: ['off', 'on'], default: 'on', presets: { low: 'off', balanced: 'on', high: 'on' },
@@ -229,6 +239,7 @@ const Effects = {
         const levels = game.effectLevels || {};
         if (levels.reflections === 'on') Effects.coatVehicles(game);
         if (levels.groundCover === 'on' && typeof GroundCover !== 'undefined') GroundCover.frame(game);
+        if (typeof Water !== 'undefined') Water.frame(game);
         const g = game.graphics;
         if (!g || !g.setGlare) return;
         // The glare and the wet road by the night and the rain (WeatherSystem.mix, RoadSurface.wetness on a world)

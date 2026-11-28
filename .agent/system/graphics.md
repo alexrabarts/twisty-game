@@ -203,6 +203,42 @@ Frame time of the held shot at the Gotthard lookout, without and with the raise 
 - The phone page (`--phone`: 390 x 844 at 3, touch, the CPU 4 times slower; a computer's GPU), with the raise as it is now at Lowest to Medium: Lowest 4.1 / 4.5 ms, Low 5.5 / 5.7 ms, Medium 6.8 / 6.5 ms, without and with.
 - The pictures of each level are written next to the run (`~/Library/Caches/twisty-world/lookout-shots`, outside the repo).
 
+## The lakes
+
+A world's lakes are drawn as water (`js/world/water.js`). The elevation model reads a lake's surface, not its bed, so the land under a lake is flat at the lake's level, and `TerrainMesh` paints it in the water colour. `Water` draws a water surface over that paint. The effect row `water` (`js/effects.js`) chooses the level. Off draws the land's paint alone, as before. The physics never reads the water.
+
+- **The surface.** One mesh for each tile with water nodes (`WorldData.ZONE.water`), built once while the tile's land is drawn, one tile a frame (the largest lake's tile takes up to 12 ms). A water node stands at the highest water node within `LEVEL_REACH` (6 nodes, 48 m) that is within `LEVEL_STEP_M` (1 m) of it, plus `LIFT_M` (3 cm). Thus a lake is level and never under the land at its nodes, and a stream keeps its fall. The reach is inside the padded grid that each tile reads from its neighbours (`PAD`, 8 nodes), so two tiles find the same level at the edge they share. A ring of one land node round the water stands at the water's level with no cover: the water fades out over the land's own paint, so the shore has no hard line. Deep water (64 m or more from the shore) is drawn in blocks of 4 x 4 cells. The largest tile has 3 410 triangles; all the Haslital's water is 28 518 and the Gotthard's 5 440. The window's room (`Scenery.WINDOW_TRIANGLES`) counts them as it counts every mesh.
+- **No fight with the land.** The water is transparent, writes no depth and has a polygon offset (-1, -4) over the land it lies on. Where the land rises out of the water, the land is in front.
+- **The waves.** One tiling slope texture made in code (`Water.waveField`: 56 waves with whole wave numbers over the tile, so it repeats with no seam), read at three periods, directions and speeds (`OCTAVES`: 41 m, 12.3 m and 3.4 m; 0.5, 0.32 and 0.17 m/s), with a long swell of two sines (`SWELL`) and slow patches of calm and ruffled water (`STREAKS`, the texture's height at 310 m). Each octave fades out with distance, the finest first, so the far water is smoother and has no glitter. The slopes are small (0.022 to 0.03): a calm mountain lake.
+- **The light.** Fresnel (Schlick, 0.02 at the normal): looking down the water is dark and the body colour shows; at a grazing view it is a mirror. The sky's reflection is `scene.environment` (the sky baked without its sun), softer with distance. The sun's glint is drawn by the water itself, sharp (two lobes) and broken by the waves. Three's direct specular is left out: the bike's rim and fill lights would make glints of their own. Rain, snow and mist dull the glint.
+- **The mirror** (High only). A mirrored camera draws the scene into a target of 0.35 of the drawing buffer's side (at most 1 024 px across), with the near plane cut to the water (three's Reflector). It is drawn once a frame, at the first water mesh in the game camera's view (`Water.beforeRender`), and only for a lake that is level (two in five of its nodes in one half-metre band, `Water.levelOf`), within 1 600 m, in view, over 150 nodes on the tiles it crosses, and that covers 1% of the screen as the eye sees it past the land (`Water.seen`: 16 sights a tile, rays read against the land's height). A lake that crosses tiles is one lake. The mirror leaves out the water, the ground cover and the boulders. Water off the mirrored level (a stream, a pond above the lake) takes the sky's reflection.
+- **The colour.** The body is deep teal to dark at depth (`LOOK.deep`) and lighter in the shallows (`LOOK.shallow`), by the distance to the shore (half deep at 22 m). The cover goes from 0 at the ring to 1 at 20 m from the shore, so the shallows show the land's paint through them. The depth is the distance to the shore: the data has no lake bed.
+- **The haze.** `LandShade.haze`, as every world material. The water fades to the land's paint from 1 800 to 2 600 m, so the window's far edge shows no new tone.
+
+The levels of the row:
+
+| Level | Octaves | Swell, streaks | Mirror | Cost (ms) | Ladder (Auto) |
+|---|---|---|---|---|---|
+| Low | 2 | no | no | 0.2 | every level |
+| Medium | 3 | yes | no | 0.3 | Full and Rich |
+| High | 3 | yes | yes | 1.0 | Ultra |
+
+Measured with `world-quality --gpu --desk --measure --rounds 5 --parts fx-water` (a 2880 x 1800 frame on the Mac mini, the water turned off against the frame with it on, the draw's time):
+
+| Place (`--at`) | Water level in force | Draw calls on, off | Render ms saved with it off (5 rounds) |
+|---|---|---|---|
+| Gotthard north s 11 320, the mirror drawn (before the screen-share rule) | High | 461, 337 | 1.3; 0.7 in a second run |
+| Gotthard north s 11 320, lake mirrored by an earlier rule | High | 540, 424 | 1.3 to 1.8 |
+| Gotthard north s 11 320, no lake fills 1% of the view | High | 459, 451 | 0.3 |
+| Gotthard north s 11 320 | Medium (`--effects preset:high,water=medium`) | 345, 338 | 0.3 |
+| Gotthard north s 11 320 | Low | 460, 452 | 0.2 |
+| Tremola s 1 319, a pond at Airolo 1 km off and 30 px across (before the screen-share rule: mirrored) | High | 1 194, 734 | 1.5 |
+| Tremola s 1 319, after it | High | 917, 916 | 0 (within the drift) |
+
+So the budget: the water adds at most 0.3 ms at every level under Ultra, and at Ultra up to about 1.5 ms (and 120 to 460 draw calls, the scene drawn again) while a lake fills 1% of the view or more; nothing where no lake is drawn. The mini was shared with other jobs: the frame times of separate runs drifted by several ms, so only the paired numbers above are read. A mirror over a forest shore (the Tremola's pond) drew 460 more calls: that is why the mirror needs a lake that fills the view.
+
+`node tools/terrain-check.mjs world-look --world gotthard-north --gpu --desk --script tools/water-look.js --out <dir>` finds each lake the ride passes within 450 m of and takes the far and near chase views, two close views from 6 m over the water, each with the water and without it, and a short sequence of the waves. `tests/unit/world-water.test.js` holds the surface's rules.
+
 ## What a world frame costs
 
 Measured with `node tools/terrain-check.mjs world-quality --world tremola --gpu --phone --measure --rounds 5` at s 1319 in the chase view. `--phone` is a 390 x 844 view at device pixel ratio 3, touch, and the CPU 4 times slower (Chrome's CPU throttle). Chrome has no GPU throttle, so the GPU was an Apple M-series. The probe turns one part off at a time against the full frame. The GPU time comes from a timer query. The numbers drift by about 0.5 ms from run to run, so read only the order.

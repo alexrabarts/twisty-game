@@ -8200,7 +8200,9 @@ WORLD['world-look'] = async (page) => {
         const out = option('out') || '.';
         mkdirSync(out, { recursive: true });
         for (const [name, png] of Object.entries(said.pictures)) {
-            const file = join(out, `${name}.png`);
+            // (named by the data URL's type: a script with many pictures may send them as WebP)
+            const type = /^data:image\/(\w+)/.exec(png);
+            const file = join(out, `${name}.${type && type[1] !== 'png' ? type[1] : 'png'}`);
             writeFileSync(file, Buffer.from(png.split(',')[1], 'base64'));
             files.push(file);
         }
