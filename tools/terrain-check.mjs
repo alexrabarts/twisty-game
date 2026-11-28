@@ -5538,6 +5538,104 @@ WORLD['world-place-shots'] = async (page) => {
 
 // In the page: the crew sent to wait in place `id` by a player who stopped before it, then the bike put down 8 m short
 // of the place, standing, and the chase view drawn
+// world-drone-shots: the drone of the hairpin car park (js/world/drone.js; .agent/system/ui.md, "The drone"). The bike
+// is put down in the place with `egg: 'drone'` and stands; the hint must show. Then the drone goes out and flies a
+// scripted flight with the keys held as a player holds them: up off its pad (line of sight), out and up over the car
+// park, the onboard view, round and back, and home. GPU pictures of each view at each moment go into --out
+// (`drone-<moment>.png`) with index.json. It fails on no hint, a drone that does not go out, a camera frame that jumps
+// (the eye moves more than the flight or the ease between the views allows), a drone or a camera under the ground, a
+// ride that still keeps its time, or a session that does not end once the drone is home.
+//   node tools/terrain-check.mjs world-drone-shots --world susten-gadmen --gpu [--out <dir>]
+const DRONE_SHOTS_OUT = join(process.env.HOME || '.', 'Library/Caches/twisty-world/drone-shots');
+WORLD_PROBES.push('world-drone-shots');
+WORLD['world-drone-shots'] = async (page) => {
+    const out = option('out') || DRONE_SHOTS_OUT;
+    mkdirSync(out, { recursive: true });
+    const failures = [];
+    const start = await page.evaluate(async (placeSource) => {
+        const placeAt = new Function('game', `return (${placeSource})`)(game);
+        const env = game.environment, place = env.places.list.find(p => p.egg === 'drone');
+        if (!place) return { error: 'no place with the drone' };
+        const v = game.vehicle;
+        game.setCameraView('near');
+        await placeAt(place.s + place.length / 2);
+        const stop = env.places.stopAt(place, 4, env.ground, {});
+        v.position.set(stop.x, stop.y, stop.z);
+        v.yawAngle = stop.heading;
+        v.speed = 0;
+        v.findNearestRoadSegment();
+        game.worldCamera.reset(v.yawAngle);
+        twistyDev.autopilot({ speed: 0 });
+        game.input.getThrottleInput = () => 0;
+        game.input.getBrakeInput = () => 1;
+        if (game.traffic) for (const b of game.traffic.motorcycles) { b.currentSegment = 0; b.segmentProgress = 0; b.updatePosition(); }
+        for (let i = 0; i < 120; i++) twistyDev.step(1);
+        env.streamer.pump(Infinity);
+        twistyDev.step(1, { render: true });
+        return { place: place.id, s: place.s, hint: !!document.getElementById('drone-hint'), trustedBefore: env.trusted };
+    }, placeAt.toString());
+    if (start.error) return { failures: [start.error] };
+    if (!start.hint) failures.push('no hint in the car park');
+    await page.screenshot({ path: join(out, 'drone-hint.png') });
+    // The flight, as frames of held keys: [moment, frames, keys, flip before]
+    const plan = [
+        ['launch', 90, ['KeyW'], false],
+        ['climb', 120, ['KeyW', 'ArrowUp'], false],
+        ['los-far', 150, ['ArrowUp'], false],
+        ['fpv', 90, ['KeyA'], true],
+        ['fpv-out', 150, ['ArrowUp', 'KeyW'], false],
+        ['los-back', 60, ['KeyD'], true]
+    ];
+    const opened = await page.evaluate(() => game.openDrone());
+    if (!opened) return { failures: [...failures, 'the drone did not go out'] };
+    const index = [];
+    let worst = { jump: 0 };
+    for (const [moment, frames, keys, flip] of plan) {
+        const got = await page.evaluate(({ frames, keys, flip }) => {
+            const session = game.drone;
+            if (!session) return { error: 'the session ended' };
+            if (flip) session.flip();
+            const cam = game.camera, d = session.drone, ground = session.ground;
+            let worst = { jump: 0 }, under = 0;
+            for (let i = 0; i < frames; i++) {
+                for (const code of keys) session.held[code] = true;
+                const eye = cam.position.clone(), was = { x: d.x, y: d.y, z: d.z }, blending = session.cam.t < 1;
+                const to = Drone.view(session.cam.mode, d, {}), span = blending && session.cam.from ? Math.hypot(session.cam.from.x - to.x, session.cam.from.y - to.y, session.cam.from.z - to.z) : 0;
+                twistyDev.step(1, { render: i === frames - 1 });
+                const moved = eye.distanceTo(cam.position), flew = Math.hypot(d.x - was.x, d.y - was.y, d.z - was.z);
+                const allowed = (blending ? 3.2 * span / 60 / Drone.VIEW.blendS : 0) + 1.2 * flew + 0.05;
+                if (moved - allowed > worst.jump) worst = { jump: moved - allowed, moved, allowed, frame: i };
+                const floor = ground(d.x, d.z), below = ground(cam.position.x, cam.position.z);
+                if ((Number.isFinite(floor) && d.y < floor) || (Number.isFinite(below) && cam.position.y < below)) under++;
+            }
+            for (const code of keys) delete session.held[code];
+            const o = d.osd();
+            return { mode: session.cam.mode, state: d.state, height: Math.round(o.height * 10) / 10, distance: Math.round(o.distance), battery: o.battery, worst, under, osd: session.osd.textContent };
+        }, { frames, keys, flip });
+        if (got.error) { failures.push(`${moment}: ${got.error}`); break; }
+        const file = join(out, `drone-${moment}.png`);
+        await page.screenshot({ path: file });
+        index.push({ moment, file, ...got });
+        if (got.worst.jump > 0) failures.push(`${moment}: a camera frame jumped ${got.worst.moved.toFixed(2)} m (allowed ${got.worst.allowed.toFixed(2)})`);
+        if (got.under) failures.push(`${moment}: ${got.under} frames with the drone or the camera under the ground`);
+    }
+    // Home: K, and the session ends once it has landed on its pad
+    const end = await page.evaluate(() => {
+        if (!game.drone) return { error: 'no session to end' };
+        game.drone.home();
+        let frames = 0;
+        while (game.drone && frames < 60 * 120) { twistyDev.step(1); frames++; }
+        for (let i = 0; i < 60; i++) twistyDev.step(1);
+        twistyDev.step(1, { render: true });
+        return { ended: !game.drone, seconds: Math.round(frames / 60), trusted: game.environment.trusted, hint: !!document.getElementById('drone-hint') };
+    });
+    await page.screenshot({ path: join(out, 'drone-home.png') });
+    if (end.error || !end.ended) failures.push(`the drone did not come home and end (${end.error || `${end.seconds} s`})`);
+    if (end.trusted) failures.push('the ride still keeps its time');
+    writeFileSync(join(out, 'index.json'), JSON.stringify({ start, index, end }, null, 1));
+    return { out, start, index, end, failures };
+};
+
 async function placeScene(placeSource, id) {
     const placeAt = new Function('game', `return (${placeSource})`)(game);
     const env = game.environment, route = env.route, traffic = game.traffic, group = traffic.group;

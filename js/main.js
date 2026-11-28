@@ -1225,6 +1225,7 @@ class Game {
 
     // Put the bike back on the start line of the ride
     restartLeg() {
+        this.closeDrone(false);
         this.closeWorldConfirm();
         this.removeRunOverlays();
 
@@ -3128,7 +3129,9 @@ class Game {
         // While the land under the bike has no data (Game.watchLand), the bike is held where it stands: the ground there
         // would be the far grid's, which the land may come back above
         const held = this.landHeld ? (this.landHoldAt || (this.landHoldAt = new THREE.Vector3())).copy(this.vehicle.position) : null;
-         this.vehicle.update(deltaTime, held ? 0 : steeringInput, held ? 0 : throttleInput, held ? 1 : brakeInput, held ? 0 : wheelieInput);
+         // (the drone out: the bike stands with its brake on while the rider flies, Game.stepDrone)
+         const parked = held || this.drone;
+         this.vehicle.update(deltaTime, parked ? 0 : steeringInput, parked ? 0 : throttleInput, parked ? 1 : brakeInput, parked ? 0 : wheelieInput);
         if (held) {
             this.vehicle.position.copy(held);
             this.vehicle.speed = 0;
@@ -3278,13 +3281,17 @@ class Game {
 
         this.updateRacePosition();
         this.updateCamera(rawDeltaTime);
+        // (the drone's camera, over the chase camera's, while it is out; the spot that hides it)
+        this.stepDrone(rawDeltaTime);
         this.updateUI();
 
         // A world streams by place round the bike, and guides the rider
         if (this.environment && this.vehicle) {
             // (the ride distance it streams by is the accepted progress, not the raw projection; free roam has none, and
             // streams by the nearest place on the ride as well as round the bike: Game.worldStreamS)
-            this.environment.update(this.vehicle.position, this.worldStreamS(), this.worldGuideState(rawDeltaTime), Game.SECTION_BUDGET_MS, simulatedThisFrame);
+            // (round the drone while it is out: its camera may be on it, 300 m away)
+            const drone = this.drone;
+            this.environment.update(drone ? drone.streamAt : this.vehicle.position, drone ? drone.streamS() : this.worldStreamS(), this.worldGuideState(rawDeltaTime), Game.SECTION_BUDGET_MS, simulatedThisFrame);
             this.updateTubeAdaptation(simulatedThisFrame);
             this.watchLand();
             // (watchLand can end the ride a task later; the world is still here this frame)
@@ -4240,6 +4247,89 @@ class Game {
         }
     }
 
+    // The drone (js/world/drone.js; .agent/system/ui.md, "The drone"): a hidden find. A bike standing for a second in
+    // a place with `egg: 'drone'` shows the hint once a ride; Drone.KEY (or the hint's button) there takes it out. The
+    // ride goes on under it (a timed ride's clock runs) and keeps no time. Not in the stop scene, a dialog, free fly or
+    // photo mode, or once the line is crossed
+    openDrone() {
+        if (typeof DroneSession === 'undefined' || this.drone) return false;
+        const env = this.environment, v = this.vehicle;
+        if (!env || !env.isWorld || !v || this.paused || this.finished || this.stopScene || this.freeFly || this.photo || this.worldConfirm || v.crashed) return false;
+        const place = this.droneSpot && this.droneSpot.ready;
+        if (!place || Math.abs(v.speed) > 0.3) return false;
+        this.hideDroneHint();
+        env.trusted = false;
+        this.droneEase = null;
+        this.drone = new DroneSession(this, place);
+        return true;
+    }
+
+    // The drone put away: the rider back on the bike, the chase camera eased back from the drone's view over
+    // Drone.VIEW.blendS (`ease` false: at once, for a restart)
+    closeDrone(ease = true) {
+        const session = this.drone;
+        if (!session) return false;
+        this.drone = null;
+        const last = session.close();
+        this.droneEase = ease ? { from: last, t: 0, fov: session.saved.fov } : null;
+        if (!ease) { this.camera.fov = session.saved.fov; this.camera.updateProjectionMatrix(); }
+        if (this.input && this.input.clearActions) this.input.clearActions();
+        return true;
+    }
+
+    // Each ride frame after the chase camera: the drone's frame while it is out, the ease back after it, and the spot
+    stepDrone(dt) {
+        if (typeof DroneSession === 'undefined') return;
+        const env = this.environment, v = this.vehicle;
+        if (!env || !env.isWorld || !v) return;
+        if (this.drone) {
+            if (this.finished || this.stopScene || !this.drone.frame(dt)) this.closeDrone();
+            return;
+        }
+        if (this.droneEase) {
+            const e = this.droneEase, cam = this.camera;
+            e.t = Math.min(1, e.t + dt / Drone.VIEW.blendS);
+            const k = e.t * e.t * (3 - 2 * e.t);
+            const ahead = new THREE.Vector3(0, 0, -10).applyQuaternion(cam.quaternion).add(cam.position);
+            const chase = { x: cam.position.x, y: cam.position.y, z: cam.position.z, tx: ahead.x, ty: ahead.y, tz: ahead.z, fov: e.fov };
+            const view = Drone.blend(e.from, chase, k, {});
+            cam.position.set(view.x, view.y, view.z);
+            cam.lookAt(view.tx, view.ty, view.tz);
+            cam.fov = view.fov;
+            cam.updateProjectionMatrix();
+            cam.updateMatrixWorld();
+            if (e.t >= 1) this.droneEase = null;
+        }
+        const spot = this.droneSpot && this.droneSpot.env === env ? this.droneSpot : (this.droneSpot = Object.assign(new DroneSpot(env.places), { env, near: null, ready: null }));
+        if (!spot.places.length) return;
+        spot.near = env.route.project(v.position.x, v.position.z, spot.near, spot.near || {});
+        spot.ready = spot.near.index >= 0 && !v.crashed && !this.finished ? spot.watch(spot.near.s, spot.near.lateral, v.speed, dt) : null;
+        if (spot.ready && !spot.hinted) { spot.hinted = true; this.showDroneHint(); }
+        else if (!spot.ready) this.hideDroneHint();
+    }
+
+    // The hint: a small card that something is in the panniers, with a button for touch. Once a ride
+    showDroneHint() {
+        if (document.getElementById('drone-hint')) return;
+        const box = document.createElement('div');
+        box.id = 'drone-hint';
+        box.className = 'drone-hint panel';
+        const text = document.createElement('span');
+        text.textContent = 'A quiet spot. There is a drone in the panniers: K to fly it';
+        const button = document.createElement('button');
+        button.type = 'button';
+        button.className = 'btn';
+        button.textContent = 'Fly';
+        button.addEventListener('click', (event) => { event.stopPropagation(); this.openDrone(); });
+        box.append(text, button);
+        document.body.appendChild(box);
+    }
+
+    hideDroneHint() {
+        const box = document.getElementById('drone-hint');
+        if (box) box.remove();
+    }
+
     // The free-fly camera of debug mode (js/world/freefly.js; .agent/system/ui.md, the free-fly camera): FreeFly.KEY
     // in a world ride with `?debug`. The ride pauses under it (the bike, the clock, the group and the traffic hold
     // still), and the world streams round the camera (stepFreeFly). Back gives the chase camera back as it was and
@@ -4611,6 +4701,7 @@ class Game {
     // A restart for `reason`: 'key', 'crash', 'off-route', 'cut' (WorldRun's cut rule), 'wrong-way' or 'resume'. Every
     // reason costs the same 5 s, and the rider goes on where the bike was (restartInPlace)
     restartFromCheckpoint(reason = 'key') {
+        this.closeDrone(false);
         this.closeWorldConfirm();
         // The run is over once the line is crossed; the finish banner owns what happens next
         if (this.finished) return;
@@ -4722,6 +4813,15 @@ document.addEventListener('keydown', (event) => {
     if (event.target && /^(INPUT|TEXTAREA)$/.test(event.target.tagName) && !event.target.readOnly) return;
     if (typeof Modals !== 'undefined' && Modals.top && Modals.top()) return;
     window.game.openTravel();
+});
+
+// The drone's key (Game.openDrone): only where the spot answers. Not while a dialog is open: the drone's own bar is
+// one, and its button answers the key to bring the drone home (js/modals.js). Not while a name is typed
+document.addEventListener('keydown', (event) => {
+    if (typeof Drone === 'undefined' || event.code !== Drone.KEY || event.repeat || event.ctrlKey || event.metaKey || event.altKey || !window.game) return;
+    if (event.target && /^(INPUT|TEXTAREA)$/.test(event.target.tagName) && !event.target.readOnly) return;
+    if (typeof Modals !== 'undefined' && Modals.top && Modals.top()) return;
+    window.game.openDrone();
 });
 
 // The free-fly camera's key, in a world ride in debug mode only (Game.openFreeFly). Not while a dialog is open: its bar

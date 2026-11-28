@@ -316,7 +316,8 @@ describe('the stream', () => {
         game.closeFreeFly();
         expect(game.freeFly).toBeNull();
         // The next ride frame streams round the bike again (Game.animate: environment.update(vehicle.position, ...))
-        expect(source).toMatch(/this\.environment\.update\(this\.vehicle\.position, this\.worldStreamS\(\)/);
+        // (round the drone instead while it is out: js/world/drone.js)
+        expect(source).toMatch(/this\.environment\.update\(drone \? drone\.streamAt : this\.vehicle\.position, drone \? drone\.streamS\(\) : this\.worldStreamS\(\)/);
         game.environment.update(game.vehicle.position, 0);
         expect(streamer.refs.has(tileOf(0, 0))).toBe(true);
         expect(streamer.refs.has(tileOf(f.x, f.z))).toBe(false);

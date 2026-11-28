@@ -39,7 +39,7 @@ class WorldPlaces {
     //   leg runs toward, a low stone course along its back and a bench. Past it the land rises to the upper leg's fill
     static get HAND() {
         return Object.freeze([
-            Object.freeze({ id: 'hand-0', stage: 'susten-gadmen', kind: 'carpark', source: 'hand', s: 32263, side: 1, length: 42, depth: 9, taper: 6, surface: 'asphalt', name: null, bays: Object.freeze({ angleDeg: 60, widthM: 2.5, lengthM: 5 }), edge: 'stone', bench: true })
+            Object.freeze({ id: 'hand-0', stage: 'susten-gadmen', kind: 'carpark', source: 'hand', s: 32263, side: 1, length: 42, depth: 9, taper: 6, surface: 'asphalt', name: null, bays: Object.freeze({ angleDeg: 60, widthM: 2.5, lengthM: 5 }), edge: 'stone', bench: true, egg: 'drone' })
         ]);
     }
 

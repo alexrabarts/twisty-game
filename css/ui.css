@@ -3649,3 +3649,97 @@ body.stop-scene .virtual-button-pause {
     padding-right: 8px;
     white-space: nowrap;
 }
+
+/* The drone (js/world/drone.js): its bar along the foot (a dialog), the OSD at the top left, the reticle round the
+   drone in the line-of-sight view, and the hint in the car park. The ride's touch controls give way to the bar's */
+body.drone-out .virtual-controls-left,
+body.drone-out .virtual-controls-right,
+body.drone-out .virtual-button-camera {
+    visibility: hidden;
+}
+
+.drone-bar,
+.drone-hint {
+    position: fixed;
+    left: 50%;
+    bottom: 16px;
+    transform: translateX(-50%);
+    display: flex;
+    flex-wrap: wrap;
+    align-items: center;
+    justify-content: center;
+    gap: 8px;
+    padding: 8px 12px;
+    width: max-content;
+    max-width: calc(100vw - 32px);
+    font-size: 12px;
+    outline: none;
+}
+
+.drone-help {
+    margin: 0;
+}
+
+.drone-buttons,
+.drone-pad {
+    display: flex;
+    gap: 6px;
+}
+
+/* The touch sticks only where the pointer is a finger */
+.drone-pad {
+    display: none;
+}
+
+@media (pointer: coarse) {
+    .drone-pad {
+        display: grid;
+        grid-template-columns: repeat(4, 44px);
+        gap: 6px;
+    }
+
+    .drone-help {
+        display: none;
+    }
+}
+
+.drone-stick {
+    min-height: 44px;
+    touch-action: none;
+    user-select: none;
+}
+
+.drone-osd {
+    position: fixed;
+    top: 16px;
+    left: 16px;
+    white-space: pre;
+    font: 600 13px/1.5 ui-monospace, Menlo, monospace;
+    color: #f2f4f0;
+    text-shadow: 0 1px 2px rgba(0, 0, 0, 0.8);
+    pointer-events: none;
+}
+
+.drone-osd-fpv {
+    color: #b8ffcc;
+}
+
+.drone-osd-warn {
+    color: #ffb070;
+}
+
+.drone-reticle {
+    position: fixed;
+    width: 28px;
+    height: 28px;
+    margin: -14px 0 0 -14px;
+    border: 2px solid rgba(184, 255, 204, 0.9);
+    border-radius: 50%;
+    pointer-events: none;
+    display: none;
+}
+
+.drone-reticle-edge {
+    border-style: dashed;
+    border-color: rgba(255, 176, 112, 0.95);
+}
