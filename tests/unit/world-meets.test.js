@@ -31,10 +31,10 @@ export const KNOWN = Object.freeze({
     'gotthard-north': { bands: 5, ledges: 7, see: 8, steps: 15, overlaps: 9, loose: 12, markings: 9, landIn: 16 },
     'airolo-lookout': { bands: 6, ledges: 9, see: 3, steps: 15, holes: 1, overlaps: 21, loose: 3, markings: 14, landIn: 7 },
     'lookout-andermatt': { bands: 7, ledges: 8, see: 5, proud: 1, steps: 17, overlaps: 10, loose: 12, markings: 10, landIn: 17 },
-    'andermatt-goeschenen': { bands: 10, ledges: 6, see: 7, proud: 2, steps: 15, holes: 3, overlaps: 21, loose: 3, markings: 17, landIn: 3 },
+    'andermatt-goeschenen': { bands: 10, ledges: 6, see: 7, proud: 2, steps: 15, holes: 3, overlaps: 21, loose: 2, markings: 17, landIn: 3 },
     'goeschenen-susten': { bands: 10, ledges: 11, see: 5, steps: 15, overlaps: 35, loose: 2, markings: 35, landIn: 3 },
-    'susten-gadmen': { bands: 1, ledges: 2, see: 1, loose: 3 },
-    'gadmen-innertkirchen': { bands: 6, ledges: 2, see: 10, steps: 5, overlaps: 2, loose: 7, markings: 2, landIn: 5 },
+    'susten-gadmen': { bands: 1, ledges: 2, see: 1, loose: 2 },
+    'gadmen-innertkirchen': { bands: 6, ledges: 2, see: 10, steps: 5, overlaps: 2, loose: 6, markings: 2, landIn: 5 },
     'innertkirchen-guttannen': { bands: 2, ledges: 2, see: 1, steps: 1, overlaps: 2, loose: 6, landIn: 3 },
     'guttannen-grimsel': { bands: 5, ledges: 2, see: 6, steps: 6, overlaps: 3, loose: 6, landIn: 8 }
 });

@@ -336,10 +336,13 @@ export function meetWindow(game, env, store, nodes, { areaM = 30, reachM = 40, l
         // loose paving: the middle of each paving triangle near the node away from every carriageway
         for (let ref = 0; ref < tris.length; ref++) {
             if (kinds[ref] !== 'paving') continue;
-            const t = tris[ref], cx = (t[0] + t[3] + t[6]) / 3, cy = (t[1] + t[4] + t[7]) / 3, cz = (t[2] + t[5] + t[8]) / 3;
+            const t = tris[ref], cx = (t[0] + t[3] + t[6]) / 3, cz = (t[2] + t[5] + t[8]) / 3;
             if (Math.hypot(cx - nx, cz - nz) > areaM) continue;
+            // (by its top: a face that closes a paving's edge down to the land hangs from a road's height, however deep
+            // the land under it lies; a loose piece lies on the land with its top)
+            const top = Math.max(t[1], t[4], t[7]);
             let held = false;
-            env.carriageways.each(cx, cz, looseM, r => { if (r.depth >= -looseM && Math.abs(r.y - cy) < 2) held = true; });
+            env.carriageways.each(cx, cz, looseM, r => { if (r.depth >= -looseM && Math.abs(r.y - top) < 2) held = true; });
             if (!held) rec.loose.push({ worst: 1, x: r2(cx), z: r2(cz) });
         }
 
