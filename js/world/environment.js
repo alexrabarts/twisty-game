@@ -2334,7 +2334,12 @@ class WorldEnvironment {
             const near = landNear(x + ox * 0.5, z + oz * 0.5);
             if (near === null || near < y - WorldEnvironment.MEET_M - RoadMesh.APRON_UNDER_M) return null;
             const low = this.landLowAt(x + ox * 0.1, z + oz * 0.1, missing);
-            return low !== null && low < y - WorldEnvironment.SIDE_COARSE_M ? low - WorldEnvironment.COARSE_UNDER_M : null;
+            if (low === null || low >= y - WorldEnvironment.SIDE_COARSE_M) return null;
+            // (no face goes down through a tube's box: over the ride's tunnel near its portal, where the land is cut to
+            // the box, the lowest land lay under the tube and a side road's face stood 11 m high across the tunnel just
+            // inside its mouth, a wall of ground coloured as the land; leg 2 km 0.6)
+            const fx = x + ox * 0.1, fz = z + oz * 0.1, foot = low - WorldEnvironment.COARSE_UNDER_M;
+            return this.tubeSpanned(fx, fz, foot, y) || this.sideTubeAt(fx, fz, foot, y - 0.5) ? null : foot;
         };
         // A side road's edge that faces the ride's wall across a cleft: its wall plan leaves the wall out there
         // (RoadMesh.wallPlan), after its runs are judged, so the wall's other runs stand as they did
@@ -3350,6 +3355,38 @@ class WorldEnvironment {
 
     // Half the ride's row spacing, by which a side tube's mouth in the ride's tube wall reaches past its verges
     static get MOUTH_ROW_M() { return 2; }
+
+    // Whether a tube's box (a tunnel's or a gallery's, or the box in front of a portal, up to the roof) holds (x, z) in
+    // plan between heights y0 and y1: a face hung from a road's edge down through it would stand in the tube
+    tubeSpanned(x, z, y0, y1) {
+        const m = WorldData.TILE_M;
+        for (const tube of this.tubesNear(`${Math.floor(x / m)},${Math.floor(z / m)}`)) {
+            const b = tube.box;
+            if (x < b[0] || x > b[2] || z < b[1] || z > b[3]) continue;
+            if (!tube.planes.every(([nx, nz, d]) => nx * x + nz * z + d >= 0)) continue;
+            const floor = tube.floor[0] + tube.floor[1] * x + tube.floor[2] * z;
+            if (floor < y1 && floor + (tube.roof || WorldRoute.ROOF_M) > y0) return true;
+        }
+        return false;
+    }
+
+    // Whether a side road's tunnel or gallery runs at (x, z) between heights y0 and y1, read from the importer's samples
+    // (its rows' tube bits, the road up ROOF_M from its height, out to its verge and the tube's wall): a chunk's own
+    // tubes are known to tubesNear only once the chunk is built (setSideTubes), so a face one of its roads hangs while
+    // it is built did not see the tube of another road of the same chunk (a side road's face across the tunnel of a
+    // side road under it, the Gotthard leg, 390 m off the ride by its start)
+    sideTubeAt(x, z, y0, y1) {
+        let found = false;
+        this.carriageways.each(x, z, RoadSurface.VERGE_M + RoadMesh.TUBE_WALL_M, r => {
+            if (found || r.road < 0 || r.y > y1 || r.y + WorldRoute.ROOF_M < y0) return;
+            const e = this.data.edgeSamples(r.road);
+            if (!e || !e.flags) return;
+            let best = Infinity, k = -1;
+            for (let i = 0; i < e.x.length; i++) { const d = (e.x[i] - x) ** 2 + (e.z[i] - z) ** 2; if (d < best) { best = d; k = i; } }
+            if (k >= 0 && e.flags[k] & 5) found = true;
+        }, true);
+        return found;
+    }
 
     // The room the chase camera keeps under a tube's roof besides its own margin (WorldCamera roofClearM, roofHardM):
     // the lights, fans and services hung from the roof, and the view's near plane (0.46 m from the eye at its corners)

@@ -12,7 +12,7 @@ import { describe, test, expect, beforeAll, afterAll } from '@jest/globals';
 import { loadGame } from '../helpers/load-game.js';
 import { stagesFor } from '../helpers/world-stages.js';
 import { diskFetch } from '../helpers/world-fetch.js';
-import { tunnelWindow, tunnelReport, TUNNEL_LIMITS } from '../helpers/world-tunnels.js';
+import { tunnelWindow, tunnelReport, TUNNEL_LIMITS, TUNNEL_OPEN } from '../helpers/world-tunnels.js';
 
 const game = loadGame(undefined, []);
 const { THREE } = game;
@@ -111,7 +111,8 @@ for (const stage of stagesFor()) describe(`the ${stage} stage: no land in a tube
     });
 
     test('no land in a tube, between its floor and its roof', () => {
-        if (found.inside > TUNNEL_LIMITS.inside) throw new Error(`${found.inside} places with land inside a tube:\n${list(found.list, 'inside')}`);
+        const open = (TUNNEL_OPEN[stage] || {}).inside;
+        if (open !== undefined ? found.inside !== open : found.inside > TUNNEL_LIMITS.inside) throw new Error(`${found.inside} places with land inside a tube:\n${list(found.list, 'inside')}`);
     });
 
     test('the ride\'s floor reaches its tube\'s walls', () => {

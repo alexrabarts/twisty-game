@@ -146,6 +146,30 @@ export function tunnelWindow(game, env, store, at, { nearM = 300, stepM = 1, acr
         // (in cells of 100 m: its triangles are 100 m and more across)
         land.push(gridOf(mesh, [[0, mesh.geometry.index.count]], 100));
     }
+    // The ground every road lays (its works' group 0: slopes, the ground under a verge, the faces hung from an edge),
+    // upright faces too, as points on each triangle every half metre, hashed by 4 m cells: coloured as the land, a face
+    // of it across a tube is a wall of land in the tube (leg 2 km 0.6: a side road's face 11 m high just inside a portal)
+    const grounds = [];
+    const groundPoints = (mesh, start, count) => {
+        const id = `p:${mesh.geometry.uuid}:${start}`;
+        used.add(id);
+        if (store.grids.has(id)) return store.grids.get(id);
+        mesh.updateMatrixWorld(true);
+        const pos = mesh.geometry.attributes.position, index = mesh.geometry.index, hash = new Map(), owners = mesh.geometry.userData.owners;
+        for (let i = start; i + 2 < start + count; i += 3) {
+            const owner = owners ? `e${owners[i / 3]}` : 'ride';
+            const t = [0, 1, 2].map(k => v.fromBufferAttribute(pos, index ? index.getX(i + k) : i + k).applyMatrix4(mesh.matrixWorld).toArray());
+            const n = Math.max(1, Math.ceil(Math.max(...[[0, 1], [1, 2], [2, 0]].map(([a, b]) => Math.hypot(t[a][0] - t[b][0], t[a][1] - t[b][1], t[a][2] - t[b][2]))) / 0.5));
+            for (let a = 0; a <= n; a++) for (let b = 0; a + b <= n; b++) {
+                const u = a / n, w = b / n, p = [0, 1, 2].map(c => t[0][c] * (1 - u - w) + t[1][c] * u + t[2][c] * w);
+                p.owner = owner;
+                const h = Math.floor(p[0] / 4) * 65536 + Math.floor(p[2] / 4);
+                (hash.get(h) || hash.set(h, []).get(h)).push(p);
+            }
+        }
+        store.grids.set(id, hash);
+        return hash;
+    };
     // The floors (every ribbon and every road's works) and the upright structure faces (the works' concrete and stone)
     const floors = [], uprights = [];
     for (const group of [...env.roadMeshes.values(), ...env.sideMeshes.values()]) {
@@ -154,9 +178,11 @@ export function tunnelWindow(game, env, store, at, { nearM = 300, stepM = 1, acr
             const whole = [[0, o.geometry.index ? o.geometry.index.count : o.geometry.attributes.position.count]];
             if (/road-(ribbon|side)/.test(o.name)) floors.push(gridOf(o, whole));
             else { floors.push(gridOf(o, whole)); uprights.push(facesOf(o, whole)); }
+            if (o.name === 'road-works') for (const g of o.geometry.groups) if (g.materialIndex === 0) grounds.push(groundPoints(o, g.start, g.count));
         });
     }
     keep();
+    const groundNear = (x0, z0, x1, z1) => { const out = []; for (const g of grounds) for (let cx = Math.floor(x0 / 4); cx <= Math.floor(x1 / 4); cx++) for (let cz = Math.floor(z0 / 4); cz <= Math.floor(z1 / 4); cz++) for (const p of g.get(cx * 65536 + cz) || []) out.push(p); return out; };
     const landYs = (x, z) => { const out = []; for (const g of land) g.ys(x, z, out); return out; };
     const floorAt = (x, z, y) => { const out = []; for (const g of floors) g.ys(x, z, out); return out.some(h => Math.abs(h - y) <= 0.15); };
     const fronted = (x, z, y0, y1) => covers(uprights.flatMap(f => f.spans(x, z)), y0, y1);
@@ -236,6 +262,20 @@ export function tunnelWindow(game, env, store, at, { nearM = 300, stepM = 1, acr
                     }
                 }
             }
+            // and the ground a road lays standing in the box (the box from its floor up to its roof, inside its walls)
+            if (!a.mouth) {
+                const xs = [a.l[0], a.r[0], b.l[0], b.r[0]], zs = [a.l[2], a.r[2], b.l[2], b.r[2]];
+                const mx = [(a.l[0] + a.r[0]) / 2, (a.l[2] + a.r[2]) / 2], my = [(b.l[0] + b.r[0]) / 2, (b.l[2] + b.r[2]) / 2], ax = my[0] - mx[0], az = my[1] - mx[1], al = ax * ax + az * az;
+                for (const p of al > 1e-6 ? groundNear(Math.min(...xs), Math.min(...zs), Math.max(...xs), Math.max(...zs)) : []) {
+                    const t = ((p[0] - mx[0]) * ax + (p[2] - mx[1]) * az) / al;
+                    if (t < 0 || t > 1) continue;
+                    const L = lerp3(a.l, b.l, t), R = lerp3(a.r, b.r, t), rx = R[0] - L[0], rz = R[2] - L[2], rl = rx * rx + rz * rz;
+                    const q = ((p[0] - L[0]) * rx + (p[2] - L[2]) * rz) / rl;
+                    if (q < 0.02 || q > 0.98) continue;
+                    const floor = L[1] + (R[1] - L[1]) * q, roof = floor + (Number.isFinite(a.roof) ? a.roof : roofM);
+                    if (p[1] > floor + 0.3 && p[1] < roof - 0.3) fault(key, 'inside', { x: r2(p[0]), z: r2(p[2]), s: a.s === null ? null : r2(a.s + t * (b.s - a.s)), overFloorM: r2(p[1] - floor), m: r2(Math.min(p[1] - floor, roof - p[1])), what: `ground of ${p.owner}` });
+                }
+            }
             // A portal at either end of the segment where the next row is open
             for (const [end, step] of [[k, -1], [k + 1, 1]]) {
                 // (a road whose drawn rows end at its tube's end has its portal there, unless it goes on as a tube)
@@ -311,3 +351,7 @@ export function tunnelReport(store) {
 
 // What a shipped world may still show: none of any kind
 export const TUNNEL_LIMITS = { inside: 0, floor: 0, mouth: 0, face: 0 };
+// The ground a road lays standing in a tube, read since 2026-11-28: what no rule closes yet, by stage, an exact count
+// that may only fall. Leg 3: side road 708's ground in the ride's gallery from s 5 710 (669 places, 2.9 m over its
+// floor) and the ride's ground in side road 718's tunnel (21 places)
+export const TUNNEL_OPEN = Object.freeze({ 'andermatt-goeschenen': { inside: 690 } });
