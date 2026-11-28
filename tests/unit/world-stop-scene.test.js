@@ -204,6 +204,34 @@ describe('the scene', () => {
         }
     });
 
+    // The owner at the lookout over Airolo: "this view should be a bit higher so we can see the town below". Where the land
+    // falls away in the view, the eye stands higher and looks down on the town in the valley, the bikes still low
+    test('a view down a valley stands higher and holds the town below in sight, the bikes low in the picture', () => {
+        // (the land falls 400 m from 60 m past the bays on +x, to a town 1.5 km out)
+        const valley = (x, z) => (x < 60 ? 100 : x < 600 ? 100 - (x - 60) * 0.74 : -300);
+        const houses = [];
+        for (let i = 0; i < 30; i++) houses.push({ x: 1500 + (i % 6) * 30, z: 510 + Math.floor(i / 6) * 30 - 60 });
+        const plan = EndShot.bays(stop, 5, { x: 1, z: 0 });
+        const hold = EndShot.compose(stop, plan.bays, valley, 16 / 9, null, 0.76, houses);
+        expect(hold.town).toBeTruthy();
+        expect(hold.town.houses).toBeGreaterThanOrEqual(EndShot.TUNING.townLeast);
+        // (higher than a level view stands, and pitched down)
+        expect(hold.eye.y - 100).toBeGreaterThanOrEqual(EndShot.TUNING.valleyHeights[0] - 1e-9);
+        expect(hold.pitch).toBeLessThan(0);
+        expect(EndShot.townSeen(hold.eye, hold.yaw, hold.pitch, hold.fov, 16 / 9, EndShot.valleyOf({ x: 1, z: 0 }, { x: 20, z: 510 }, 100, valley, houses), valley)).toBe(true);
+        let sum = 0, n = 0;
+        for (const b of plan.bays) for (const up of [0, 1.2]) {
+            const q = EndShot.project(hold.eye, hold.yaw, hold.pitch, hold.fov, 16 / 9, { x: b.x, y: 100 + up, z: b.z });
+            expect(Math.abs(q.x)).toBeLessThanOrEqual(1);
+            expect(q.y).toBeGreaterThanOrEqual(-0.76);
+            sum += q.y; n++;
+        }
+        expect(sum / n).toBeLessThanOrEqual(EndShot.TUNING.groupMostY + 0.05);
+        // On level land there is no valley, and the view is the level one
+        expect(EndShot.valleyOf({ x: 1, z: 0 }, { x: 20, z: 510 }, 100, flat, houses)).toBeNull();
+        expect(EndShot.compose(stop, plan.bays, flat, 16 / 9, null, 0.76, houses).town).toBeNull();
+    });
+
     test('a view blocked by a wall in front of the bays is not taken', () => {
         const plan = EndShot.bays(stop, 4, { x: 1, z: 0 });
         const open = EndShot.compose(stop, plan.bays, flat);

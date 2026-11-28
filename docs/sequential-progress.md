@@ -1532,3 +1532,12 @@ The owner: "i see a seam in the terrain in the distance there...can we build a t
 - The owner: "let's have an easter egg if you stop here - i want to be able to get a drone out and fly it. the camera should be able to flip between line of sight and the onboard camera view". `js/world/drone.js`: a bike standing in the car park (`egg: 'drone'`) shows a hint once a ride; the drone goes out, the rider stands with a controller, the ride and its clock go on, and the ride keeps no time (`.agent/system/ui.md`, "The drone").
 - Proofs: `tests/unit/world-drone.test.js` (5 tests: the spot, a wall crash and relaunch, home past its range, home on a low battery and down on a flat one, the model), `world-drone-shots --world susten-gadmen --gpu` (no failures; pictures in `~/Library/Caches/twisty-world/drone-shots`), `modal-check` passes, the 20 test files that read `index.html` or `main.js` pass (416 tests).
 - Not done: the model is built in code (444 triangles), not in Blender with the `model-build` rounds.
+
+## A view down a valley stands higher, and the town is drawn
+
+- The ask (the owner, 2026-11-28, at the end of leg 1): "this view should be a bit higher so we can see the town below". In the same picture a pale disc floated over the rider's helmet.
+- The disc: the vape puff of the three riders who vape, drawn as a sphere with no light, which reads as a flat disc with a hard edge. It is now a sprite with a soft round edge, fainter (`StopScene.puffTexture`).
+- The rule (`EndShot.valleyOf`, `townSeen`, `skyY`): where the land falls 60 m or more in the view, the held view looks down on the town in the valley from higher up, keeps the skyline and the sky, and keeps the bikes low. Elsewhere it is the level view as before. The town is found from the world's buildings and must be in sight, checked against the land.
+- The town was never drawn: the scenery draws houses within 450 m of the bike, and Airolo is 2.3 km down. The held view now draws the town's houses past 500 m as plain houses, faded in, with their program compiled at load.
+- Leg 1 (the lookout over Airolo): 25 m over the bays, 72 degrees across, 11.5 degrees down, Airolo's 80 houses over the rail. Gotthard north: the valley floor, 6 to 9 m up. The other 8 ends: no town in sight down a valley; level as before.
+- Pictures: `~/Library/Caches/twisty-world/end-shots/higher/before/` and `higher/after/`, the held view and the card of all 10 ends.

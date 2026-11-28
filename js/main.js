@@ -925,6 +925,14 @@ class Game {
             puff.frustumCulled = false;
             this.scene.add(puff);
         }
+        // (and the far town a held view down a valley draws, in the world's group as it is: its program, compiled on the
+        // scene's first frame, made a frame of 218 ms)
+        const town = typeof StopScene !== 'undefined' && StopScene.townMesh && this.environment.group ? StopScene.townMesh([{ x: 0, z: 0, w: 8, d: 10, h: 7, heading: 0 }], () => -10000, { x: 1e6, z: 1e6 }) : null;
+        if (town) {
+            town.frustumCulled = false;
+            this.environment.group.add(town);
+            if (typeof LandShade !== 'undefined') LandShade.hazeTree(town);
+        }
         // (with the headlight on and off: a program counts the lights in view, and the ride switches it with the look)
         const light = this.headlight, was = light ? light.visible : null;
         try {
@@ -938,6 +946,10 @@ class Game {
             parent.remove(group);
             // (its material is kept, not disposed: disposed, its program went with it)
             if (puff) this.scene.remove(puff);
+            if (town) {
+                this.environment.group.remove(town);
+                town.geometry.dispose();
+            }
             group.traverse((o) => {
                 if (o.isInstancedMesh) o.dispose();
                 else if (o.isMesh) o.geometry.dispose();
@@ -3586,9 +3598,20 @@ class Game {
         const h = window.innerHeight || 1;
         const visible = 1 - 2 * StopScene.barPx(window.innerWidth, h) / h;
         const faces = (x, z, reach) => env.cameraFaces(x, z, reach);
-        this.stopScene = new StopScene({ stop, route, riders, ground: groundY, camera: from, aspect: cam.aspect, faces, visible });
+        this.stopScene = new StopScene({ stop, route, riders, ground: groundY, camera: from, aspect: cam.aspect, faces, visible, houses: env.data && env.data.buildings });
         // (the riders that did not keep up arrive later, out of the shot)
         for (const r of this.stopScene.left) if (r.bike.bikeGroup) r.bike.bikeGroup.visible = false;
+        // (the town down the valley the held view looks on, past the scenery's own reach: StopScene.townMesh)
+        const town = this.stopScene.hold.town;
+        if (town && town.list && town.list.length && env.group) {
+            const bays = this.stopScene.riders.map(r => r.slot);
+            const from = { x: bays.reduce((n, b) => n + b.x, 0) / bays.length, z: bays.reduce((n, b) => n + b.z, 0) / bays.length };
+            this.stopScene.town = StopScene.townMesh(town.list, (x, z) => ground.groundY(x, z, null), from);
+            if (this.stopScene.town) {
+                env.group.add(this.stopScene.town);
+                if (typeof LandShade !== 'undefined') LandShade.hazeTree(this.stopScene.town);
+            }
+        }
         this.stopScene.raiseShare = 0;
         this.raiseShot();
         this.stopScene.view = { bars: StopScene.showBars(document), puffs: [] };
@@ -3672,6 +3695,12 @@ class Game {
             if (r.stood && r.actions.includes('vape')) StopScene.puff(this.scene, scene, r, dt);
         });
         StopScene.stepPuffs(this.scene, scene, dt);
+        if (scene.town) {
+            const share = Math.min(1, scene.t / StopScene.TOWN_IN_S);
+            scene.town.material.opacity = share;
+            scene.town.material.transparent = share < 1;
+            scene.town.material.depthWrite = share >= 1;
+        }
         // The engine: the bike's pace on a light throttle, idling once it stops, off once the rider gets off
         const player = scene.riders[scene.playerIndex], at = frame.riders[scene.playerIndex];
         if (this.soundManager && player && at) {
@@ -3774,6 +3803,11 @@ class Game {
         window.removeEventListener('keydown', scene.view.skip, true);
         if (this.renderer) this.renderer.domElement.removeEventListener('pointerdown', scene.view.skip);
         StopScene.clearPuffs(this.scene, scene);
+        if (scene.town) {
+            if (scene.town.parent) scene.town.parent.remove(scene.town);
+            scene.town.geometry.dispose();
+            scene.town.material.dispose();
+        }
         // (every rider back on the bike, as built: the restart and the next ride find them seated)
         scene.riders.forEach(r => StopScene.seat(r));
         StopScene.hideBars(scene.view.bars);

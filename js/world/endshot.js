@@ -66,6 +66,20 @@ class EndShot {
             distances: [12, 15, 19, 24, 30, 38], heights: [3, 4.5, 6.5, 9], shifts: [0, 5, -5, 10, -10],
             // The eye keeps eyeClearM over the land when composed; the card waits holdFirstS on the held view
             eyeClearM: 2, holdFirstS: 1,
+            // A view down a valley (the owner at the lookout over Airolo, 2026-11-28: "this view should be a bit higher
+            // so we can see the town below"): where the land in the view falls valleyDropM or more under the bays within
+            // valleyReachM, the eye stands at one of valleyHeights over the bays (the lowest that works), valleyDistances back,
+            // looking through the longest lens of valleyHfovs that frames it
+            // (further: from behind the bays it must see over the lookout's edge down to the town) and pitches down
+            // (to valleyPitchLeastDeg) so the town in it (townLeast houses or more, townBelowM under the bays, within
+            // townConeDeg of the view and townReachM, gathered round its busiest place within townM) stands at townY of
+            // the picture (townX to the side away from the bikes, or where the bikes' framing turns it), in sight from the eye
+            // (townSeen of its houses, the land read every 8 m), or the valley's floor; the skyline straight ahead stays
+            // in the picture, no higher than skyMostY, with sky over it: looked straight down the hillside, the view lost
+            // the sky and the far valley
+            // where there is no town; the bikes stay in the lower part of the picture, their middle under groupMostY
+            valleyDropM: 60, valleyReachM: 4000, valleyHeights: [6, 9, 13, 18, 25, 35], valleyDistances: [12, 15, 19, 24, 30, 38, 48, 60], valleyHfovs: [60, 72], valleyPitchLeastDeg: -30,
+            townLeast: 5, townBelowM: 40, townConeDeg: 35, townReachM: 5000, townM: 400, townYs: [0.05, -0.15, -0.35, -0.5], townX: 0.2, skyMostY: 0.72, townSeen: 0.4, groupMostY: -0.15,
             // The ride is planned at frameHz for at most mostS
             frameHz: 60, mostS: 120
         }));
@@ -516,11 +530,78 @@ class EndShot {
         return Math.min(most, (2 * Math.atan(Math.tan((hfov * r) / 2) / Math.max(0.2, aspect || 16 / 9))) / r);
     }
 
-    // The composed view over the bays: {eye: {x, y, z}, yaw, pitch, roll, fov, side (-1 the group on the left), view}
-    // or null where nothing fits. `bays` [{x, z, heading}] (the bikes parked there, each rider standing STAND_M to its
+    // The valley the view looks down from `at` ({x, z}, the land y0 there) along `dir`, or null where the land does not
+    // fall valleyDropM in it: {target: {x, y, z} (the town's middle, or the valley's floor), houses: [{x, y, z}] (the
+    // town's, or none)}. `houses` [{x, z}] the world's buildings
+    static valleyOf(dir, at, y0, ground, houses = null) {
+        const T = EndShot.TUNING, r = Math.PI / 180;
+        let low = Infinity, lowD = 0;
+        for (let d = 60; d <= T.valleyReachM; d *= 1.08) {
+            const g = ground(at.x + dir.x * d, at.z + dir.z * d);
+            if (Number.isFinite(g) && g < low) { low = g; lowD = d; }
+        }
+        if (!(y0 - low >= T.valleyDropM)) return null;
+        const cone = Math.cos(T.townConeDeg * r), near = [];
+        for (const h of houses || []) {
+            const dx = h.x - at.x, dz = h.z - at.z, d = Math.hypot(dx, dz);
+            if (d < 150 || d > T.townReachM || (dx * dir.x + dz * dir.z) / d < cone) continue;
+            const g = ground(h.x, h.z);
+            if (Number.isFinite(g) && g <= y0 - T.townBelowM) near.push({ x: h.x, y: g + 4, z: h.z, house: h });
+        }
+        if (near.length >= T.townLeast) {
+            // (round its busiest place: the house with the most others within townM)
+            let best = null, most = -1;
+            const step = Math.max(1, Math.floor(near.length / 200));
+            for (let i = 0; i < near.length; i += step) {
+                let n = 0;
+                for (const o of near) if (Math.abs(o.x - near[i].x) < T.townM && Math.abs(o.z - near[i].z) < T.townM) n++;
+                if (n > most) { most = n; best = near[i]; }
+            }
+            const town = near.filter(o => Math.hypot(o.x - best.x, o.z - best.z) < T.townM);
+            if (town.length >= T.townLeast) {
+                const c = town.reduce((m, o) => ({ x: m.x + o.x / town.length, y: m.y + o.y / town.length, z: m.z + o.z / town.length }), { x: 0, y: 0, z: 0 });
+                return { target: c, houses: town };
+            }
+        }
+        return { target: { x: at.x + dir.x * lowD, y: low + 2, z: at.z + dir.z * lowD }, houses: [] };
+    }
+
+    // Where the skyline straight ahead of `eye` (turned yaw, pitch, a vertical lens of vfov degrees) stands in the picture
+    // (-1 the foot, 1 the top): the highest the land rises over the eye's level along the way it looks, to 8 km
+    static skyY(eye, yaw, pitch, vfov, ground) {
+        const r = Math.PI / 180, fx = -Math.sin(yaw), fz = -Math.cos(yaw);
+        let sky = -Math.PI / 2;
+        for (let d = 40; d < 8000; d *= 1.1) {
+            const g = ground(eye.x + fx * d, eye.z + fz * d);
+            if (Number.isFinite(g)) sky = Math.max(sky, Math.atan2(g - eye.y, d));
+        }
+        return Math.tan(sky - pitch) / Math.tan((vfov * r) / 2);
+    }
+
+    // The town of a valley view in sight from `eye` turned yaw, pitch: its middle in the picture, the land not over the
+    // line to it, and townSeen of its houses (twelve of them, read) in the picture and in sight
+    static townSeen(eye, yaw, pitch, vfov, aspect, valley, ground) {
+        const T = EndShot.TUNING;
+        const q = EndShot.project(eye, yaw, pitch, vfov, aspect, valley.target);
+        if (!q || Math.abs(q.x) > 0.85 || q.y < -0.5 || q.y > 0.5) return false;
+        if (EndShot.landShare(ground, eye, valley.target, 0.5, 60, 8) < 1) return false;
+        if (!valley.houses.length) return true;
+        const step = Math.max(1, Math.floor(valley.houses.length / 12));
+        let read = 0, seen = 0;
+        for (let i = 0; i < valley.houses.length; i += step) {
+            const h = valley.houses[i], p = EndShot.project(eye, yaw, pitch, vfov, aspect, h);
+            read++;
+            if (p && Math.abs(p.x) <= 1 && Math.abs(p.y) <= 0.76 && EndShot.landShare(ground, eye, h, 0.3, 20, 8) >= 1) seen++;
+        }
+        return seen >= T.townSeen * read;
+    }
+
+    // The composed view over the bays: {eye: {x, y, z}, yaw, pitch, roll, fov, side (-1 the group on the left), view,
+    // town (the valley's target, where it looks down one)} or null where nothing fits. A view down a valley is looked
+    // for first (EndShot.valleyOf: higher, pitched down to the town below), then the level view. `bays` [{x, z, heading}] (the bikes parked there, each rider standing STAND_M to its
     // left); `ground(x, z)`; `faces` the walls and houses near ({data, count}); `visible` the share of the picture's
     // height between the bars
-    static compose(stop, bays, ground, aspect = 16 / 9, faces = null, visible = 0.76) {
+    static compose(stop, bays, ground, aspect = 16 / 9, faces = null, visible = 0.76, houses = null) {
         const T = EndShot.TUNING, r = Math.PI / 180;
         const hand = EndShot.SHOTS[stop.id] || stop.shot;
         const vfov = EndShot.vfovOf(T.hfov, aspect);
@@ -546,42 +627,73 @@ class EndShot {
             sights.push({ x: b.x, y: y + 0.9, z: b.z }, { x: rx, y: yOf(rx, rz) + 1.6, z: rz });
         }
         const edgeY = visible - 0.04;
-        const bend = Math.atan(Math.abs(T.groupY) * Math.tan((vfov * r) / 2));
-        for (const dir of EndShot.views(stop, { x: mx, z: mz }, ground)) {
+        const bendOf = v => Math.atan(Math.abs(T.groupY) * Math.tan((v * r) / 2));
+        const views = EndShot.views(stop, { x: mx, z: mz }, ground);
+        // (down a valley first, then level)
+        const tries = [];
+        for (const dir of views) {
+            const valley = EndShot.valleyOf(dir, { x: mx, z: mz }, my, ground, houses);
+            if (!valley) continue;
+            // (looked at along the line from the bays to the town, which may stand off the way the land opens)
+            const tx = valley.target.x - mx, tz = valley.target.z - mz, tl = Math.hypot(tx, tz) || 1;
+            for (const hfov of T.valleyHfovs) tries.push({ dir: { x: tx / tl, z: tz / tl }, valley, hfov });
+        }
+        for (const dir of views) tries.push({ dir, valley: null });
+        // (down a valley the eye stands across from the line to the town by as much as puts the bikes sideX to one
+        // side of the picture and the town townX to the other)
+        const apart = Math.atan((T.sideX + T.townX) * Math.tan((T.valleyHfovs[0] * r) / 2));
+        const valleyShifts = D => [1, -1, 0.6, -0.6, 0].map(k => k * D * Math.tan(apart));
+        for (const { dir, valley, hfov } of tries) {
+            // (down a valley through the longest of valleyHfovs that frames it: the town and the bikes both larger)
+            const lens = valley ? EndShot.vfovOf(hfov, aspect) : vfov;
             const sx = dir.z, sz = -dir.x;
             for (const side of [-1, 1]) {
-                for (const D of T.distances) for (const H of T.heights) for (const S of T.shifts) {
+                for (const H of valley ? T.valleyHeights : [null]) for (const D of valley ? T.valleyDistances : T.distances) for (const h of valley ? [H] : T.heights) for (const S of valley ? valleyShifts(D) : T.shifts) {
                     const ex = mx - dir.x * D + sx * S, ez = mz - dir.z * D + sz * S;
                     const under = ground(ex, ez);
-                    const eye = { x: ex, y: my + H, z: ez };
+                    const eye = { x: ex, y: my + h, z: ez };
                     if (Number.isFinite(under) && eye.y < under + T.eyeClearM) continue;
                     // (turned so the bays' middle is sideX to `side` of the picture's middle, pitched so it is at groupY)
                     const toward = Math.atan2(-(mx - ex), -(mz - ez));
-                    const off = Math.atan(T.sideX * Math.tan((vfov * r) / 2) * aspect);
-                    const yaw = toward + side * off;
-                    const ahead = Math.atan2(-dir.x, -dir.z);
-                    if (Math.abs(EndShot.turn(ahead, yaw)) > T.yawMostDeg * r) continue;
-                    const flat = Math.hypot(mx - ex, mz - ez);
-                    const pitch = Math.atan2(my + 0.6 - eye.y, flat) + bend;
-                    if (pitch < T.pitchLeastDeg * r || pitch > T.pitchMostDeg * r) continue;
-                    let fits = true;
-                    for (const p of points) {
-                        const q = EndShot.project(eye, yaw, pitch, vfov, aspect, p);
-                        if (!q || Math.abs(q.x) > 0.95 || q.y < -edgeY || q.y > 0.1) { fits = false; break; }
-                        // (and clear of the middle, where the card comes up)
-                        if (q.x * side < -0.08) { fits = false; break; }
+                    const off = Math.atan(T.sideX * Math.tan((lens * r) / 2) * aspect);
+                    // (down a valley also turned to the town, which then stands townX to the other side of the middle)
+                    const yaws = [toward + side * off];
+                    if (valley) yaws.push(Math.atan2(-(valley.target.x - ex), -(valley.target.z - ez)) - side * Math.atan(T.townX * Math.tan((lens * r) / 2) * aspect));
+                    for (const yaw of yaws) {
+                        const ahead = Math.atan2(-dir.x, -dir.z);
+                        if (Math.abs(EndShot.turn(ahead, yaw)) > T.yawMostDeg * r) continue;
+                        const flat = Math.hypot(mx - ex, mz - ez);
+                        // (level: the bays' middle at groupY; down a valley: its town at townY, the bikes under it)
+                        for (const townY of valley ? T.townYs : [null]) {
+                        let pitch = Math.atan2(my + 0.6 - eye.y, flat) + bendOf(lens);
+                        if (valley) {
+                            const t = valley.target;
+                            pitch = Math.atan2(t.y - eye.y, Math.hypot(t.x - ex, t.z - ez)) - Math.atan(townY * Math.tan((lens * r) / 2));
+                        }
+                        if (pitch < (valley ? T.valleyPitchLeastDeg : T.pitchLeastDeg) * r || pitch > T.pitchMostDeg * r) continue;
+                        if (valley && EndShot.skyY(eye, yaw, pitch, lens, ground) > T.skyMostY) continue;
+                        let fits = true, sum = 0;
+                        for (const p of points) {
+                            const q = EndShot.project(eye, yaw, pitch, lens, aspect, p);
+                            if (!q || Math.abs(q.x) > 0.95 || q.y < -edgeY || q.y > 0.1) { fits = false; break; }
+                            // (and clear of the middle, where the card comes up)
+                            if (q.x * side < -0.08) { fits = false; break; }
+                            sum += q.y;
+                        }
+                        if (!fits || (valley && sum / points.length > T.groupMostY)) continue;
+                        if (valley && !EndShot.townSeen(eye, yaw, pitch, lens, aspect, valley, ground)) continue;
+                        let clear = true;
+                        for (const p of sights) {
+                            if (EndShot.faceShare(faces, eye, p, 0) < 1 || EndShot.landShare(ground, eye, p, 0.05, 1.5) < 1) { clear = false; break; }
+                        }
+                        if (!clear) continue;
+                        // (the view in front: nothing stands in it for 80 m)
+                        const cp = Math.cos(pitch);
+                        const far = { x: eye.x - Math.sin(yaw) * cp * 80, y: eye.y + Math.sin(Math.max(pitch, -2 * r)) * 80, z: eye.z - Math.cos(yaw) * cp * 80 };
+                        if (EndShot.faceShare(faces, eye, far, 0) < 1 || EndShot.landShare(ground, eye, far, 0.3, 0, 2) < 0.5) continue;
+                        return { eye, yaw, pitch, roll: 0, fov: lens, side, view: dir, hand: false, hfov: valley ? hfov : T.hfov, town: valley ? { ...valley.target, houses: valley.houses.length, list: valley.houses.map(o => o.house) } : null };
+                        }
                     }
-                    if (!fits) continue;
-                    let clear = true;
-                    for (const p of sights) {
-                        if (EndShot.faceShare(faces, eye, p, 0) < 1 || EndShot.landShare(ground, eye, p, 0.05, 1.5) < 1) { clear = false; break; }
-                    }
-                    if (!clear) continue;
-                    // (the view in front: nothing stands in it for 80 m)
-                    const cp = Math.cos(pitch);
-                    const far = { x: eye.x - Math.sin(yaw) * cp * 80, y: eye.y + Math.sin(Math.max(pitch, -2 * r)) * 80, z: eye.z - Math.cos(yaw) * cp * 80 };
-                    if (EndShot.faceShare(faces, eye, far, 0) < 1 || EndShot.landShare(ground, eye, far, 0.3, 0, 2) < 0.5) continue;
-                    return { eye, yaw, pitch, roll: 0, fov: vfov, side, view: dir, hand: false };
                 }
             }
         }

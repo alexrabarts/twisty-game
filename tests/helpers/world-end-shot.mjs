@@ -65,7 +65,7 @@ export async function endShot(id, group = 'kept') {
         riders.push({ bike: { character: { id: `crew${k}` } }, s: line - g, player: false, at: q, speed: 15, yaw: q.heading, lean: 0 });
     });
     const t0 = Date.now();
-    const scene = new StopScene({ stop, route, riders, ground, camera, faces, aspect: 16 / 9 });
+    const scene = new StopScene({ stop, route, riders, ground, camera, faces, aspect: 16 / 9, houses: env.data.buildings });
     // (what stands under the camera: the ground read near the player's place on the ride, or the land's own tiles, the
     // lower of the two. On the way down to Göschenen's car park the camera passes 6 m under the ride's deck, which the
     // ground reads there for two frames: under a bridge, not in the land)
@@ -130,6 +130,16 @@ export async function endShot(id, group = 'kept') {
         const e = end[k], off = Math.hypot(e.x - r.slot.x, e.z - r.slot.z), turn = Math.abs(EndShot.turn(e.heading, r.slot.heading)) * 180 / Math.PI;
         if (!e.parked || off > 0.2 || turn > 3 || e.speed > 0) problems.push(`rider ${k}${r.player ? ' (the player)' : ''} is ${off.toFixed(2)} m off its bay, turned ${turn.toFixed(1)} degrees from it, ${e.parked ? 'parked' : 'not parked'}`);
     });
+    // A view down a valley with a town in it is held on the town (the owner: "this view should be a bit higher so we can
+    // see the town below")
+    const bays = scene.riders.map(r => r.slot);
+    const mid = { x: bays.reduce((n, b) => n + b.x, 0) / bays.length, z: bays.reduce((n, b) => n + b.z, 0) / bays.length };
+    const atStop = (x, z) => ground(x, z, stop.s);
+    // (a town that can be seen from 15 m over the bays: the land not over the line to its middle)
+    const over = { x: mid.x, y: atStop(mid.x, mid.z) + 15, z: mid.z };
+    const towns = EndShot.views(stop, mid, atStop).map(dir => EndShot.valleyOf(dir, mid, atStop(mid.x, mid.z), atStop, env.data.buildings))
+        .filter(v => v && v.houses.length && EndShot.landShare(atStop, over, v.target, 0.5, 60, 8) >= 1);
+    if (towns.length && !(scene.hold.town && scene.hold.town.houses > 0)) problems.push(`a town lies down the valley in sight of the stop (${towns[0].houses.length} houses), and the held view is not on it`);
     // Who came in: every rider kept up, none of the far ones
     const came = scene.riders.length - 1;
     const want = Math.min(gaps.length && group === 'kept' ? gaps.length : 0, scene.plan.bays.length - 1);
@@ -138,7 +148,7 @@ export async function endShot(id, group = 'kept') {
         stage: id, group, stop: stop.id, kind: stop.kind, composed: scene.composed, fallback: scene.plan.fallback, aisle: scene.plan.aisle, facing: scene.plan.facing,
         riders: scene.riders.length, bays: scene.plan.bays.length, planMs, frames, playerParkedS: round(scene.playerParkedS), allParkedS: round(scene.allParkedS),
         craneAt: round(scene.craneAt), flyS: round(scene.flyS), cardAt: round(scene.cardAt), arcM: scene.camera.arcM,
-        hold: { eye: [round(scene.hold.eye.x), round(scene.hold.eye.y), round(scene.hold.eye.z)], yawDeg: round(scene.hold.yaw * 180 / Math.PI), pitchDeg: round(scene.hold.pitch * 180 / Math.PI), side: scene.hold.side },
+        hold: { eye: [round(scene.hold.eye.x), round(scene.hold.eye.y), round(scene.hold.eye.z)], overBaysM: round(scene.hold.eye.y - ground(scene.riders.reduce((n, r) => n + r.slot.x, 0) / scene.riders.length, scene.riders.reduce((n, r) => n + r.slot.z, 0) / scene.riders.length, stop.s)), yawDeg: round(scene.hold.yaw * 180 / Math.PI), pitchDeg: round(scene.hold.pitch * 180 / Math.PI), side: scene.hold.side, town: scene.hold.town ? { houses: scene.hold.town.houses, at: [round(scene.hold.town.x), round(scene.hold.town.y), round(scene.hold.town.z)] } : null },
         worst: { ...worst, moveM: round(worst.moveM, 3), turnDeg: round(worst.turnDeg, 3), lowestM: round(worst.lowestM) }, problems
     };
 }

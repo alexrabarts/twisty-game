@@ -217,11 +217,81 @@ class StopScene {
     static ease(u) { return EndShot.ease(u); }
     static turn(a, b) { return EndShot.turn(a, b); }
 
-    // A puff of vapour, its own material so it fades on its own (Game.prewarmWorldScenery draws one at load: its
-    // program compiled at the first puff, 80 ms into the held shot)
+    // The town down a valley in the held view, as plain houses (walls and a gabled roof each, from the buildings' own
+    // footprints and heights), for the ones further than TOWN_FROM_M from the bays: the scenery draws a world's houses
+    // within Scenery.BUILDING_REACH_M (450 m) of the bike, and the town over Airolo, 2.3 km down from the lookout, was
+    // not drawn at all. One mesh, no shadow, in the world's group so it takes the haze
+    static get TOWN_FROM_M() { return 500; }
+    static get TOWN_IN_S() { return 3; }
+    static townGeometry(houses, groundY, from) {
+        const pos = [], col = [];
+        const push = (p, c) => { pos.push(p[0], p[1], p[2]); col.push(c[0], c[1], c[2]); };
+        const quad = (a, b, c, d, k) => { push(a, k); push(b, k); push(c, k); push(a, k); push(c, k); push(d, k); };
+        for (const h of houses) {
+            if (!h || Math.hypot(h.x - from.x, h.z - from.z) < StopScene.TOWN_FROM_M) continue;
+            const g = groundY(h.x, h.z);
+            if (!Number.isFinite(g)) continue;
+            const w = Math.max(5, h.w || 8) / 2, d = Math.max(5, h.d || 10) / 2, top = g + Math.max(4, h.h || 7), ridge = top + w * 0.7;
+            const c = Math.cos(h.heading || 0), s = Math.sin(h.heading || 0);
+            const at = (u, v, y) => [h.x + u * c + v * s, y, h.z - u * s + v * c];
+            const k = Math.abs(Math.sin(h.x * 12.9898 + h.z * 78.233)) % 1;
+            // (plaster and timber walls, slate and tile roofs, a little lighter than they are near: from 2 km in the haze,
+            // white walls stood out as bright as snow and the roofs as black)
+            const wall = k > 0.3 ? [0.66 + 0.06 * k, 0.63 + 0.05 * k, 0.57 + 0.05 * k] : [0.46, 0.36, 0.27], roof = k > 0.55 ? [0.45, 0.33, 0.27] : [0.42, 0.42, 0.44];
+            const foot = g - 2;
+            const A = at(-w, -d, foot), B = at(w, -d, foot), C = at(w, d, foot), D = at(-w, d, foot);
+            const a = at(-w, -d, top), b = at(w, -d, top), c2 = at(w, d, top), d2 = at(-w, d, top);
+            quad(A, B, b, a, wall); quad(B, C, c2, b, wall); quad(C, D, d2, c2, wall); quad(D, A, a, d2, wall);
+            const r0 = at(0, -d, ridge), r1 = at(0, d, ridge);
+            quad(a, r0, r1, d2, roof); quad(r0, b, c2, r1, roof);
+            push(a, wall); push(b, wall); push(r0, wall);
+            push(c2, wall); push(d2, wall); push(r1, wall);
+        }
+        return { positions: pos, colors: col };
+    }
+
+    static townMesh(houses, groundY, from) {
+        if (typeof THREE === 'undefined') return null;
+        const g = StopScene.townGeometry(houses, groundY, from);
+        if (!g.positions.length) return null;
+        const geometry = new THREE.BufferGeometry();
+        geometry.setAttribute('position', new THREE.Float32BufferAttribute(g.positions, 3));
+        geometry.setAttribute('color', new THREE.Float32BufferAttribute(g.colors, 3));
+        geometry.computeVertexNormals();
+        // (it fades in over TOWN_IN_S from the scene's start, Game.stepStopScene: nothing comes into the shot at once)
+        const mesh = new THREE.Mesh(geometry, new THREE.MeshLambertMaterial({ vertexColors: true, side: THREE.DoubleSide, transparent: true, opacity: 0 }));
+        mesh.name = 'stop-town';
+        return mesh;
+    }
+
+    // A puff of vapour: a sprite with a soft round edge (PUFF_TEXTURE), its own material so it fades on its own
+    // (Game.prewarmWorldScenery draws one at load: its program compiled at the first puff, 80 ms into the held shot).
+    // It was a lit-less sphere, drawn as a flat pale disc with a hard edge over the rider's helmet in the held view
+    static get PUFF_M() { return 0.22; }
+    static get PUFF_OPACITY() { return 0.32; }
     static puffMesh() {
-        return new THREE.Mesh(StopScene.puffGeometry || (StopScene.puffGeometry = new THREE.SphereGeometry(0.1, 10, 8)),
-            new THREE.MeshBasicMaterial({ color: 0xeef1f4, transparent: true, opacity: 0.55, depthWrite: false }));
+        const sprite = new THREE.Sprite(new THREE.SpriteMaterial({ map: StopScene.puffTexture(), color: 0xeef1f4, transparent: true, opacity: StopScene.PUFF_OPACITY, depthWrite: false }));
+        sprite.scale.setScalar(StopScene.PUFF_M);
+        return sprite;
+    }
+
+    // The puff's texture, made once: a disc whose alpha falls from the middle to none at its edge
+    static puffTexture() {
+        if (StopScene.puffMap !== undefined) return StopScene.puffMap;
+        StopScene.puffMap = null;
+        if (typeof document === 'undefined' || !document.createElement) return null;
+        const canvas = document.createElement('canvas');
+        canvas.width = canvas.height = 64;
+        const ctx = canvas.getContext && canvas.getContext('2d');
+        if (!ctx) return null;
+        const g = ctx.createRadialGradient(32, 32, 0, 32, 32, 32);
+        g.addColorStop(0, 'rgba(255,255,255,1)');
+        g.addColorStop(0.45, 'rgba(255,255,255,0.55)');
+        g.addColorStop(1, 'rgba(255,255,255,0)');
+        ctx.fillStyle = g;
+        ctx.fillRect(0, 0, 64, 64);
+        StopScene.puffMap = new THREE.CanvasTexture(canvas);
+        return StopScene.puffMap;
     }
 
     // The scene. `riders`: [{bike: {group or bikeGroup, rider, arms, legs, character}, s, player, at: {x, z}, speed, yaw,
@@ -231,8 +301,9 @@ class StopScene {
     // the ride: read with no hint, the ground under a bike there flipped between them); `faces(x, z, reach)` the walls and houses
     // near a place (WorldEnvironment.cameraFaces) or null. `camera` the chase camera at the start ({offset: the eye less
     // the player's place, yaw, pitch, roll, fov}), or none (the scene then starts on its held view); `aspect` the
-    // screen's, `visible` the share of its height between the bars
-    constructor({ stop, route, riders, ground, seed = 1, camera = null, aspect = 16 / 9, faces = null, visible = 0.76 }) {
+    // screen's, `visible` the share of its height between the bars; `houses` the world's buildings ({x, z}: a view down a
+    // valley shows the town in it, EndShot.valleyOf)
+    constructor({ stop, route, riders, ground, seed = 1, camera = null, aspect = 16 / 9, faces = null, visible = 0.76, houses = null }) {
         const T = EndShot.TUNING;
         this.stop = stop;
         this.route = route;
@@ -320,7 +391,7 @@ class StopScene {
         const mx = bays.reduce((n, b) => n + b.x, 0) / bays.length, mz = bays.reduce((n, b) => n + b.z, 0) / bays.length;
         const near = StopScene.facesNear(faces, mx, mz, 120);
         const own = StopScene.HOLDS[stop.id] || stop.hold;
-        this.hold = EndShot.compose(stop, bays, ground, aspect, near, visible) || StopScene.holdOf(stop, ground, aspect, bays.length);
+        this.hold = EndShot.compose(stop, bays, ground, aspect, near, visible, houses) || StopScene.holdOf(stop, ground, aspect, bays.length);
         this.composed = !!this.hold.view || !!this.hold.hand;
         this.hold.haze = (own && own.haze) || null;
         // The crane: from craneLeadS before the player parks (followMostS at the latest: a long way in is not followed
@@ -409,7 +480,7 @@ class StopScene {
     resize(aspect) {
         this.aspect = aspect;
         const own = StopScene.HOLDS[this.stop.id] || this.stop.hold;
-        this.hold.fov = this.composed && !this.hold.hand ? EndShot.vfovOf(EndShot.TUNING.hfov, aspect) : StopScene.vfovOf(own ? own.hfov : 65, aspect, own ? own.vfovMost : 60);
+        this.hold.fov = this.composed && !this.hold.hand ? EndShot.vfovOf(this.hold.hfov || EndShot.TUNING.hfov, aspect) : StopScene.vfovOf(own ? own.hfov : 65, aspect, own ? own.vfovMost : 60);
     }
 
     // When the card comes up: the camera held for holdFirstS, every rider off its bike, and CARD_AFTER_S after the
@@ -565,7 +636,7 @@ class StopScene {
     }
 
     // A rider with 'vape' in its stop actions breathes out a small cloud now and then (seeded, the same each time):
-    // a pale sphere from the helmet's front that grows, rises and fades over PUFF_S. No brand, nothing shown but the cloud
+    // a soft pale cloud from the helmet's front that grows, rises and fades over PUFF_S. No brand, nothing shown but the cloud
     static puff(scene3d, scene, r, dt) {
         r.nextPuff -= dt;
         if (r.nextPuff > 0) return;
@@ -592,9 +663,9 @@ class StopScene {
                 scene.puffs.splice(i, 1);
                 continue;
             }
-            p.mesh.scale.setScalar(1 + 3.5 * u);
+            p.mesh.scale.setScalar(StopScene.PUFF_M * (1 + 3.5 * u));
             p.mesh.position.addScaledVector(p.drift, dt).y += 0.25 * dt;
-            p.mesh.material.opacity = 0.55 * (1 - u) * (1 - u);
+            p.mesh.material.opacity = StopScene.PUFF_OPACITY * (1 - u) * (1 - u);
         }
     }
 
