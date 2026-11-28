@@ -1504,3 +1504,11 @@ The owner: "i see a seam in the terrain in the distance there...can we build a t
 - world-budget's triangles (base, after): Tremola 435 909, 435 957; leg 4 438 400, 443 842 (more far trees where the houses spend less; under 450 000); leg 6 450 060 (over, at the head too), 449 262; leg 7 438 070, 438 508. The Tremola's mesh margin fails at the head and after alike (680 to 689 of 800).
 - Frame time (world-frametime, Tremola, desk, the laptop, busy): base 13.0 and 13.8 ms, after 13.3, 13.3, 14.0 and 13.2 ms. Two base runs went to the mini (18.5, 18.7): not paired.
 - world-build-steps 14 of 14; world-meshes but its RoadMesh edge-works test (failing at the head); world-tree-count; scenery-still 14.
+
+## Where two roads meet: the wall ends the check read
+
+- The ask (the owner, 2026-11-27): a side road's wall that ends at full height by a mouth with a gap under the side road's edge (leg 1 km 1.8 and 2.4).
+- Finding: every `proud` row of `world-meets` was a false reading. The check read a wall's end along eight fixed ways, and a line a few degrees off a wall ran off the side of its 0.3 m parapet and read the wall's 4 m face as an end. Side road 171's wall at km 1.8 does end 3 m short of the ride's verge, at its last walled row; the gap is under the side road's edge between that row and the ride, where no slope is laid from a row in the ride's road to a walled row.
+- Change: the check reads the coping across a parapet's width behind an end and a coping's width ahead, and reads a parapet's top down to its coping. `proud` on origin: 81 junction nodes before, 3 after (`lookout-andermatt` 1, `andermatt-goeschenen` 2); the other kinds are unchanged.
+- Still open: the builder fixes for the wall at the mouth, the markings, the side-with-side hold, `landIn`, `bands`, leg 3's tunnels and leg 8's j175 and j167 (`.agent/system/world.md`, "Where two roads meet").
+- Measured on origin with the check fixed (ef86049f): `see` fell on five stages since the table was first measured (`andermatt-goeschenen` 9 to 7, `gadmen-innertkirchen` 12 to 10, `goeschenen-susten` 6 to 5, `gotthard-north` 9 to 8, `lookout-andermatt` 6 to 5); the table holds the counts measured now. `proud` 0 on `susten-gadmen` is confirmed.

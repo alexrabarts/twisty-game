@@ -27,6 +27,7 @@ export const MEET_KINDS = ['bands', 'ledges', 'see', 'proud', 'steps', 'holes', 
 
 export function meetWindow(game, env, store, nodes, { areaM = 30, reachM = 40, lattice = 0.25, bandReachM = 4, bandDipM = 0.25, ledgeM = 0.3, proudM = 1, stepM = 0.2, overlapM = 0.15, looseM = 1.5, rayM = 90, cameras = [[12, 8], [6, 3]], camerasAt = [40, 25, 10] } = {}) {
     const { THREE } = game;
+    const parapetH = game.RoadMesh.PARAPET_H_M;
     const M = game.RoadSurface.MARKINGS, lineHalf = M.lineWidthM / 2 + 0.02, inset = M.edge.insetM;
     store.nodes = store.nodes || new Map();
     const r2 = n => Math.round(n * 100) / 100;
@@ -282,10 +283,20 @@ export function meetWindow(game, env, store, nodes, { areaM = 30, reachM = 40, l
                     if (top.kind === 'stone' && ((Math.round((gx - nx) / lattice) + Math.round((gz - nz) / lattice)) & 1) === 0) {
                         for (let a = 0; a < 8; a++) {
                             const ux = Math.sin((a * Math.PI) / 4), uz = Math.cos((a * Math.PI) / 4);
-                            if (copingAt(gx - ux * 0.6, gz - uz * 0.6, top.y) === null || copingAt(gx - ux * 1.2, gz - uz * 1.2, top.y) === null || copingAt(gx - ux * 1.8, gz - uz * 1.8, top.y) === null) continue;
-                            if (copingAt(gx + ux * 0.5, gz + uz * 0.5, top.y) !== null || copingAt(gx + ux * 1.0, gz + uz * 1.0, top.y) !== null) continue;
+                            // (behind, within a parapet's width to either side: a wall up to 22.5 degrees off the line
+                            // read is still read, its top as narrow as a parapet)
+                            const behind = b => [0, -0.15, 0.15, -0.3, 0.3].some(o => copingAt(gx - ux * b + uz * o, gz - uz * b - ux * o, top.y) !== null);
+                            if (!behind(0.6) || !behind(1.2) || !behind(1.8)) continue;
+                            // (none ahead to either side within a coping's width too: a line a few degrees off a wall's
+                            // own runs off the side of its narrow top, and read 4 m of face as a wall's end)
+                            const ahead = [0.5, 1.0].some(a => [0, -0.15, 0.15, -0.3, 0.3, -0.6, 0.6].some(o => copingAt(gx + ux * a + uz * o, gz + uz * a - ux * o, top.y) !== null));
+                            if (ahead) continue;
                             const past = topOf(gx + ux * 1.0, gz + uz * 1.0, top.y, 6);
-                            const drop = past === null ? 9.99 : top.y - past.y;
+                            // (the wall's height is its coping's: a parapet on it ends at its full height on the wall's
+                            // closed end by the builders' rule, RoadMesh.PARAPET_DROP_M, so a parapet's top under the
+                            // place is read down to the coping it stands on)
+                            const parapet = [[0, 0], [0.4, 0], [-0.4, 0], [0, 0.4], [0, -0.4]].some(([dx, dz]) => topOf(gx + dx, gz + dz, top.y - parapetH, 0.12, new Set(['stone'])) !== null);
+                            const drop = past === null ? 9.99 : top.y - (parapet ? parapetH : 0) - past.y;
                             if (drop <= proudM) continue;
                             const key = `${Math.round(gx / 2)},${Math.round(gz / 2)}`;
                             if (!ends.has(key) || ends.get(key).worst < drop) ends.set(key, { worst: r2(drop), x: r2(gx), z: r2(gz) });

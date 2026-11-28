@@ -24,18 +24,19 @@ const { THREE, WorldEnvironment } = game;
 // ones a rider in free roam meets)
 const SIDE_NODE_M = 250;
 
-// (measured when the check was first run, 2026-11-27, on the builders of 4abac70)
+// (measured when the check was first run, 2026-11-27, on the builders of 4abac70; `proud` again on 2026-11-28 with the
+// check reading a wall's end, not the side of its top: every row before was that)
 export const KNOWN = Object.freeze({
-    'tremola': { bands: 11, ledges: 14, see: 7, proud: 10, steps: 17, holes: 1, overlaps: 23, loose: 11, markings: 20, landIn: 8 },
-    'gotthard-north': { bands: 5, ledges: 7, see: 9, proud: 5, steps: 15, overlaps: 9, loose: 12, markings: 9, landIn: 16 },
-    'airolo-lookout': { bands: 6, ledges: 9, see: 3, proud: 13, steps: 15, holes: 1, overlaps: 21, loose: 3, markings: 14, landIn: 7 },
-    'lookout-andermatt': { bands: 7, ledges: 8, see: 6, proud: 5, steps: 17, overlaps: 10, loose: 12, markings: 10, landIn: 17 },
-    'andermatt-goeschenen': { bands: 10, ledges: 6, see: 9, proud: 14, steps: 15, holes: 3, overlaps: 21, loose: 3, markings: 17, landIn: 3 },
-    'goeschenen-susten': { bands: 10, ledges: 11, see: 6, proud: 13, steps: 15, overlaps: 35, loose: 2, markings: 35, landIn: 3 },
-    'susten-gadmen': { bands: 1, ledges: 2, see: 1, proud: 4, loose: 3 },
-    'gadmen-innertkirchen': { bands: 6, ledges: 2, see: 12, proud: 11, steps: 5, overlaps: 2, loose: 7, markings: 2, landIn: 5 },
-    'innertkirchen-guttannen': { bands: 2, ledges: 2, see: 1, proud: 2, steps: 1, overlaps: 2, loose: 6, landIn: 3 },
-    'guttannen-grimsel': { bands: 5, ledges: 2, see: 6, proud: 4, steps: 6, overlaps: 3, loose: 6, landIn: 8 }
+    'tremola': { bands: 11, ledges: 14, see: 7, steps: 17, holes: 1, overlaps: 23, loose: 11, markings: 20, landIn: 8 },
+    'gotthard-north': { bands: 5, ledges: 7, see: 8, steps: 15, overlaps: 9, loose: 12, markings: 9, landIn: 16 },
+    'airolo-lookout': { bands: 6, ledges: 9, see: 3, steps: 15, holes: 1, overlaps: 21, loose: 3, markings: 14, landIn: 7 },
+    'lookout-andermatt': { bands: 7, ledges: 8, see: 5, proud: 1, steps: 17, overlaps: 10, loose: 12, markings: 10, landIn: 17 },
+    'andermatt-goeschenen': { bands: 10, ledges: 6, see: 7, proud: 2, steps: 15, holes: 3, overlaps: 21, loose: 3, markings: 17, landIn: 3 },
+    'goeschenen-susten': { bands: 10, ledges: 11, see: 5, steps: 15, overlaps: 35, loose: 2, markings: 35, landIn: 3 },
+    'susten-gadmen': { bands: 1, ledges: 2, see: 1, loose: 3 },
+    'gadmen-innertkirchen': { bands: 6, ledges: 2, see: 10, steps: 5, overlaps: 2, loose: 7, markings: 2, landIn: 5 },
+    'innertkirchen-guttannen': { bands: 2, ledges: 2, see: 1, steps: 1, overlaps: 2, loose: 6, landIn: 3 },
+    'guttannen-grimsel': { bands: 5, ledges: 2, see: 6, steps: 6, overlaps: 3, loose: 6, landIn: 8 }
 });
 
 const list = (items, n = 12) => items.slice(0, n).map(i => JSON.stringify(i)).join('\n');
