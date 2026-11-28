@@ -2449,22 +2449,22 @@ class RoadMesh {
         // The parapets, each run of them one continuous rail along the edge
         // (a wall whose style's guard is a steel rail, StructureStyles.WALLS, carries the rail in its parapet's place: the
         // same height, the same outer face, the structures' material)
-        // In the wall's own stone (no draw call more): a low upstand of the wall's stone, and over it one panel the stone
-        // shader draws the steel on and cuts away between (LandShade's railPanel: wallFace y 4 plus its metres up over 10)
+        // In the wall's own stone (no draw call more): one panel on the coping the stone shader draws the posts and rails
+        // on and cuts away between (LandShade's railPanel: wallFace y 4 plus its metres up over 10, StructureShade.RAIL_WALL).
+        // No upstand: a low strip of stone on the coping read as a wall of its own, open and hanging at its ends
         const railed = (seg, key) => wallStyleOf(seg.k, key).guard === 'rail';
-        const up = StructureBuild.UPSTAND_M, steel = [0.66, 0.67, 0.68];
+        const steel = [0.66, 0.67, 0.68];
         for (const key of ['l', 'r']) {
             RoadMesh.rails(stone, rails.stone[key].filter(seg => !railed(seg, key)), W, H, colors.stone, RoadMesh.STONE_PROUD_M);
             const steelSegs = rails.stone[key].filter(seg => railed(seg, key));
-            RoadMesh.rails(stone, steelSegs, W, up, colors.stone, RoadMesh.STONE_PROUD_M);
             for (const seg of steelSegs) {
                 if (seg.drawn === false) continue;
                 const o = seg.o, P = RoadMesh.STONE_PROUD_M - RoadMesh.RAIL_IN_M;
                 const at = (p, dy) => [p[0] + o[0] * P, p[1] + dy, p[2] + o[1] * P];
                 const ua = Number.isFinite(seg.ua) ? seg.ua : 0, ub = Number.isFinite(seg.ub) ? seg.ub : ua + Math.hypot(seg.pb[0] - seg.pa[0], seg.pb[2] - seg.pa[2]);
                 while (stone.face.length < (stone.positions.length / 3) * 4) stone.face.push(0, 0, 0, 0);
-                RoadMesh.quad(stone, at(seg.pa, up), at(seg.pb, up), at(seg.pb, H), at(seg.pa, H), steel);
-                const hy = 4 + (H - up) / 10;
+                RoadMesh.quad(stone, at(seg.pa, 0), at(seg.pb, 0), at(seg.pb, H), at(seg.pa, H), steel);
+                const hy = 4 + H / 10;
                 for (const [u, y] of [[ua, 4], [ub, 4], [ub, hy], [ua, 4], [ub, hy], [ua, hy]]) stone.face.push(u, y, o[0], o[1]);
             }
             RoadMesh.rails(wall, rails.wall[key], W, H, colors.concrete);

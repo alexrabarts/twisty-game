@@ -178,6 +178,9 @@ class StructureShade {
     // A railing's steel on its panel (StructureBuild.parapet), in metres up from the upstand: the top rail's and the
     // mid rail's middles, and a post every postM
     static get RAIL() { return { top: 0.46, mid: 0.24, postM: 2 }; }
+    // A wall's rail (RoadMesh edgeWorks, LandShade's railPanel), in metres up from the wall's coping: a top rail, a mid
+    // rail and a low rail, and a post every postM
+    static get RAIL_WALL() { return { top: 0.76, mid: 0.45, low: 0.15, postM: 2 }; }
 
     // The mark of a part: its kind and its look
     static code(kind, look) {

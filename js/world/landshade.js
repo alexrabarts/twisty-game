@@ -513,6 +513,8 @@ vec4 wallBase(float style, float down, float u, float y, float near) {
         if (material.userData.landShade) return material;
         const S = LandShade.STONE;
         const f = v => (Number.isInteger(v) ? `${v}.0` : `${v}`);
+        // (a wall's steel rail, drawn on its panel: StructureShade.RAIL_WALL)
+        const R = typeof StructureShade !== 'undefined' ? StructureShade.RAIL_WALL : { top: 0.76, mid: 0.45, low: 0.15, postM: 2 };
         material.userData.landShade = true;
         material.userData.haze = true;
         const shared = LandShade.uniforms;
@@ -562,13 +564,13 @@ float landNoise(vec2 p) {
     // The underside of an arch (wallFace y over 2.5: RoadMesh.BARREL plus its metres across the road) is a barrel: its
     // courses run across from face to face and step round the curve by the arch's own metres (wallFace x), so the
     // crown is not one course drawn out into long level stripes
-    // A steel rail in a wall's parapet's place (wallFace y 4 plus its metres up from its upstand over 10, RoadMesh
-    // edgeWorks, StructureStyles.WALLS 'rail'): a top rail and a mid rail on posts, the rest of its panel cut away
+    // A steel rail in a wall's parapet's place (wallFace y 4 plus its metres up from the coping over 10, RoadMesh
+    // edgeWorks, StructureStyles.WALLS 'rail'): three rails on posts, the rest of its panel cut away
     bool railPanel = vWallFace.y > 3.5 && vWallFace.y < 4.5;
     if (railPanel) {
         float rh = (vWallFace.y - 4.0) * 10.0, ru = vWallFace.x;
-        float onRail = max(1.0 - step(0.035, abs(rh - ${f(typeof StructureShade !== 'undefined' ? StructureShade.RAIL.top : 0.46)})), 1.0 - step(0.03, abs(rh - ${f(typeof StructureShade !== 'undefined' ? StructureShade.RAIL.mid : 0.24)})));
-        float onPost = 1.0 - step(0.035, abs(fract(ru / ${f(typeof StructureShade !== 'undefined' ? StructureShade.RAIL.postM : 2)} + 0.5) - 0.5) * ${f(typeof StructureShade !== 'undefined' ? StructureShade.RAIL.postM : 2)});
+        float onRail = max(max(1.0 - step(0.04, abs(rh - ${f(R.top)})), 1.0 - step(0.03, abs(rh - ${f(R.mid)}))), 1.0 - step(0.03, abs(rh - ${f(R.low)})));
+        float onPost = 1.0 - step(0.04, abs(fract(ru / ${f(R.postM)} + 0.5) - 0.5) * ${f(R.postM)});
         if (max(onRail, onPost) < 0.5) discard;
     }
     bool barrel = vWallFace.y > 20.0;
