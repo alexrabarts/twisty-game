@@ -158,6 +158,63 @@ class PlaceMesh {
         return list;
     }
 
+    // The low course of dressed stone along a pad's outer edge, from a to b, in pieces
+    course(out, place, a, b) {
+        const C = PlaceMesh.KIT.colors, E = PlaceMesh.KIT.viewpoint.edge, side = place.side;
+        const pieces = Math.max(1, Math.round((b - a) / E.pieceM)), piece = (b - a) / pieces;
+        for (let k = 0; k < pieces; k++) {
+            const s = a + (k + 0.5) * piece;
+            const lateral = side * (this.edgeOf(place, s) - E.insetM - E.widthM / 2);
+            this.chamfered(out, s, lateral, 0, E.widthM, E.heightM, piece - 0.04, 0.05, k % 2 ? C.stone : C.cap, C.cap, 'stone edge');
+        }
+    }
+
+    // The bench at s by the pad's outer edge, facing out over it: its back toward the road. Slats of timber on two
+    // cast legs
+    bench(out, place, s) {
+        const C = PlaceMesh.KIT.colors, B = PlaceMesh.KIT.viewpoint.bench, side = place.side;
+        const lateral = side * (this.edgeOf(place, s) - B.fromEdgeM);
+        const gap = (B.depthM - B.slats * 0.1) / (B.slats - 1);
+        for (let k = 0; k < B.slats; k++) {
+            const across = -B.depthM / 2 + 0.05 + k * (0.1 + gap);
+            this.box(out, s, lateral - side * across, B.seatM - B.slatM, 0.1, B.slatM, B.lengthM, C.wood);
+        }
+        const back = lateral - side * (B.depthM / 2 - 0.03);
+        for (let k = 0; k < B.backSlats; k++) this.box(out, s, back, B.seatM + 0.12 + k * 0.2, B.slatM, 0.12, B.lengthM, C.wood);
+        for (const end of [-1, 1]) {
+            const at = s + end * (B.lengthM / 2 - 0.12);
+            // The leg: a foot on the ground, an upright under the seat and one up the back, an arm over the seat
+            this.box(out, at, lateral, 0, B.depthM, 0.05, 0.06, C.metal);
+            this.box(out, at, lateral + side * 0.1, 0.05, 0.05, B.seatM - B.slatM - 0.05, 0.05, C.metal);
+            this.box(out, at, back, 0.05, 0.04, B.backM - 0.05, 0.05, C.metal);
+            this.box(out, at, lateral, B.seatM + 0.18, B.depthM - 0.04, 0.04, 0.05, C.metal);
+        }
+        // One solid for the whole bench
+        const fb = this.frame(s, lateral);
+        this.solids.push({ x: fb.x, z: fb.z, heading: fb.heading, along: B.lengthM, across: B.depthM, label: 'bench' });
+    }
+
+    // A hand-laid car park's angled bays (place.bays): lines at angleDeg to the ride, turned in toward the pad's outer
+    // edge so a car pulling in along the ride noses into one, widthM apart square to the lines and lengthM long, their
+    // backs backM short of the outer edge (in front of the stone course). [{s, lateral, heading, length}] for each line
+    // in the ride's frame: its middle and its heading
+    static get BACK_M() { return 0.6; }
+    echelonLines(place) {
+        const Y = place.bays, angle = Y.angleDeg * Math.PI / 180;
+        const a = place.s + (place.taper || 0), b = place.s + place.length - (place.taper || 0);
+        // How far along the ride a line's two ends lie apart, and the room between two lines along it
+        const run = Y.lengthM * Math.cos(angle), step = Y.widthM / Math.sin(angle);
+        const lines = Math.floor((b - a - run) / step);
+        const list = [];
+        for (let k = 0; k <= lines; k++) {
+            // A line's back end is the further along the ride: the nose points forward and out
+            const back = a + run + k * step + (b - a - run - lines * step) / 2;
+            const outer = this.edgeOf(place, back) - PlaceMesh.BACK_M, across = Y.lengthM * Math.sin(angle);
+            list.push({ s: back - run / 2, lateral: place.side * (outer - across / 2), heading: place.side * angle, length: Y.lengthM });
+        }
+        return list;
+    }
+
     build(place) {
         const K = PlaceMesh.KIT, C = K.colors, side = place.side;
         // The full depth of the pad runs between its tapers
@@ -165,13 +222,8 @@ class PlaceMesh {
         if (b - a < 2) return null;
         const out = { positions: [], shades: [] };
         if (place.kind === 'viewpoint') {
-            const E = K.viewpoint.edge, R = K.viewpoint.rail, B = K.viewpoint.bench;
-            const pieces = Math.max(1, Math.round((b - a) / E.pieceM)), piece = (b - a) / pieces;
-            for (let k = 0; k < pieces; k++) {
-                const s = a + (k + 0.5) * piece;
-                const lateral = side * (this.edgeOf(place, s) - E.insetM - E.widthM / 2);
-                this.chamfered(out, s, lateral, 0, E.widthM, E.heightM, piece - 0.04, 0.05, k % 2 ? C.stone : C.cap, C.cap, 'stone edge');
-            }
+            const E = K.viewpoint.edge, R = K.viewpoint.rail;
+            this.course(out, place, a, b);
             // Round posts on the stone, two tubes between each pair, and a cap on each post
             const posts = Math.max(1, Math.round((b - a) / R.everyM)), span = (b - a) / posts;
             const railAt = s => side * (this.edgeOf(place, s) - E.insetM - E.widthM / 2);
@@ -183,27 +235,7 @@ class PlaceMesh {
                 const t = postS(k + 1);
                 for (const h of R.bars) PlaceMesh.round(out, this.point(s, lateral, E.heightM + h), this.point(t, railAt(t), E.heightM + h), R.barM / 2, C.metal);
             }
-            // The bench on the drop side, facing out over it: its back toward the road. Slats of timber on two cast legs
-            const s = a + B.fromStartM + B.lengthM / 2;
-            const lateral = side * (this.edgeOf(place, s) - B.fromEdgeM);
-            const gap = (B.depthM - B.slats * 0.1) / (B.slats - 1);
-            for (let k = 0; k < B.slats; k++) {
-                const across = -B.depthM / 2 + 0.05 + k * (0.1 + gap);
-                this.box(out, s, lateral - side * across, B.seatM - B.slatM, 0.1, B.slatM, B.lengthM, C.wood);
-            }
-            const back = lateral - side * (B.depthM / 2 - 0.03);
-            for (let k = 0; k < B.backSlats; k++) this.box(out, s, back, B.seatM + 0.12 + k * 0.2, B.slatM, 0.12, B.lengthM, C.wood);
-            for (const end of [-1, 1]) {
-                const at = s + end * (B.lengthM / 2 - 0.12);
-                // The leg: a foot on the ground, an upright under the seat and one up the back, an arm over the seat
-                this.box(out, at, lateral, 0, B.depthM, 0.05, 0.06, C.metal);
-                this.box(out, at, lateral + side * 0.1, 0.05, 0.05, B.seatM - B.slatM - 0.05, 0.05, C.metal);
-                this.box(out, at, back, 0.05, 0.04, B.backM - 0.05, 0.05, C.metal);
-                this.box(out, at, lateral, B.seatM + 0.18, B.depthM - 0.04, 0.04, 0.05, C.metal);
-            }
-            // One solid for the whole bench
-            const fb = this.frame(s, lateral);
-            this.solids.push({ x: fb.x, z: fb.z, heading: fb.heading, along: B.lengthM, across: B.depthM, label: 'bench' });
+            this.bench(out, place, a + K.viewpoint.bench.fromStartM + K.viewpoint.bench.lengthM / 2);
         } else if (place.kind === 'layby' || place.kind === 'carpark') {
             if (place.kind === 'layby') {
                 const E = K.layby.kerb;
@@ -221,10 +253,18 @@ class PlaceMesh {
                     // A reflector on the band, on the face toward the carriageway
                     this.box(out, s, lateral - side * (P.sizeM / 2 + 0.006), (P.band[0] + P.band[1]) / 2 - 0.04, 0.01, 0.08, 0.04, C.reflector);
                 }
+            } else if (place.bays) {
+                const Y = K.carpark.bay;
+                for (const line of this.echelonLines(place)) {
+                    const f = this.frame(line.s, line.lateral);
+                    RoadMesh.box(out, f.x, f.y + Y.liftM + 0.002, f.z, Y.lineM, 0.004, line.length, f.heading + line.heading, C.paint);
+                }
             } else {
                 const Y = K.carpark.bay;
                 for (const line of this.bayLines(place)) this.box(out, line.s, side * (line.inner + line.outer) / 2, Y.liftM, line.outer - line.inner, 0.004, Y.lineM, C.paint);
             }
+            if (place.edge === 'stone') this.course(out, place, a, b);
+            if (place.bench) this.bench(out, place, b - K.viewpoint.bench.fromStartM - K.viewpoint.bench.lengthM / 2);
             const N = K[place.kind].bin;
             const s = a + N.fromStartM;
             this.bin(out, s, side * (this.edgeOf(place, s) - N.fromEdgeM), N, C);

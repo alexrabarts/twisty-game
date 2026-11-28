@@ -16,7 +16,9 @@
 // a place as road.
 //
 // A place: {id, kind, source, s, side, length, depth, taper, surface, name, slots, open}. `s` is where it starts,
-// `side` is Route's (Route.LEFT +1, Route.RIGHT -1).
+// `side` is Route's (Route.LEFT +1, Route.RIGHT -1). A `hand` place (WorldPlaces.HAND) is laid by hand where the owner
+// asked for one, on land the importer already benched level with the road: it is drawn and read as any other, and may
+// carry `bays` (angled bays, PlaceMesh), `edge` and `bench`.
 class WorldPlaces {
     // How far past the carriageway's edge a waiting bike stands at the least, and the room each bike takes along the road
     static get STAND_MIN_M() { return 1.2; }
@@ -25,6 +27,21 @@ class WorldPlaces {
     static get END_CLEAR_M() { return 2; }
     // A place this near a roadworks site, or a station's gate, is closed: a rider waiting there would stand in the works
     static get WORKS_CLEAR_M() { return 20; }
+
+    // The places laid by hand, merged with a folder's own by WorldData.handPlaces for the stages it holds. `s` is in
+    // the folder's forward frame (WorldData turns it round for a stage ridden the other way). Each stands where the
+    // importer's land is level with the road out past its depth (tests/unit/world-hand-places.test.js holds that no
+    // drawn land stands over it), so nothing needs a re-import.
+    //   the hairpin car park on the Susten's west side (the owner, 2026-11-28: "this hairpin should have a car park in
+    //   it"): the hairpin at s 32 192 to 32 231 (apex 32 211) turns left, and its inside is a flat tongue between the
+    //   two legs, benched at the lower leg's height for 18 m past its centre line. The pad is on that lower leg's
+    //   left, from 32 263 to 32 305, 9 m past the verge: hard standing with angled bays facing down the valley the
+    //   leg runs toward, a low stone course along its back and a bench. Past it the land rises to the upper leg's fill
+    static get HAND() {
+        return Object.freeze([
+            Object.freeze({ id: 'hand-0', stage: 'susten-gadmen', kind: 'carpark', source: 'hand', s: 32263, side: 1, length: 42, depth: 9, taper: 6, surface: 'asphalt', name: null, bays: Object.freeze({ angleDeg: 60, widthM: 2.5, lengthM: 5 }), edge: 'stone', bench: true })
+        ]);
+    }
 
     // The extra verge of a place at ride distance s: its depth, tapered over `taper` at each end, 0 outside it
     // (the importer's padOf: the land is carved to this)

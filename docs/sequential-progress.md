@@ -1520,3 +1520,9 @@ The owner: "i see a seam in the terrain in the distance there...can we build a t
 - Tried: the fill for side roads level with the ride too (within `APRON_UNDER_M`): `world-junctions` found ground over the side road and faces beside it in 11 mouths. Kept to roads over the ride.
 - Still open, not pushed (local branch `alex/meets-wall-guarded`): the mouth-wall rule (a side road's wall at a mouth runs on to the ride's verge: leg 1's j12, the owner's km 1.8). Guarded against a lone coping piece and a fold (`world-spikes` `strays` at the Tremola s 1 265, `folds` at leg 3 s 6 307), it still opens two `flaps` on leg 6 (side road 270 at s 1 465, side road 423 at s 11 704).
 - Origin fails `world-meets` `proud` on `gotthard-north` (0 to 1) and `lookout-andermatt` (1 to 2) at j22 (-1585.23, 1456.10), from before this work; `world-spikes` fails on legs 3, 4 and 5 (`jogs`, `bare`, `flaps`) on origin too.
+
+## The hairpin car park on the Susten (2026-11-28)
+
+- The owner: "this hairpin should have a car park in it". The hairpin at s 32 192 to 32 231 (leg 5, stage km 3.9) turns left; its tongue is benched at the lower leg's height. A stopping place laid by hand (`WorldPlaces.HAND`, merged by `WorldData.handPlaces`): the lower leg's left verge from s 32 263 to 32 305, 9 m deep, asphalt, nine bays at 60 degrees toward the valley, a stone course, a bench and a bin, 11 slots. No re-import: the land there is already level with the road (`.agent/system/world.md`, "A place laid by hand").
+- Proofs: `tests/unit/world-hand-places.test.js` (4 tests), `world-place-shots --world susten-gadmen --ids hand-0`. On `susten-gadmen` `world-road-cover`, `world-meets`, `world-watertight`, `world-far-edges`, `world-places`, `world-places-import` and `world-group-stops` pass; `world-spikes` fails on `bare` 3 at s 39 586 as origin does.
+- Not done: the tongue nearer the apex rises up to 2.5 m over the road; a car park there needs the importer to bench it.

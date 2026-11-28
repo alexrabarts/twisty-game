@@ -105,11 +105,20 @@ class WorldData {
         this.decodeEdges(edges);
         // What the files hold, which every stage's view is made from (useStage)
         const m = this.manifest;
-        this.file = { ride, junctions, places: m.places || [], structures: m.structures || [], landmarks: m.landmarks || [], stops: m.stops || [], junctionS: m.junctions || [] };
+        this.file = { ride, junctions, places: [...(m.places || []), ...WorldData.handPlaces(m)], structures: m.structures || [], landmarks: m.landmarks || [], stops: m.stops || [], junctionS: m.junctions || [] };
         this.useStage(null);
         await this.ensureChunks(this.rideChunks());
         this.trusted = await this.checkTrust(manifestBuffer);
         return this;
+    }
+
+    // The stopping places laid by hand (WorldPlaces.HAND) for the stages this folder holds, beside the importer's own:
+    // in the ride's forward frame as the files are, so a stage ridden against it turns them round with the rest. The
+    // tools load this file without places.js: they read the importer's places only
+    static handPlaces(manifest) {
+        if (typeof WorldPlaces === 'undefined') return [];
+        const ids = new Set((manifest.stages || []).map(st => st.id));
+        return WorldPlaces.HAND.filter(p => ids.has(p.stage)).map(p => ({ ...p }));
     }
 
     // The data as `stage` rides it (manifest.stages: `dir` 1 the way the ride runs, -1 against it). Every distance in the
