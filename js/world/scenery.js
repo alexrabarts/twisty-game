@@ -312,6 +312,10 @@ class Scenery {
     // (500 at 3 and 4 triangles until a tuft was 4 and 6: 240 cost about 550 less, and pay for the near edge
     // furniture; a tuft is a few pixels from 150 m)
     static get TUFT_CAP() { return 240; }
+    // How far from the bike a tuft is drawn: a tuft of 0.7 m is a few pixels at 400 m. Past it the cap went to the far
+    // tiles' tufts where the ride had few near (a leg's last 400 m), 2 km off, and a tile let go of took them at once
+    // (world-pops: 197 in view on leg 1's end)
+    static get TUFT_DRAW_M() { return 400; }
     static get TUFTS_PER_TILE() { return 250; }
     static get TUFT_REACH_M() { return 7; }
     static get TUFT_TRIES() { return 6; }
@@ -1965,12 +1969,13 @@ if ( vFadeCut != 0.0 ) {
             triangles += extra(e);
             return true;
         };
-        // (held near in view first, by HOLD_OVER over the share at the most; while still, they stay near whatever)
+        // (held near in view first, by HOLD_OVER over the share at the most, also while the view holds still: there the
+        // room that fell after a put-down kept every held house whole, 13 000 triangles over the houses' share on leg 7,
+        // and the window 448 000 where it stood at 438 000. Past it the furthest go to their far level, in a fade)
         for (const e of houses) {
             if (!e.take || !e.keep || levelOf(e) !== 'near') continue;
-            if (still || up(e)) {
-                if (e.level !== 'near') { e.level = 'near'; instances += e.c.parts; triangles += extra(e); }
-            } else if (triangles + extra(e) <= spend + Scenery.HOLD_OVER) {
+            if (up(e)) continue;
+            if (triangles + extra(e) <= spend + Scenery.HOLD_OVER) {
                 e.level = 'near';
                 instances += e.c.parts;
                 triangles += extra(e);
@@ -2018,7 +2023,7 @@ if ( vFadeCut != 0.0 ) {
         let tuftReach = 0;
         for (const e of tufts) {
             if (tuftsTaken >= Scenery.TUFT_CAP) break;
-            if (e.take || e.shut || (perTile.get(e.key) || 0) >= Scenery.TUFTS_PER_TILE) continue;
+            if (e.take || e.shut || e.d > Scenery.TUFT_DRAW_M || (perTile.get(e.key) || 0) >= Scenery.TUFTS_PER_TILE) continue;
             e.take = true;
             tuftsTaken++;
             count(e);
