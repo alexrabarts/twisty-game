@@ -7725,7 +7725,8 @@ function popRide(placeSource, pilotSource, opts) {
                 // (the far houses: one mesh, each house a run of its vertices with its share in `fadeCut`)
                 if (mesh.userData.farHouses && mesh.visible) {
                     const cut = mesh.geometry.attributes.fadeCut.array;
-                    for (const f of mesh.userData.farHouses) put('house', `h${f.x.toFixed(1)},${f.z.toFixed(1)}`, 'far', 1 - Math.min(1, Math.abs(cut[f.first])), f.x, f.y + 4, f.z, 9);
+                    // (keyed as the near level's instance is: its place read back from a 32-bit matrix, Math.fround)
+                    for (const f of mesh.userData.farHouses) put('house', `h${Math.fround(f.x).toFixed(1)},${Math.fround(f.z).toFixed(1)}`, 'far', 1 - Math.min(1, Math.abs(cut[f.first])), f.x, f.y + 4, f.z, 9);
                     continue;
                 }
                 if (!mesh.isInstancedMesh || !mesh.visible) continue;
