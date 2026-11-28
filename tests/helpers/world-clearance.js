@@ -146,6 +146,16 @@ export function sceneryOf(THREE, root) {
             });
             return;
         }
+        // The far houses' one mesh (Scenery.farHousesMesh) is one thing per house: its far level's box at its own place
+        if (o.userData.farHouses) {
+            o.userData.farHouses.forEach((h, i) => {
+                world.multiplyMatrices(o.matrixWorld, h.matrix);
+                const f = footprint(THREE, h.box, world);
+                const x = f.poly.reduce((sum, p) => sum + p[0], 0) / 4, z = f.poly.reduce((sum, p) => sum + p[1], 0) / 4;
+                out.push({ type, name: o.name, index: i, ...f, x, z, at: [world.elements[12], world.elements[14]], material: o.material });
+            });
+            return;
+        }
         // A merged mesh of tufts (Scenery.tuftMesh) is one thing per tuft
         if (o.userData.tufts) {
             o.userData.tufts.forEach((f, i) => {

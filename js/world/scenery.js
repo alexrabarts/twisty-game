@@ -636,7 +636,13 @@ class Scenery {
         mesh.frustumCulled = false;
         mesh.userData.world = 'scenery';
         mesh.userData.runs = runs;
-        mesh.userData.farHouses = list.map(c => ({ x: c.matrix.elements[12], y: c.matrix.elements[13], z: c.matrix.elements[14], ...runs.get(c) }));
+        // (and each house's own placement and its far level's box in the model's plan, for a check that reads each house
+        // as a thing of its own: tests/helpers/world-clearance.js)
+        mesh.userData.farHouses = list.map(c => {
+            const [part] = Scenery.houseLevels(c.home).far;
+            if (!part.geometry.boundingBox) part.geometry.computeBoundingBox();
+            return { x: c.matrix.elements[12], y: c.matrix.elements[13], z: c.matrix.elements[14], matrix: c.matrix, box: part.geometry.boundingBox, ...runs.get(c) };
+        });
         return mesh;
     }
 
@@ -1862,11 +1868,20 @@ if ( vFadeCut != 0.0 ) {
         // (each a step of STEP_THINGS things: the window's tufts and boulders took a step of 47 ms read whole)
         const scenery = this;
         const look = function* (list, kind, reachM, y, r) {
+            const keys = new Map();
             const holdM = (reachM || Infinity) * Scenery.HOLD_REACH;
             let n = 0;
             for (const e of list) {
                 if (++n % Scenery.STEP_THINGS === 0) yield;
-                e.fk = e.c.fk || (e.c.fk = `${kind[0]}${Math.round(e.x * 10)},${Math.round(e.z * 10)}`);
+                // (a tuft's key is `u`, not its kind's first letter: `t` is the trees' (rankTrees), and a tree and a tuft at
+                // one place shared a fade; and two of a kind at one place each have their own, by their order there)
+                if (!e.c.fk) {
+                    const base = `${kind === 'tuft' ? 'u' : kind[0]}${Math.round(e.x * 10)},${Math.round(e.z * 10)}`;
+                    const n = (keys.get(base) || 0) + 1;
+                    keys.set(base, n);
+                    e.c.fk = n > 1 ? `${base}#${n}` : base;
+                }
+                e.fk = e.c.fk;
                 e.seen = scenery.inView(e.x, y(e.c), e.z, r);
                 e.keep = e.seen && (still || e.d <= holdM) && Scenery.shown(fades.get(e.fk));
                 // (while the view holds still nothing comes into it: holdsStill)
