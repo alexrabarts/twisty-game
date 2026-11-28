@@ -321,6 +321,8 @@ class WorldEnvironment {
             const geometry = this.horizon.geometry;
             const linear = Float32Array.from(geometry.attributes.color.array, v => (v <= 0.04045 ? v / 12.92 : Math.pow((v + 0.055) / 1.055, 2.4)));
             geometry.userData.linearColors = true;
+            // (a tile's skirt reaches under the far grid drawn under its edge, TerrainMesh.FAR_UNDER_M)
+            this.farUnder = (x, z) => { const at = FarLand.sample(this.horizon, x, z); return at ? at.y : null; };
             this.horizonWhole = { positions: Float32Array.from(geometry.attributes.position.array), shades: linear, index: Uint32Array.from(geometry.index.array), normals: Float32Array.from(geometry.attributes.normal.array) };
             this.clipHorizon();
             // Where the drawn tiles end, a tile takes the far land's colour and normal (LandShade.EDGE_M)
@@ -407,7 +409,7 @@ class WorldEnvironment {
         const built = yield* TerrainMesh.buildSteps(tile, cover, lod, (x, y, z) => {
             const low = this.rideSurfaceAt(x, z, y);
             return low === null ? y : Math.min(y, low - TerrainMesh.SINK_M);
-        }, this.nearTile, lod === 0 ? this.cutsOf(key) : null, this.tubesNear(key));
+        }, this.nearTile, lod === 0 ? this.cutsOf(key) : null, this.tubesNear(key), this.farUnder || null);
         const old = this.tileMeshes.get(key);
         if (old) {
             this.tileGroup.remove(old.mesh);
