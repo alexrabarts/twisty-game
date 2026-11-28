@@ -1429,6 +1429,10 @@ if ( vClump < 1.0 && fract( 52.9829189 * fract( dot( gl_FragCoord.xy, vec2( 0.06
         };
         const grid = TerrainMesh.colours(tile, cover);
         const linear = [0, 0, 0];
+        // A coarser tile draws the land laid back as the full detail does (TerrainMesh.laidBack): its vertices at their
+        // nodes laid back too. Drawn from the nodes' own heights it stood up to 37 m over the tile beside it at full
+        // detail, and the skirt closing that step stood on a skyline as a tooth (the Tremola, 1.3 km off: world-far-seams)
+        const laidCoarse = lod > 0 ? (yield* TerrainMesh.laidBackSteps(tile, near)).lowered : null;
         for (let b = 0; b < side; b++) {
             yield;
             for (let a = 0; a < side; a++) {
@@ -1437,7 +1441,7 @@ if ( vClump < 1.0 && fract( 52.9829189 * fract( dot( gl_FragCoord.xy, vec2( 0.06
                 const carved = TerrainMesh.carved(zone);
                 const x = baseX + i * WorldData.CELL_M, z = baseZ + j * WorldData.CELL_M;
                 let drawnY = TerrainMesh.vertexY(tile, lod, i, j, near);
-                const lowered = cuts ? cuts.lowered.get(j * n + i) : undefined;
+                const lowered = cuts ? cuts.lowered.get(j * n + i) : laidCoarse ? laidCoarse.get(j * n + i) : undefined;
                 if (lowered !== undefined) drawnY = Math.min(drawnY, carved ? lowered - TerrainMesh.SINK_M : lowered);
                 if (carved && holdY) drawnY = holdY(x, drawnY, z);
                 const at = (j * n + i) * 3;
@@ -1557,7 +1561,10 @@ if ( vClump < 1.0 && fract( 52.9829189 * fract( dot( gl_FragCoord.xy, vec2( 0.06
         // A coarser tile's skirt reaches down to its edge as the tile beside it draws it laid back at full detail
         // (TerrainMesh.laidBack lowers the same nodes there): hung from the nodes' own heights only, it ended over
         // the lowered edge and the rider saw through the seam, 700 m off
-        const laidEdge = lod > 0 ? (yield* TerrainMesh.laidBackSteps(tile, near)).lowered : null;
+        // (at every level: a tile beside it at another level draws its edge laid back, a coarse one at its own
+        // vertices, so the window reaches a coarse tile's vertex either side)
+        const laidEdge = laidCoarse || (cuts ? cuts.lowered : (yield* TerrainMesh.laidBackSteps(tile, near)).lowered);
+        const reachNodes = Math.max(stride, 4);
         for (let e = 0; e < edges.length; e++) {
             const edge = edges[e];
             yield;
@@ -1566,7 +1573,7 @@ if ( vClump < 1.0 && fract( 52.9829189 * fract( dot( gl_FragCoord.xy, vec2( 0.06
                 const from = edge(k);
                 let depth = TerrainMesh.skirtDepth(tile, lod, k * stride, lines[e], near, positions[from * 3 + 1], memo);
                 if (laidEdge && laidEdge.size) {
-                    for (let m = Math.max(0, (k - 1) * stride); m <= Math.min(last, (k + 1) * stride); m++) {
+                    for (let m = Math.max(0, k * stride - reachNodes); m <= Math.min(last, k * stride + reachNodes); m++) {
                         const [i, j] = lines[e](m);
                         const low = laidEdge.get(j * n + i);
                         if (low !== undefined) depth = Math.max(depth, positions[from * 3 + 1] - low + 0.5);
