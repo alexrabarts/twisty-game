@@ -11,6 +11,9 @@
 //   - no gap at an abutment or the foot: past each end of the crest and past the downstream foot (GAP_OUT_M out) the
 //     drawn land stands no lower than GAP_M under the model's edge over it, or the model's face reaches down to it
 //   - the physics reads the model's top on the dam (WorldGround.tileHeight)
+//   - the lake water (js/world/water.js, which reads Dams.faces) meets the upstream face: every row of the face in its
+//     middle has a water vertex within WATER_REACH_M upstream of it, within one 8 m cell along (the face hides the water's fading ring), and no water stands
+//     past the face's downstream foot within DOWN_M of it (none on the valley's side)
 //   - a road on the crest: its surface stands ROAD_SINK_M over the crest, and the ride's own surface is unchanged
 // KNOWN holds each dam's places that fail today, by check; a count may only shrink.
 import { describe, test, expect, beforeAll } from '@jest/globals';
@@ -18,15 +21,29 @@ import { loadGame } from '../helpers/load-game.js';
 import { diskFetch } from '../helpers/world-fetch.js';
 
 const game = loadGame(undefined, []);
-const { THREE, WorldEnvironment, WorldDams, WorldDamData, TerrainMesh, WorldData } = game;
+const { THREE, WorldEnvironment, WorldDams, WorldDamData, TerrainMesh, WorldData, Water } = game;
 
 // A stage of each folder that holds dams: its environment lays them out
 const FOLDERS = { 'world/': 'tremola', 'worlds/airolo/': 'airolo-lookout', 'worlds/gotthard/': 'gotthard-north', 'worlds/susten/': 'goeschenen-susten', 'worlds/haslital/': 'guttannen-grimsel' };
+const WATER_REACH_M = 8, DOWN_M = 40;
 const THROUGH_M = 0.05, GAP_M = 1.0, GAP_OUT_M = 1.0;
 // id: {through, gap}: the places that fail today
 const KNOWN = {
     '70BBD4F2': { through: 0, gap: 6 }, // Pfaffensprung: its foot over the gorge the land falls into past the outline
     '268EA6B7': { through: 1, gap: 0 } // Handeck: one place at its end
+};
+
+// id: {dry, below}: the water's places that fail today (rows of a face where the outline runs along a shore or a bay
+// the water's 8 m nodes do not reach)
+const WATER_KNOWN = {
+    '2A033EFB': { dry: 5, below: 0 },
+    'D0A8701D': { dry: 5, below: 0 },
+    '33718794': { dry: 30, below: 0 }, // Räterichsboden
+    '268EA6B7': { dry: 10, below: 0 }, // Handeck
+    '28C0925E': { dry: 24, below: 0 }, // Seeuferegg
+    '39DAA5D8': { dry: 1, below: 0 }, // Totensee
+    '639AFC81': { dry: 3, below: 0 }, // Spitallamm
+    '7A28909D': { dry: 9, below: 0 } // Gelmer
 };
 
 async function loadWorld(id) {
@@ -95,6 +112,34 @@ beforeAll(async () => {
     for (const [folder, id] of Object.entries(FOLDERS)) if (WorldDams.listOf(folder).length) worlds[folder] = await loadWorld(id);
 }, 600000);
 
+// The water's vertices (world x, y, z) round a dam: Water.surface of each tile under it
+function waterNear(env, dam) {
+    const m = WorldData.TILE_M, b = dam.box, out = [];
+    for (let tx = Math.floor((b[0] - DOWN_M) / m); tx <= Math.floor((b[2] + DOWN_M) / m); tx++) {
+        for (let tz = Math.floor((b[1] - DOWN_M) / m); tz <= Math.floor((b[3] + DOWN_M) / m); tz++) {
+            const tile = env.data.tile(`${tx},${tz}`);
+            if (!tile) continue;
+            const surface = Water.surface(tile, (dx, dz) => env.data.tile(`${tx + dx},${tz + dz}`));
+            if (!surface) continue;
+            const p = surface.positions;
+            for (let i = 0; i < p.length; i += 3) out.push([tx * m + p[i], p[i + 1], tz * m + p[i + 2]]);
+        }
+    }
+    return out;
+}
+
+// Each dam's meeting with the water: face rows with no water within WATER_REACH_M upstream (only for a dam that holds
+// a lake: water within that reach of some row), and water vertices past its downstream foot
+function waterMeeting(env, dam) {
+    const water = waterNear(env, dam);
+    const rows = dam.rows, from = Math.floor(rows.length * 0.2), to = Math.ceil(rows.length * 0.8);
+    const reach = row => water.some(([x, , z]) => { const t = (x - row.u[0]) * row.a[0] + (z - row.u[1]) * row.a[1], side = Math.abs((x - row.u[0]) * -row.a[1] + (z - row.u[1]) * row.a[0]); return t <= 0.5 && t >= -WATER_REACH_M && side <= WorldData.CELL_M; });
+    const held = rows.some(reach);
+    const dry = held ? rows.slice(from, to).filter(row => !reach(row)).length : 0;
+    const below = water.filter(([x, , z]) => { const at = env.dams.locate(x, z); if (at) return false; return rows.some(row => { const t = (x - row.u[0]) * row.a[0] + (z - row.u[1]) * row.a[1], side = Math.abs((x - row.u[0]) * -row.a[1] + (z - row.u[1]) * row.a[0]); return t > row.L && t < row.L + DOWN_M && side <= 2; }); }).length;
+    return { held, dry, below };
+}
+
 describe('every dam in the data is a seated model', () => {
     test('the data lists dams in the tour\'s worlds', () => {
         expect(Object.values(WorldDamData).flat().length).toBeGreaterThan(0);
@@ -131,6 +176,23 @@ describe('every dam in the data is a seated model', () => {
                 const known = KNOWN[id] || { through: 0, gap: 0 };
                 expect({ id, through: r.through }).toEqual({ id, through: Math.min(r.through, known.through) });
                 expect({ id, gap: r.gap }).toEqual({ id, gap: Math.min(r.gap, known.gap) });
+            }
+        }, 600000);
+
+        test(`${folder}: the lake water meets each dam's face and none stands below it`, async () => {
+            const world = worlds[folder];
+            if (!world || !Water) return;
+            const { env } = world;
+            const report = {};
+            for (const dam of env.dams.dams) {
+                await tilesOf(env, dam);
+                report[dam.data.id] = waterMeeting(env, dam);
+            }
+            console.log(folder, 'water', JSON.stringify(report));
+            for (const [id, r] of Object.entries(report)) {
+                const known = WATER_KNOWN[id] || { dry: 0, below: 0 };
+                expect({ id, dry: r.dry }).toEqual({ id, dry: Math.min(r.dry, known.dry) });
+                expect({ id, below: r.below }).toEqual({ id, below: Math.min(r.below, known.below) });
             }
         }, 600000);
 

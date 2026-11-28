@@ -1,5 +1,6 @@
 // A world-look script (tools/terrain-check.mjs world-look --script tools/dam-look.js): pictures of each dam of the
-// world (js/world/dams.js) from the ride where it is nearest, from below its downstream foot and along its crest.
+// world (js/world/dams.js) from the ride where it is nearest, from below its downstream foot, from over its lake (the
+// water meeting the upstream face) and along its crest.
 // `window.damLook` may set {poses: [...]} (the poses of a run with the dams, for a picture of the same place where the
 // page has none: the land as it was), {ids: [...]} the dams to take, {near: true} the near chase too.
 const opts = window.damLook || {};
@@ -33,6 +34,9 @@ const posesOf = dam => {
     const bx = mid.u[0] + mid.a[0] * (mid.L + out), bz = mid.u[1] + mid.a[1] * (mid.L + out);
     const by = (env.ground.groundY(bx, bz, null) || mid.zd) + 3;
     poses.push({ name: 'below', x: bx, y: by, z: bz, ...look([bx, by, bz], at(mid, mid.L / 2, (dam.crest + mid.zd) / 2)), vfov: 60 });
+    // the water meeting the upstream face: from over the lake, 70 m out from the middle row, 4 m over the water
+    const wy = (dam.data.water || mid.zu) + 4, wx = mid.u[0] - mid.a[0] * 70, wz = mid.u[1] - mid.a[1] * 70;
+    poses.push({ name: 'water', x: wx, y: wy, z: wz, ...look([wx, wy, wz], at(mid, 0, dam.data.water || mid.zu)), vfov: 60 });
     // along the crest from its first end
     const end = rows[Math.min(rows.length - 1, 2)];
     const c0 = at(end, Math.min(end.c1 / 2, end.L / 2), dam.crest + 1.7), c1 = at(rows[rows.length - 1], rows[rows.length - 1].c1 / 2, dam.crest + 1.7);
