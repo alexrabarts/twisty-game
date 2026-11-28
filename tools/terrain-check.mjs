@@ -8403,7 +8403,7 @@ function seamChecks(results, failures) {
 //          not land (a canopy on a skyline has the sky under it). The owner's white wedge on a far ridge (airolo-lookout,
 //          km 7.6) was one: far.bin's rim standing in the air over the 250 m level
 //   tone   every FAR_SEAM_TONE_EVERY_M along the box of each far grid with a level round it (where it is in view),
-//          the land's tone a quarter of the outer level's cell in from the edge and as far out, (out less in)
+//          the land's tone an eighth of the outer level's cell in from the edge and as far out, (out less in)
 //          averaged over 5 points along the edge, is more than SEAM_TONE_STEP on the mean of SEAM_TONE_LINE_PX
 //          points or more of a view: a straight line of a new tone across the hillsides, and one such view fails
 // --out <dir> saves the frame and the pass of kinds of each view that fails (and of --at s,s views).
@@ -8472,6 +8472,27 @@ async function farSeamView(placeSource, s, mode, turnDeg, place, keep, rule) {
     const offsets = new Map();
     const saved = new Map(), hidden = [];
     const bike = v.group;
+    // The sky as the frame draws it: every object with its own material over a magenta clear, the sky's own things
+    // (the dome, clouds, rain) left out. A pixel the clear shows is the sky. (A house's own shader is what draws it:
+    // drawn with one flat material, the village's houses at Andermatt were not drawn at all and read as sky)
+    const skyThings = [];
+    game.scene.children.forEach(c => { if (c.visible && !c.isLight && !c.isGroup && c !== bike) { skyThings.push(c); c.visible = false; } });
+    const skyQuiet = [];
+    game.scene.traverse(o => { if ((o.isPoints || o.isLine || o.isSprite) && o.visible) { skyQuiet.push(o); o.visible = false; } });
+    const clearBefore = game.scene.background, fogBefore = game.scene.fog;
+    game.scene.background = new THREE.Color(1, 0, 1);
+    game.scene.fog = null;
+    const skyTarget = new THREE.WebGLRenderTarget(W, H);
+    renderer.setRenderTarget(skyTarget);
+    renderer.render(game.scene, cam);
+    const skyPx = new Uint8Array(W * H * 4);
+    renderer.readRenderTargetPixels(skyTarget, 0, 0, W, H, skyPx);
+    renderer.setRenderTarget(null);
+    skyTarget.dispose();
+    game.scene.background = clearBefore;
+    game.scene.fog = fogBefore;
+    skyThings.forEach(c => { c.visible = true; });
+    skyQuiet.forEach(o => { o.visible = true; });
     game.scene.children.forEach(c => { if (c !== env.group && c !== bike && c.visible && !c.isLight) { hidden.push(c); c.visible = false; } });
     const toneMapping = renderer.toneMapping, encoding = renderer.outputEncoding;
     renderer.toneMapping = THREE.NoToneMapping;
@@ -8519,14 +8540,15 @@ async function farSeamView(placeSource, s, mode, turnDeg, place, keep, rule) {
     // (the pass's rows run bottom up, the frame's top down)
     const kind = (x, y) => ids[((H - 1 - y) * W + x) * 4];
     const distAt = (x, y) => ids[((H - 1 - y) * W + x) * 4 + 2];
-    const land = k => k >= 1 && k <= 8;
+    // (land is a tile, the far grid or a level, kinds 1 to 4; anything else drawn is not land)
+    const land = k => k >= 1 && k <= 4;
+    const sky = (x, y) => { const at = ((H - 1 - y) * W + x) * 4; return skyPx[at] === 255 && skyPx[at + 1] === 0 && skyPx[at + 2] === 255; };
     // Holes: down each column, the sky whose nearest drawn pixel above is land
     const hole = new Uint8Array(W * H);
     for (let x = 0; x < W; x++) {
         let over = 0;
         for (let y = 0; y < H; y++) {
-            const k = kind(x, y);
-            if (k) { over = k; continue; }
+            if (!sky(x, y)) { over = kind(x, y) || 9; continue; }
             if (land(over)) hole[y * W + x] = 1;
         }
     }
@@ -8592,7 +8614,9 @@ async function farSeamView(placeSource, s, mode, turnDeg, place, keep, rule) {
     for (let k = 0; k + 1 < lattices.length; k++) {
         const g = lattices[k], outer = lattices[k + 1];
         const x0 = g.x0, z0 = g.z0, x1 = g.x0 + (g.nx - 1) * g.cell, z1 = g.z0 + (g.nz - 1) * g.cell;
-        const side = outer.cell / 4;
+        // (an eighth of the outer level's cell either side: the step is at the line, and two points a quarter of an
+        // 800 m cell apart either side read two hillsides lit two ways, 15 km off)
+        const side = outer.cell / 8;
         let sum = 0, runs = 0;
         for (const [ax, az, bx, bz, ix, iz] of [[x0, z0, x1, z0, 0, 1], [x0, z1, x1, z1, 0, -1], [x0, z0, x0, z1, 1, 0], [x1, z0, x1, z1, -1, 0]]) {
             const steps = Math.ceil(Math.hypot(bx - ax, bz - az) / rule.toneEveryM);
