@@ -3574,12 +3574,38 @@ body.stop-scene .virtual-button-pause {
     max-height: 45vh;
     padding: 12px 18px;
     background: rgba(8, 10, 14, 0.9);
-    animation: stop-card-in 0.5s var(--ease-out) both;
+    animation: stop-card-in 0.9s var(--ease-out) both;
 }
 
 @keyframes stop-card-in {
     from { opacity: 0; transform: translate(-50%, 20%); }
     to { opacity: 1; transform: translateX(-50%); }
+}
+
+/* On a wide screen the card stands on the side of the held view the parked group is not on (EndShot.compose), and
+   fades in over the held view */
+@media (min-width: 900px) {
+    .finish-banner.stop-card.stop-card-left,
+    .finish-banner.stop-card.stop-card-right {
+        max-width: min(40vw, 560px);
+        transform: none;
+        animation: stop-card-side-in 0.9s var(--ease-out) both;
+    }
+
+    .finish-banner.stop-card.stop-card-left {
+        left: 24px;
+        right: auto;
+    }
+
+    .finish-banner.stop-card.stop-card-right {
+        left: auto;
+        right: 24px;
+    }
+}
+
+@keyframes stop-card-side-in {
+    from { opacity: 0; transform: translateY(12%); }
+    to { opacity: 1; transform: none; }
 }
 
 .finish-banner.stop-card .finish-title {

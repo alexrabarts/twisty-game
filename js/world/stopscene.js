@@ -1,19 +1,21 @@
-// StopScene: the scene at a leg's end stop (manifest.stops, tools/world/stops.mjs). After the finish line the ride is
-// over: black bars slide in at the top and the foot of the screen, the HUD fades, the camera flies from where the chase
-// camera was to the stop's hold, and the group pulls in one by one in its riding order and parks in the stop's slots.
-// Each rider gets off and stands beside the bike, helmet on. The result card comes up in the lower bar, with what can
-// be done there (a picture; the next leg). Any key before the card skips to it. Nothing here names a place.
+// StopScene: the scene at a leg's end stop (manifest.stops, tools/world/stops.mjs). After the finish line the clock has
+// stopped and the game rides: black bars slide in at the top and the foot of the screen, the HUD fades, and the player
+// is ridden on at a calm pace into a bay of the stop, with the riders of the group that kept up behind it, each into
+// the bay beside the last (EndShot, js/world/endshot.js: who comes in, the bays, the ways in, the ride). Each rider
+// stops with a foot down, then gets off and stands beside the bike, helmet on. The camera is one shot: the chase
+// camera at the line, a follow camera behind the player as it rides in, then a crane to a composed view with the
+// parked bikes in the lower third and the view beyond (EndShot.compose, EndShot.Camera). The result card fades in once
+// the camera has held and everyone has parked, with what can be done there (a picture; the next leg). Enter, Space,
+// Escape or a tap before the card skips to it. Nothing here names a place.
 //
-// The tables are data: KINDS (a stop kind: its hold and the actions it offers), HOLDS (a stop's own hold, matched to
-// the owner's photos of the place) and the characters' own `stop` list (CHARACTERS in js/vehicle.js: 'vape' for the
-// three the owner named). A new stop or rider needs data only.
+// The tables are data: KINDS (a stop kind: its fallback hold and the actions it offers), HOLDS (a stop's own photo
+// hold: the composed view looks its way) and the characters' own `stop` list (CHARACTERS in js/vehicle.js: 'vape' for
+// the three the owner named). A new stop or rider needs data only.
 //
-// The fly (StopScene.flyAt): the camera starts on the chase camera's own pose (its place kept beside the player as the
-// player rides on, its aim, roll and lens) and eases over FLY_S to the hold, with no step in place, aim or lens. Then it
-// holds until the card. A kind's hold is in the stop's own frame: the origin is the middle of the slots' row, `out`
-// points from where the way in leaves the ride to that middle (at a lookout, into the view), `side` is square to it (to
-// the right of out), and up is up: { eye: [side, up, out], look: [side, up, out], hfov } (metres, degrees); with `edge`
-// its `out` is measured from the area's outline on the out axis (a lookout's rail) instead of the middle.
+// A kind's hold, used only where no composed view fits, is in the stop's own frame: the origin is the middle of the
+// slots' row, `out` points from where the way in leaves the ride to that middle (at a lookout, into the view), `side`
+// is square to it (to the right of out), and up is up: { eye: [side, up, out], look: [side, up, out], hfov } (metres,
+// degrees); with `edge` its `out` is measured from the area's outline on the out axis (a lookout's rail) instead.
 class StopScene {
     static get KINDS() {
         // In front of the bikes, looking back at the group
@@ -29,10 +31,11 @@ class StopScene {
         });
     }
 
-    // A stop's own hold, by stop id, in world terms: the eye at (x, z), upM over the drawn ground there, turned to
+    // A stop's own hold, by stop id, in world terms: the eye at (x, z), upM over the drawn ground, turned to
     // `bearing` (degrees from north, clockwise), tipped by `pitch` (degrees, down is negative), with `hfov` degrees
     // across the picture and at most `vfovMost` up and down (a tall screen). Matched to the owner's photos
-    // (tools/world/photomatch.mjs, the skyline fit; .agent/system/world.md, "The stop scene at a leg's end")
+    // (tools/world/photomatch.mjs, the skyline fit; .agent/system/world.md, "The stop scene at a leg's end"). The shot
+    // composes its view the way the hold looks, with the group in front of it, and takes the hold's air
     static get HOLDS() {
         return Object.freeze({
             // (haze: the far slopes 3 to 8 km off and the forest 1 to 3 km off in that photo against the held shot
@@ -42,35 +45,8 @@ class StopScene {
         });
     }
 
-    // The fly from the chase camera to the hold: FLY_S long (longer for a hold far away: no faster than FLY_MOST_MS on
-    // average, so a stop behind the line, the Tremola's 644 m back, is flown down the road, not swept to; flyTime), eased so it starts and ends at rest against the place it
-    // leaves from and goes to. On the way the eye goes up by at most ARC_M (over the bikes and the rail), and keeps
-    // EYE_CLEAR_M over the ground, that clearance eased in from none so the first frame is the chase camera's own
-    static get FLY_S() { return 9; }
-    // The overtake (StopScene.prototype.overtakeAt; the owner: "i want the chase camera to overtake the bike so it's
-    // not in view anymore and land at the edge of the hill for the photo"). The camera keeps the chase for joinS while
-    // it eases onto the way in, drawn sideM to the side the road's other half lies on and upM over the ground there.
-    // From passFromS it gains on the bike over passS, from its place behind to aheadM ahead (a few metres a second
-    // faster than the bike), looking along the way lookM ahead and pitchDeg down, so the bike slides out of the frame
-    // behind it. From holdFrom (once it is ahead, and not long before the player parks on a long way in) it eases over
-    // settleS to the stop's hold, slowing to rest there. All of it a rule of the leg's end stop and its hold (HOLDS,
-    // KINDS): a leg run either way, to any stop, flies the same way
-    static get OVERTAKE() {
-        return Object.freeze({ joinS: 3, sideM: 3.2, upM: 3, passFromS: 1.5, passS: 7, aheadM: 26, lookM: 30, smoothM: 10, kneeM: 8, turnRate: 2.5, pitchDeg: -8, holdAfterPass: 0.85, settleS: 9, settleMostMs: 25 });
-    }
-    static get FLY_MOST_MS() { return 25; }
-
-    // How long the fly from `eye` to the hold takes
-    static flyTime(eye, hold) {
-        const d = Math.hypot(hold.eye.x - eye.x, hold.eye.y - eye.y, hold.eye.z - eye.z);
-        return Math.max(StopScene.FLY_S, Number.isFinite(d) ? d / StopScene.FLY_MOST_MS : 0);
-    }
-    static get ARC_M() { return 4; }
-    // and on a long fly by ARC_SHARE of its length (the Tremola's: about 40 m), so it passes over the road, not along it
-    static get ARC_SHARE() { return 0.06; }
-
     // What the held shot raises over the graphics level in force, by the level's id (Game.raiseShot), from the
-    // scene's start, so the land and the trees are built while the camera flies and nothing comes in after it holds.
+    // scene's start, so the land and the trees are built while the camera moves and nothing comes in after it holds.
     // A key left out keeps the level's own. Never less than the level has (tests/unit/world-stop-scene.test.js):
     //   tileLodM       the land's level-of-detail distances (WorldStreamer.TILE_LOD_M: 700, 2000 m)
     //   treeShare, treeNear, pixelRatio, shadowMap, msaa, effectMs   as the level's own (js/quality.js)
@@ -92,30 +68,18 @@ class StopScene {
         });
     }
 
-    // How the group pulls in: each rider ARRIVE_GAP_S after the one before, at RIDE_MS on the way in, slowing over the
-    // last BRAKE_M to its slot; GET_OFF_S after it stops the rider stands beside the bike, STAND_SIDE_M to its left
-    static get RIDE_MS() { return 7; }
-    static get ARRIVE_GAP_S() { return 1.6; }
-    static get BRAKE_M() { return 9; }
-    // How hard a rider brakes into its slot on a long way in (m/s^2), how long the longest way in takes, and how far
-    // past where it is a rider turns round for a stop behind it
-    static get BRAKE_MS2() { return 3; }
-    static get WAY_MOST_S() { return 24; }
-    static get TURN_M() { return 12; }
-    static get GET_OFF_S() { return 0.8; }
+    // GET_OFF_S after it stops (a foot down, upright, the engine idling) the rider stands beside the bike, STAND_SIDE_M
+    // to its left
+    static get GET_OFF_S() { return 1.6; }
     static get STAND_SIDE_M() { return 0.75; }
-    // A rider not near the stop when the scene starts comes in from this far back along the ride
+    // The ground is read on the ride's rows within HINT_ROWS of a place's own (WorldGround.locate's hint)
+    static get HINT_ROWS() { return 40; }
+    // Riders past the stop turn round this far past the front one
+    static get TURN_M() { return 12; }
+    // A rider with no place on the ride comes in from this far back along it
     static get BACK_M() { return 40; }
-    // The player rides in from where it is when that is at most FROM_M before the stop (the finish line is 60 m before
-    // a lookout's turn-in): no jump. Its way joins the right half of the road JOIN_M on, and its speed eases from the
-    // speed it crossed the line at to RIDE_MS at BRAKE_MS2 (slower) or GAIN_MS2 (faster)
-    static get FROM_M() { return 300; }
-    static get JOIN_M() { return 14; }
-    static get GAIN_MS2() { return 2; }
     // The card comes up once the player has parked and this long has gone, or at once on a skip
     static get CARD_AFTER_S() { return 3; }
-    // and never before the camera has held its view this long
-    static get HOLD_FIRST_S() { return 1; }
     // The bars: as near 2.39:1 as a 16:9 screen gives, each at most BAR_MOST of the screen's height so a tall phone keeps
     // most of its picture (CSS bars over the canvas; the render size does not change)
     static get ASPECT() { return 2.39; }
@@ -123,10 +87,8 @@ class StopScene {
     // A vape cloud: every PUFF_EVERY_S (seeded by the rider), PUFF_S long, from the helmet's front
     static get PUFF_EVERY_S() { return 4; }
     static get PUFF_S() { return 2.6; }
-    // The camera keeps this far over the ground under it
+    // The fallback hold's eye keeps this far over the ground under it
     static get EYE_CLEAR_M() { return 1.6; }
-    static get FLOOR_KNEE_M() { return 0.6; }
-    static get FLOOR_RATE() { return 6; }
     // How far the visor turns up about its own middle (rad)
     static get VISOR_UP() { return 1.1; }
 
@@ -154,7 +116,6 @@ class StopScene {
         if (len < 1) { dx = Math.sin(stop.slots[0].heading); dz = Math.cos(stop.slots[0].heading); } else { dx /= len; dz /= len; }
         // (a lookout faces its view: the way the land falls away from it, tools/world/stops.mjs viewOf)
         if (stop.kind === 'lookout' && Number.isFinite(stop.view)) { dx = Math.sin(stop.view); dz = Math.cos(stop.view); }
-        // (the side to the right of `out`: a heading h has its right at (-cos h, sin h) in the route's terms)
         // How far out the outline is on the out axis from the middle (a key with `edge` is measured from there)
         let edge = 0;
         while (edge < 300 && StopScene.inside(stop.ring, ox + dx * (edge + 0.5), oz + dz * (edge + 0.5))) edge += 0.5;
@@ -167,23 +128,12 @@ class StopScene {
         return { x: f.ox + p[0] * f.sideX + out * f.outX, y: y0 + p[1], z: f.oz + p[0] * f.sideZ + out * f.outZ };
     }
 
-    // The aim of a camera at `eye` that looks at `look`: {yaw, pitch} as three.js's 'YXZ' rotation reads them (a
-    // camera looks down -z; yaw = -bearing)
-    static aimOf(eye, look) {
-        const dx = look.x - eye.x, dy = look.y - eye.y, dz = look.z - eye.z;
-        return { yaw: Math.atan2(-dx, -dz), pitch: Math.atan2(dy, Math.hypot(dx, dz)) };
-    }
+    static aimOf(eye, look) { return EndShot.aimOf(eye, look); }
+    static vfovOf(hfov, aspect, most = 60) { return EndShot.vfovOf(hfov, aspect, most); }
 
-    // The vertical field of view (degrees) that shows `hfov` degrees across a picture of `aspect`, at most `most`
-    static vfovOf(hfov, aspect, most = 60) {
-        const r = Math.PI / 180;
-        const v = (2 * Math.atan(Math.tan((hfov * r) / 2) / Math.max(0.2, aspect || 16 / 9))) / r;
-        return Math.min(most, v);
-    }
-
-    // Where the fly ends: {eye: {x, y, z}, yaw, pitch, roll, fov} (radians, fov in degrees, vertical, for `aspect`).
-    // The stop's own row of HOLDS when it has one, else the hold its data carries (`hold`: route.json, the importer),
-    // else its kind's hold. `groundY(x, z)` the drawn ground
+    // The fallback hold, where no composed view fits: {eye: {x, y, z}, yaw, pitch, roll, fov} (radians, fov in degrees,
+    // vertical, for `aspect`). The stop's own row of HOLDS when it has one, else the hold its data carries (`hold`:
+    // route.json, the importer), else its kind's hold. `groundY(x, z)` the drawn ground
     static holdOf(stop, groundY = () => 0, aspect = 16 / 9, parked = null) {
         const r = Math.PI / 180;
         const own = StopScene.HOLDS[stop.id] || stop.hold;
@@ -207,8 +157,7 @@ class StopScene {
 
     // A hold that frames the group: it looks at the middle of the slots the riders park in (the first `parked`, or
     // all), and stands back along its line from there until every bike and rider beside it is inside the picture by
-    // FIT_MARGIN of each half (no further than FIT_MOST times as far). The kind's hold alone cut the nearest bike at
-    // the picture's edge where a car park's slots ran toward the camera (Andermatt, Gadmen)
+    // FIT_MARGIN of each half (no further than FIT_MOST times as far)
     static get FIT_MARGIN() { return 0.08; }
     static get FIT_MOST() { return 3; }
 
@@ -230,7 +179,6 @@ class StopScene {
             let fx = middle.x - e.x, fy = middle.y - e.y, fz = middle.z - e.z;
             const fl = Math.hypot(fx, fy, fz);
             fx /= fl; fy /= fl; fz /= fl;
-            // (right = forward x up, up = right x forward)
             let rx = -fz, rz = fx;
             const rl = Math.hypot(rx, rz) || 1;
             rx /= rl; rz /= rl;
@@ -251,129 +199,18 @@ class StopScene {
         return { eye: out, look: middle };
     }
 
-    // The point `m` metres along a way in ({points: [{x, z, m}], length}), clamped to it: {x, z, heading}
-    static wayAt(way, m, out = {}) {
-        const pts = way.points;
-        const at = Math.max(0, Math.min(way.length, m));
-        let i = 0;
-        while (i + 2 < pts.length && pts[i + 1].m < at) i++;
-        const p = pts[i], q = pts[Math.min(pts.length - 1, i + 1)];
-        const u = q.m > p.m ? (at - p.m) / (q.m - p.m) : 0;
-        out.x = p.x + (q.x - p.x) * u;
-        out.z = p.z + (q.z - p.z) * u;
-        out.heading = q === p ? 0 : Math.atan2(q.x - p.x, q.z - p.z);
-        return out;
-    }
-
-    // The camera t seconds into the end: the chase camera's pose carried on beside the player, eased onto the
-    // overtake along the player's way in (OVERTAKE), then eased to the hold. At t 0 it is the chase camera to the last
-    // bit; from flyS on it is the hold. `lead` is the player's place and its metres along its way now
-    overtakeAt(t, lead, dt = 0) {
-        const O = StopScene.OVERTAKE, way = this.riders[0].way, hold = this.hold, from = this.from;
-        const r = Math.PI / 180;
-        const ly = Number.isFinite(lead.y) ? lead.y : 0;
-        // The chase pose, carried on beside the player
-        const chase = { x: lead.x + from.offset.x, y: ly + from.offset.y, z: lead.z + from.offset.z, yaw: from.yaw, pitch: from.pitch, roll: from.roll, fov: from.fov };
-        // The overtake's pose: on the way, `lead` metres from the player (from where the chase camera was to aheadM)
-        const pass = StopScene.ease((t - O.passFromS) / O.passS);
-        // (it comes to rest at the way's end smoothly, over kneeM: stopped there at once, its speed fell in one frame)
-        const want = lead.m + -this.back + (this.back + O.aheadM) * pass;
-        const L = way.length, k = O.kneeM;
-        const x = (L - want) / k;
-        const m = L - k * (x > 30 ? x : Math.log1p(Math.exp(x)));
-        const p = StopScene.wayAt(way, m, {});
-        // (its side from the way's direction over a few metres either side, so the side turns smoothly at the way's bends)
-        const a = StopScene.wayAt(way, m - O.smoothM, {}), b = StopScene.wayAt(way, m + O.smoothM, {});
-        const heading = Math.hypot(b.x - a.x, b.z - a.z) > 0.5 ? Math.atan2(b.x - a.x, b.z - a.z) : p.heading;
-        const px = p.x + O.sideM * Math.cos(heading), pz = p.z - O.sideM * Math.sin(heading);
-        // (its height over the ground on the way itself, the ride's lane: no wall or bank beside the road moves it)
-        const g = this.ground(p.x, p.z);
-        // (it looks along the way lookM ahead, and past the way's end on along its last metres: a camera looks down -z)
-        // (the mean of points over smoothM either side, so the aim turns smoothly round the way's corners)
-        const e0 = StopScene.wayAt(way, way.length - 4, {}), e1 = StopScene.wayAt(way, way.length, {});
-        const eh = Math.hypot(e1.x - e0.x, e1.z - e0.z) > 0.1 ? Math.atan2(e1.x - e0.x, e1.z - e0.z) : heading;
-        const look = { x: 0, z: 0 };
-        for (const d of [-O.smoothM, -O.smoothM / 2, 0, O.smoothM / 2, O.smoothM]) {
-            const at = StopScene.wayAt(way, m + O.lookM + d, {}), over = Math.max(0, m + O.lookM + d - way.length);
-            look.x += (at.x + over * Math.sin(eh)) / 5;
-            look.z += (at.z + over * Math.cos(eh)) / 5;
-        }
-        // (and its aim follows that on a critically damped spring at turnRate: where the way in turns sharply off the
-        // road into the stop, the aim along the way turned in a few frames)
-        const aim = Math.atan2(-(look.x - px), -(look.z - pz));
-        if (this.pathYaw === undefined) { this.pathYaw = aim; this.pathYawRate = 0; }
-        if (dt > 0) {
-            const w = O.turnRate;
-            this.pathYawRate += (w * w * StopScene.turn(this.pathYaw, aim) - 2 * w * this.pathYawRate) * dt;
-            this.pathYaw += this.pathYawRate * dt;
-        }
-        // (its height follows the ground on the way on a critically damped spring at FLOOR_RATE: where the way steps
-        // from the road onto a stop's standing or under a deck, the ground under it moved the camera 0.9 m in a frame)
-        const gy = (Number.isFinite(g) ? g : ly) + O.upM;
-        if (this.pathY === undefined) { this.pathY = gy; this.pathYRate = 0; }
-        else if (dt > 0) {
-            const w = StopScene.FLOOR_RATE;
-            this.pathYRate += (w * w * (gy - this.pathY) - 2 * w * this.pathYRate) * dt;
-            this.pathY += this.pathYRate * dt;
-        }
-        const path = { x: px, y: this.pathY, z: pz, yaw: this.pathYaw, pitch: O.pitchDeg * r, roll: 0, fov: from.fov };
-        const w1 = StopScene.ease(t / O.joinS), w2 = StopScene.ease((t - this.holdFrom) / this.settleS);
-        // (each blend turns the way it started turning: the gap between the two aims is followed from frame to frame,
-        // never taken afresh the shorter way round. A hold that looks back along the way in, a car park's at the group,
-        // stands near 180 degrees from the overtake's aim, and the shorter way flipped sides there: 179 degrees in a frame)
-        const gaps = this.gaps || (this.gaps = {});
-        const gap = (key, a, b) => {
-            const raw = StopScene.turn(a, b);
-            gaps[key] = gaps[key] === undefined ? raw : gaps[key] + StopScene.turn(gaps[key], raw);
-            return gaps[key];
-        };
-        const mix = (key, a, b, w) => ({
-            x: a.x + (b.x - a.x) * w, y: a.y + (b.y - a.y) * w, z: a.z + (b.z - a.z) * w,
-            yaw: a.yaw + gap(`${key}yaw`, a.yaw, b.yaw) * w, pitch: a.pitch + (b.pitch - a.pitch) * w,
-            roll: a.roll + gap(`${key}roll`, a.roll, b.roll) * w, fov: a.fov + (b.fov - a.fov) * w
-        });
-        const held = { x: hold.eye.x, y: hold.eye.y, z: hold.eye.z, yaw: hold.yaw, pitch: hold.pitch, roll: hold.roll, fov: hold.fov };
-        // (the way to the hold is chosen as the settle starts, the shorter then, and kept)
-        if (!(w2 > 0)) { gaps.holdyaw = undefined; gaps.holdroll = undefined; }
-        const c = mix('hold', mix('path', chase, path, w1), held, w2);
-        // Over the bikes and the rail on the way to the hold, and never under EYE_CLEAR_M over the ground (eased in from
-        // none, so the first frame is the chase camera's own)
-        c.y += (this.arcM || StopScene.ARC_M) * 4 * w2 * (1 - w2);
-        // (a soft floor, so meeting it bends the camera's way up with no kink: knee FLOOR_KNEE_M, from none at the start)
-        // (the ground followed on a critically damped spring at FLOOR_RATE: over the land the floor otherwise bends at
-        // every edge of its triangles, and a finer tile that comes in moves it at once)
-        let under = this.ground(c.x, c.z);
-        if (Number.isFinite(under)) {
-            if (this.floorY === undefined) { this.floorY = under; this.floorRate = 0; }
-            else if (dt > 0) {
-                const w = StopScene.FLOOR_RATE;
-                this.floorRate += (w * w * (under - this.floorY) - 2 * w * this.floorRate) * dt;
-                this.floorY += this.floorRate * dt;
-            }
-            under = this.floorY;
-        }
-        if (Number.isFinite(under)) {
-            const floor = under + StopScene.EYE_CLEAR_M * w1, k = Math.max(1e-6, StopScene.FLOOR_KNEE_M * w1), x = (c.y - floor) / k;
-            c.y = floor + k * (x > 30 ? x : Math.log1p(Math.exp(x)));
-        }
-        const cp = Math.cos(c.pitch);
-        return { eye: { x: c.x, y: c.y, z: c.z }, yaw: c.yaw, pitch: c.pitch, roll: c.roll, fov: c.fov, look: { x: c.x - Math.sin(c.yaw) * cp * 10, y: c.y + Math.sin(c.pitch) * 10, z: c.z - Math.cos(c.yaw) * cp * 10 } };
-    }
-
-    // The haze t seconds into the fly (over `base`, LandShade.HAZE): eased with the camera from the ride's own to the
-    // hold's, so the air changes as the view does and never in one frame; null for a hold with no haze of its own
-    static hazeAt(hold, t, base, flyS = StopScene.FLY_S) {
+    // The haze t seconds into the shot (over `base`, LandShade.HAZE): eased with the crane from the ride's own to the
+    // hold's, so the air changes as the view does and never in one frame; null for a hold with no haze of its own.
+    // `from` when the crane starts, `flyS` when it holds
+    static hazeAt(hold, t, base, flyS, from = 0) {
         if (!hold || !hold.haze || !base) return null;
-        const w = StopScene.ease(t / flyS), out = { ...base };
+        const w = StopScene.ease((t - from) / Math.max(1e-3, flyS - from)), out = { ...base };
         for (const [key, value] of Object.entries(hold.haze)) if (Number.isFinite(base[key])) out[key] = base[key] + (value - base[key]) * w;
         return out;
     }
 
-    // The ease of the fly, 0 to 1 over u 0 to 1: its first and second derivatives are 0 at both ends
-    static ease(u) {
-        const x = Math.max(0, Math.min(1, u));
-        return x * x * x * (x * (6 * x - 15) + 10);
-    }
+    static ease(u) { return EndShot.ease(u); }
+    static turn(a, b) { return EndShot.turn(a, b); }
 
     // A puff of vapour, its own material so it fades on its own (Game.prewarmWorldScenery draws one at load: its
     // program compiled at the first puff, 80 ms into the held shot)
@@ -382,224 +219,222 @@ class StopScene {
             new THREE.MeshBasicMaterial({ color: 0xeef1f4, transparent: true, opacity: 0.55, depthWrite: false }));
     }
 
-    // The shortest turn from angle a to b (radians)
-    static turn(a, b) {
-        let d = (b - a) % (2 * Math.PI);
-        if (d > Math.PI) d -= 2 * Math.PI;
-        if (d < -Math.PI) d += 2 * Math.PI;
-        return d;
-    }
-
-    // The camera t seconds into the fly: {eye: {x, y, z}, yaw, pitch, roll, fov, look}. `from` is the chase camera at the
-    // start: {offset: {x, y, z} (the eye less the player's place), yaw, pitch, roll, fov}; `lead` the player's place now
-    // ({x, y, z}); `hold` from holdOf; `flyS` how long the fly takes (flyTime). At t 0 it is the chase camera to the last
-    // bit; from flyS on it is the hold
-    static flyAt(from, lead, hold, t, groundY = () => NaN, flyS = StopScene.FLY_S, arcM = StopScene.ARC_M) {
-        const w = StopScene.ease(t / flyS);
-        const y = Number.isFinite(lead.y) ? lead.y : 0;
-        const ax = lead.x + from.offset.x, ay = y + from.offset.y, az = lead.z + from.offset.z;
-        const eye = {
-            x: ax + (hold.eye.x - ax) * w,
-            y: ay + (hold.eye.y - ay) * w + arcM * 4 * w * (1 - w),
-            z: az + (hold.eye.z - az) * w
-        };
-        const under = groundY(eye.x, eye.z);
-        if (Number.isFinite(under)) eye.y = Math.max(eye.y, under + StopScene.EYE_CLEAR_M * w);
-        const yaw = from.yaw + StopScene.turn(from.yaw, hold.yaw) * w;
-        const pitch = from.pitch + (hold.pitch - from.pitch) * w;
-        const roll = from.roll + StopScene.turn(from.roll, hold.roll) * w;
-        const fov = from.fov + (hold.fov - from.fov) * w;
-        const c = Math.cos(pitch);
-        const look = { x: eye.x - Math.sin(yaw) * c * 10, y: eye.y + Math.sin(pitch) * 10, z: eye.z - Math.cos(yaw) * c * 10 };
-        return { eye, yaw, pitch, roll, fov, look };
-    }
-
-    // Each rider's way in: the ride from `fromS` to the turn-in (on the right half of the road), then the stop's own
-    // path, then the rider's slot. `route.sample(s, out)` gives {x, y, z, heading, width}. Returns [{x, z}] with the
-    // metres along each point (`m`) and the total
-    // A stop behind the rider (a stop that keeps its stage's line, tools/world/stops.mjs `keepLine`: the Tremola's
-    // hospice square, 644 m before its line) is reached by turning round: on TURN_M past where the rider is, a half
-    // circle across the road, and back along the other half to the turn-in
-    // `from` ({x, z}, the player's own place) starts the way there, and the right half of the road is joined JOIN_M on
-    static wayIn(stop, route, fromS, slot, from = null) {
-        const pts = [];
-        const p = {};
-        const join = from ? StopScene.JOIN_M : 0;
-        if (from) pts.push({ x: from.x, z: from.z });
-        const at = (s, lane) => { route.sample(s, p); return { x: p.x + lane * Math.cos(p.heading), z: p.z - lane * Math.sin(p.heading) }; };
-        if (fromS > stop.s + 1) {
-            route.sample(fromS, p);
-            const w = p.width / 4, turn = fromS + StopScene.TURN_M;
-            for (let s = fromS + Math.min(join, StopScene.TURN_M / 2); s < turn; s += 2) pts.push(at(s, -w));
-            for (let k = 0; k <= 8; k++) {
-                const a = (Math.PI * k) / 8;
-                route.sample(turn, p);
-                const lane = -w * Math.cos(a), ahead = w * Math.sin(a);
-                pts.push({ x: p.x + lane * Math.cos(p.heading) + ahead * Math.sin(p.heading), z: p.z - lane * Math.sin(p.heading) + ahead * Math.cos(p.heading) });
-            }
-            for (let s = turn; s > stop.s; s -= 2) pts.push(at(s, w));
-        } else {
-            for (let s = fromS + join; s < stop.s; s += 2) { route.sample(s, p); pts.push(at(s, -p.width / 4)); }
-        }
-        for (const [x, z] of stop.path) pts.push({ x, z });
-        // The slot from behind: a point back along its heading, then the slot itself
-        const back = 3;
-        pts.push({ x: slot.x - Math.sin(slot.heading) * back, z: slot.z - Math.cos(slot.heading) * back }, { x: slot.x, z: slot.z });
-        let m = 0;
-        const out = [];
-        for (let i = 0; i < pts.length; i++) {
-            if (i && Math.hypot(pts[i].x - pts[i - 1].x, pts[i].z - pts[i - 1].z) < 0.2) continue;
-            if (out.length) m += Math.hypot(pts[i].x - out[out.length - 1].x, pts[i].z - out[out.length - 1].z);
-            out.push({ x: pts[i].x, z: pts[i].z, m });
-        }
-        return { points: out, length: m };
-    }
-
-    // How a rider rides its way in: [{v, a, dur, m}] phases from the start, and `arriveS`. The ride speed is RIDE_MS (more
-    // on a long way in: it is ridden in WAY_MOST_S at the most), and the last BRAKE_M (more at speed: BRAKE_MS2) slows
-    // it to a stop (v^2 = 2 a d). A way with a start speed `v0` (the player, as it crossed the line) first eases to the
-    // ride speed; where there is no room for that, it slows from v0 to a stop at one rate over the whole way
-    static profile(way) {
-        if (way.phases) return way.phases;
-        const L = way.length;
-        const brakeOf = v => Math.max(StopScene.BRAKE_M, (v * v) / (2 * StopScene.BRAKE_MS2));
-        let v = Math.max(StopScene.RIDE_MS, (L - StopScene.BRAKE_M) / StopScene.WAY_MOST_S);
-        const v0 = Number.isFinite(way.v0) ? Math.max(0, way.v0) : v;
-        const rate = speed => (v0 > speed ? StopScene.BRAKE_MS2 : StopScene.GAIN_MS2);
-        const easeM = speed => Math.abs(v0 * v0 - speed * speed) / (2 * rate(speed));
-        const phases = [];
-        if (v0 > v && easeM(v) + brakeOf(v) > L) {
-            // (no room to ease to the ride speed: one steady slowing to the slot)
-            phases.push({ v: v0, a: -(v0 * v0) / (2 * Math.max(L, 1e-3)), dur: v0 > 0 ? (2 * L) / v0 : 0 });
-        } else {
-            if (v0 < v && easeM(v) + brakeOf(v) > L) {
-                // (a slow start on a short way: the most speed it can reach and still stop, found by halving)
-                let lo = v0, hi = v;
-                for (let k = 0; k < 40; k++) { const mid = (lo + hi) / 2; if (easeM(mid) + brakeOf(mid) > L) hi = mid; else lo = mid; }
-                v = Math.max(lo, 1e-3);
-            }
-            const d1 = easeM(v), db = Math.min(brakeOf(v), Math.max(0, L - d1));
-            if (Math.abs(v - v0) > 1e-9) phases.push({ v: v0, a: v > v0 ? rate(v) : -rate(v), dur: Math.abs(v - v0) / rate(v) });
-            phases.push({ v, a: 0, dur: Math.max(0, L - d1 - db) / v });
-            phases.push({ v, a: -(v * v) / (2 * Math.max(db, 1e-3)), dur: db > 0 ? (2 * db) / v : 0 });
-        }
-        let m = 0, t = 0;
-        for (const ph of phases) { ph.m = m; ph.t = t; m += ph.v * ph.dur + 0.5 * ph.a * ph.dur * ph.dur; t += ph.dur; }
-        way.phases = phases;
-        way.arriveS = t;
-        return phases;
-    }
-
-    // Where a rider is on its way in after `t` seconds: {x, z, heading, speed, parked, arriveS}. Parked, it faces its
-    // slot's heading
-    static along(way, t, slot) {
-        const phases = StopScene.profile(way);
-        const L = way.length, tStop = way.arriveS;
-        let m, speed;
-        if (t <= 0) { m = 0; speed = phases.length ? phases[0].v : 0; } else if (t >= tStop) { m = L; speed = 0; } else {
-            let k = 0;
-            while (k + 1 < phases.length && phases[k + 1].t <= t) k++;
-            const ph = phases[k], u = t - ph.t;
-            speed = Math.max(0, ph.v + ph.a * u);
-            m = ph.m + ph.v * u + 0.5 * ph.a * u * u;
-        }
-        m = Math.max(0, Math.min(L, m));
-        const pts = way.points;
-        let i = 0;
-        while (i + 2 < pts.length && pts[i + 1].m < m) i++;
-        const p = pts[i], q = pts[Math.min(pts.length - 1, i + 1)];
-        const u = q.m > p.m ? (m - p.m) / (q.m - p.m) : 0;
-        const parked = t >= tStop;
-        const heading = parked ? slot.heading : Math.atan2(q.x - p.x, q.z - p.z);
-        return { x: p.x + (q.x - p.x) * u, z: p.z + (q.z - p.z) * u, heading, speed, parked, arriveS: tStop, m };
-    }
-
-    // The scene. `riders`: [{bike: {group or bikeGroup, rider, arms, legs, character, yawAngle?}, s, at?, speed?}] in
-    // riding order, the player first (`at` {x, z} its own place, `speed` m/s as it crossed the line). `ground(x, z)` the
-    // drawn ground's height. `camera` the chase camera at the start ({offset, yaw, pitch, roll, fov}: flyAt), or none
-    // (it then starts on the hold); `aspect` the screen's
-    constructor({ stop, route, riders, ground, seed = 1, camera = null, aspect = 16 / 9 }) {
+    // The scene. `riders`: [{bike: {group or bikeGroup, rider, arms, legs, character}, s, player, at: {x, z}, speed, yaw,
+    // lean}] (the player and every rider of the group, with its place on the ride, its own place, speed, heading and
+    // lean as the line was crossed). `ground(x, z, s)` the drawn ground's height, read near ride distance s where two
+    // roads or a road and the land stand one over the other (the Schöllenen's way down to Göschenen passes 10 m over
+    // the ride: read with no hint, the ground under a bike there flipped between them); `faces(x, z, reach)` the walls and houses
+    // near a place (WorldEnvironment.cameraFaces) or null. `camera` the chase camera at the start ({offset: the eye less
+    // the player's place, yaw, pitch, roll, fov}), or none (the scene then starts on its held view); `aspect` the
+    // screen's, `visible` the share of its height between the bars
+    constructor({ stop, route, riders, ground, seed = 1, camera = null, aspect = 16 / 9, faces = null, visible = 0.76 }) {
+        const T = EndShot.TUNING;
         this.stop = stop;
         this.route = route;
+        // (the ground at the stop, and under the camera near where the player is on its way: hintS)
+        this.groundAt = ground;
+        this.hintS = stop.s;
+        ground = (x, z) => this.groundAt(x, z, stop.s);
         this.ground = ground;
+        this.faces = faces;
         this.t = 0;
         this.card = false;
         this.skipped = false;
         this.puffs = [];
         this.seed = seed;
-        this.riders = riders.map((r, k) => {
-            const slot = stop.slots[Math.min(stop.slots.length - 1, k)];
-            // (the player from where it is: past a stop behind it, it turns round; StopScene.wayIn)
-            const here = Number.isFinite(r.s) ? r.s : stop.s - StopScene.BACK_M;
-            const fromS = stop.keepLine && here > stop.s ? here : Math.max(stop.s - (k === 0 ? StopScene.FROM_M : StopScene.BACK_M), Math.min(stop.s, here));
-            const own = k === 0 && r.at && fromS === here ? r.at : null;
-            const way = StopScene.wayIn(stop, route, k === 0 ? fromS : stop.s - StopScene.BACK_M, slot, own);
-            if (k === 0 && Number.isFinite(r.speed)) way.v0 = r.speed;
-            const actions = (r.bike.character && r.bike.character.stop) || [];
-            return { ...r, slot, way, start: k * StopScene.ARRIVE_GAP_S, stood: false, actions, nextPuff: StopScene.PUFF_EVERY_S * (0.3 + ((k * 7 + seed) % 5) / 10) };
+        this.visible = visible;
+        // Who comes in: the player and the riders that kept up (EndShot.keep); the rest never show
+        const player = riders.find(r => r.player) || riders[0];
+        const crew = riders.filter(r => r !== player);
+        const kept = EndShot.keep(stop, { s: player.s, speed: player.speed }, crew);
+        let coming = [player, ...crew.filter((r, k) => kept[k])];
+        // The bays: as many as the stop's row holds, faced the way the view lies
+        const first = stop.slots[0];
+        const toward = EndShot.views(stop, first, ground)[0] || null;
+        const plan = EndShot.bays(stop, coming.length, toward);
+        this.plan = plan;
+        // (the riders that reach the stop first take the bays first: by how far each rides to the stop's entry; a
+        // row too short leaves out the last of the group)
+        const entry = stop.path.slice(0, plan.entry + 1).map(([x, z]) => ({ x, z }));
+        // (the riders past the turn-in turn round together, TURN_M past the front one: each turning where it was, the
+        // turns of those behind crossed the lane of the ones still riding out)
+        const sOf = r => (Number.isFinite(r.s) ? r.s : stop.s - StopScene.BACK_M);
+        const past = coming.filter(r => sOf(r) > stop.s + 1);
+        const turnAt = past.length ? Math.max(...past.map(sOf)) + StopScene.TURN_M : null;
+        // (a rider out of sight ahead of the player at the line finished first: traffic parks a rider that rides off
+        // the end of the stage out of sight. It is in its bay already, the furthest along the aisle)
+        const early = r => !r.player && r.hidden && sOf(r) >= sOf(player);
+        const lead = coming.map((r) => {
+            if (early(r)) return { r, raw: [], m: -1, early: true };
+            const fromS = sOf(r);
+            const road = EndShot.roadPart(stop, route, fromS, r.at || null, 14, StopScene.TURN_M, turnAt);
+            const raw = [...road, ...entry];
+            let m = 0;
+            for (let i = 1; i < raw.length; i++) m += Math.hypot(raw[i].x - raw[i - 1].x, raw[i].z - raw[i - 1].z);
+            return { r, raw, m };
         });
-        // (the last to park: the last to start, or the player turned round for a stop behind it, whose way is longest)
-        this.allParkedS = Math.max(0, ...this.riders.map(r => r.start + StopScene.along(r.way, 1e9, r.slot).arriveS));
-        this.playerParkedS = this.riders.length ? StopScene.along(this.riders[0].way, 1e9, this.riders[0].slot).arriveS : 0;
-        this.hold = StopScene.holdOf(stop, ground, aspect, this.riders.length);
-        this.from = camera;
-        // (from where the chase camera is at the start: the player's first place and the camera's offset from it)
-        const first = this.riders.length ? this.riders[0].way.points[0] : null;
-        const y0 = first ? ground(first.x, first.z) : NaN;
-        const eye0 = camera && first ? { x: first.x + camera.offset.x, y: (Number.isFinite(y0) ? y0 : 0) + camera.offset.y, z: first.z + camera.offset.z } : null;
-        // How far behind the player along its way the chase camera was: the overtake starts there
-        const O = StopScene.OVERTAKE;
-        const h0 = first ? StopScene.wayAt(this.riders[0].way, 1, {}).heading : 0;
-        this.back = camera ? Math.max(0, -(camera.offset.x * Math.sin(h0) + camera.offset.z * Math.cos(h0))) : 0;
-        // (it settles once it is ahead, over settleS, or longer to a hold far from where it is then: no faster than
-        // settleMostMs on average, so a hold back down the road, the Tremola's, is flown to, not swept to)
-        this.holdFrom = O.passFromS + O.passS * O.holdAfterPass;
-        this.settleS = O.settleS;
-        // (and goes up on the way by ARC_M, or ARC_SHARE of a long settle's length, so it passes over the land, not
-        // through a bank beside it: the Tremola's settle of about 500 m skimmed a hillside at 4 m)
-        this.arcM = StopScene.ARC_M;
-        if (camera && first) {
-            const bike = StopScene.along(this.riders[0].way, this.holdFrom, this.riders[0].slot);
-            const there = StopScene.wayAt(this.riders[0].way, bike.m + O.aheadM, {});
-            const far = Math.hypot(this.hold.eye.x - there.x, this.hold.eye.z - there.z);
-            this.settleS = Math.max(O.settleS, far / O.settleMostMs);
-            this.arcM = Math.max(StopScene.ARC_M, far * StopScene.ARC_SHARE);
+        lead.sort((a, b) => a.m - b.m || (b.r.player ? 1 : 0) - (a.r.player ? 1 : 0));
+        if (lead.length > plan.bays.length) {
+            const keep = lead.filter(l => l.r === player).concat(lead.filter(l => l.r !== player).slice(0, plan.bays.length - 1));
+            lead.splice(0, lead.length, ...lead.filter(l => keep.includes(l)));
         }
-        this.flyS = eye0 ? this.holdFrom + this.settleS : StopScene.FLY_S;
+        coming = lead.map(l => l.r);
+        this.left = riders.filter(r => !coming.includes(r));
+        this.riders = lead.map(({ r, raw, early: first }, k) => {
+            const slot = plan.bays[k];
+            const from = raw[raw.length - 1];
+            const into = plan.approach(k, from);
+            const pts = (first ? [{ x: slot.x - Math.sin(slot.heading), z: slot.z - Math.cos(slot.heading) }, { x: slot.x, z: slot.z }] : [...raw.slice(0, -1), ...into]).map(p => ({ x: p.x, z: p.z, s: Number.isFinite(p.s) ? p.s : stop.s, y: 0 }));
+            const way = EndShot.smoothWay(pts);
+            // (each point of the way on the ground as drawn, read near its own place on the ride)
+            let last = NaN;
+            for (let i = 0; i < way.n; i++) {
+                const y = this.groundAt(way.x[i], way.z[i], way.s[i]);
+                way.y[i] = Number.isFinite(y) ? y : Number.isFinite(last) ? last : 0;
+                last = way.y[i];
+            }
+            StopScene.steady(way.y, StopScene.STEADY_N);
+            const actions = (r.bike.character && r.bike.character.stop) || [];
+            return { ...r, slot, way, early: !!first, stood: false, actions, nextPuff: StopScene.PUFF_EVERY_S * (0.3 + ((k * 7 + seed) % 5) / 10) };
+        });
+        // The ride in, planned whole: the player at a calm pace, the group at its own
+        this.ride = EndShot.ride(this.riders.map((r) => {
+            const speed = Number.isFinite(r.speed) ? r.speed : T.calmMs;
+            const long = Math.min(T.longMostMs, Math.max(0, r.way.length - 40) / T.longMostS);
+            const cruise = r.player ? Math.max(T.calmMs, long) : Math.max(T.calmMs, long, Math.min(T.crewMostMs, speed));
+            return r.early ? { way: r.way, v0: 0, cruise, parked: true } : { way: r.way, v0: speed, cruise, h0: r.yaw, lean0: r.lean };
+        }));
+        this.playerIndex = Math.max(0, this.riders.findIndex(r => r.player));
+        this.riders.forEach((r, k) => { r.parkedAt = this.ride.parkedAt[k]; });
+        const parked = this.ride.parkedAt.filter(Number.isFinite);
+        this.playerParkedS = Number.isFinite(this.ride.parkedAt[this.playerIndex]) ? this.ride.parkedAt[this.playerIndex] : this.ride.frames / this.ride.hz;
+        this.allParkedS = parked.length ? Math.max(...parked) : this.playerParkedS;
+        // The held view: composed over the bays (EndShot.compose), or the kind's hold where nothing fits
+        this.aspect = aspect;
+        const bays = this.riders.map(r => r.slot);
+        const mx = bays.reduce((n, b) => n + b.x, 0) / bays.length, mz = bays.reduce((n, b) => n + b.z, 0) / bays.length;
+        const near = StopScene.facesNear(faces, mx, mz, 120);
+        const own = StopScene.HOLDS[stop.id] || stop.hold;
+        this.hold = EndShot.compose(stop, bays, ground, aspect, near, visible) || StopScene.holdOf(stop, ground, aspect, bays.length);
+        this.composed = !!this.hold.view || !!this.hold.hand;
+        this.hold.haze = (own && own.haze) || null;
+        // The crane: from craneLeadS before the player parks, as long as its way needs, over the least arc that clears
+        this.craneAt = Math.max(T.joinS + 0.5, this.playerParkedS - T.craneLeadS);
+        this.from = camera;
+        this.camera = null;
+        if (camera) {
+            this.camera = new EndShot.Camera({ from: camera, hold: this.hold, ground: (x, z) => this.groundAt(x, z, this.hintS), faces, craneAt: this.craneAt, craneS: T.craneLeastS });
+            const bike = this.playerAt(this.craneAt);
+            const fe = { x: bike.x - Math.sin(bike.heading) * this.camera.back, y: bike.y + this.camera.up, z: bike.z - Math.cos(bike.heading) * this.camera.back };
+            const far = Math.hypot(this.hold.eye.x - fe.x, this.hold.eye.y - fe.y, this.hold.eye.z - fe.z);
+            // (and no faster a turn than craneTurnDegS on average: a held view that looks back the way the player came)
+            const turn = Math.abs(EndShot.turn(bike.heading + Math.PI, this.hold.yaw)) * 180 / Math.PI;
+            this.camera.craneS = Math.max(T.craneLeastS, Math.min(T.craneMostS, Math.max(far / T.craneMs, turn / T.craneTurnDegS)));
+            this.camera.arcM = StopScene.arcOf(fe, this.hold.eye, ground, StopScene.facesNear(faces, (fe.x + this.hold.eye.x) / 2, (fe.z + this.hold.eye.z) / 2, far / 2 + 30));
+            this.flyS = this.craneAt + this.camera.craneS;
+        } else this.flyS = 0;
     }
 
-    // The screen's shape changed: the hold's lens is made again for it
+    // A way's heights with each point taken as the median of the STEADY_N round it: where one road crosses over
+    // another (the way down to Göschenen's car park passes 10 m over the ride), a point or two of the way read the
+    // other road even near its own place on the ride, and the bike dropped 10 m and came back in half a second
+    static get STEADY_N() { return 9; }
+    // and then eased over the same span (a triangle's weights), so a step from the road onto a stop's standing (0.9 m at
+    // the lookout over Airolo) is ridden up over a few metres, not in a frame
+    static steady(y, n) {
+        const half = Math.floor(n / 2), src = Float64Array.from(y), win = [];
+        for (let i = 0; i < y.length; i++) {
+            win.length = 0;
+            for (let k = Math.max(0, i - half); k <= Math.min(y.length - 1, i + half); k++) win.push(src[k]);
+            win.sort((a, b) => a - b);
+            y[i] = win[win.length >> 1];
+        }
+        const mid = Float64Array.from(y);
+        for (let i = 0; i < y.length; i++) {
+            let sum = 0, weight = 0;
+            for (let k = -half; k <= half; k++) {
+                const j = i + k;
+                if (j < 0 || j >= y.length) continue;
+                const w = half + 1 - Math.abs(k);
+                sum += mid[j] * w;
+                weight += w;
+            }
+            y[i] = sum / weight;
+        }
+        return y;
+    }
+
+    // The walls and houses within `reach` of (x, z), as a copy (WorldEnvironment.cameraFaces keeps one list it fills
+    // again for each place it is asked about)
+    static facesNear(faces, x, z, reach) {
+        if (!faces) return null;
+        const held = faces(x, z, reach);
+        return held && held.count ? { data: Float64Array.from(held.data.subarray(0, held.count * 9)), count: held.count } : null;
+    }
+
+    // The least arc (EndShot.TUNING.arcs) over which the crane from `a` to `b` keeps 1 m over the land and passes no
+    // wall or house; the highest where none does
+    static arcOf(a, b, ground, faces) {
+        const arcs = EndShot.TUNING.arcs;
+        for (const arc of arcs) {
+            let ok = true, prev = null;
+            for (let k = 0; k <= 40 && ok; k++) {
+                const w = EndShot.ease(k / 40);
+                const p = { x: a.x + (b.x - a.x) * w, y: a.y + (b.y - a.y) * w + arc * 4 * w * (1 - w), z: a.z + (b.z - a.z) * w };
+                const g = ground(p.x, p.z);
+                if (k > 0 && k < 40 && Number.isFinite(g) && p.y < g + 1) ok = false;
+                if (prev && EndShot.faceShare(faces, prev, p, 0.3) < 1) ok = false;
+                prev = p;
+            }
+            if (ok) return arc;
+        }
+        return arcs[arcs.length - 1];
+    }
+
+    // The player at t seconds: {x, y, z, heading, s}
+    playerAt(t) {
+        const at = EndShot.trackAt(this.ride, this.playerIndex, t, {});
+        const on = EndShot.wayAt(this.riders[this.playerIndex].way, at.m, {});
+        return { x: at.x, y: on.y, z: at.z, heading: at.heading, s: on.s };
+    }
+
+    // The screen's shape changed: the held view's lens is made again for it
     resize(aspect) {
-        this.hold = StopScene.holdOf(this.stop, this.ground, aspect, this.riders.length);
+        this.aspect = aspect;
+        const own = StopScene.HOLDS[this.stop.id] || this.stop.hold;
+        this.hold.fov = this.composed && !this.hold.hand ? EndShot.vfovOf(EndShot.TUNING.hfov, aspect) : StopScene.vfovOf(own ? own.hfov : 65, aspect, own ? own.vfovMost : 60);
     }
 
-    // When the card comes up
-    // (and not before the last rider is off: a player turned round for a stop behind it parks last)
-    // (and not before the fly has come to rest on the hold)
-    get cardAt() { return Math.max(this.playerParkedS + StopScene.CARD_AFTER_S, this.allParkedS + StopScene.GET_OFF_S, this.flyS + StopScene.HOLD_FIRST_S); }
+    // When the card comes up: the camera held for holdFirstS, every rider off its bike, and CARD_AFTER_S after the
+    // player parked
+    get cardAt() { return Math.max(this.flyS + EndShot.TUNING.holdFirstS, this.allParkedS + StopScene.GET_OFF_S + 0.3, this.playerParkedS + StopScene.CARD_AFTER_S); }
 
-    // Skips to where the scene rests: everyone parked and stood, the card up
+    // Skips to where the scene rests: everyone parked and stood, the camera held, the card up
     skip() {
         this.skipped = true;
-        this.t = Math.max(this.t, this.allParkedS + StopScene.GET_OFF_S + 0.01, this.cardAt);
+        this.t = Math.max(this.t, this.cardAt);
     }
 
-    // One frame: each rider's place on its way in ({x, y, z, heading, speed, parked, stand}), and the camera
+    // One frame: each rider's place on its way in ({x, y, z, heading, speed, lean, parked, stand, shown}), and the camera
     step(dt) {
         this.t += Math.max(0, dt);
-        const out = [];
-        for (const r of this.riders) {
-            const at = StopScene.along(r.way, this.t - r.start, r.slot);
-            const y = this.ground(at.x, at.z);
-            at.y = Number.isFinite(y) ? y : null;
-            at.shown = this.t >= r.start;
-            at.stand = at.parked && this.t - r.start - at.arriveS >= StopScene.GET_OFF_S;
-            out.push(at);
-        }
-        // From the chase camera beside the player, past it along its way, to the hold (overtakeAt); with no chase camera,
-        // the hold
-        const lead = out[0];
-        const camera = this.from && lead ? this.overtakeAt(this.t, lead, dt) : StopScene.flyAt({ offset: { x: 0, y: 0, z: 0 }, yaw: this.hold.yaw, pitch: this.hold.pitch, roll: 0, fov: this.hold.fov }, this.hold.eye, this.hold, this.flyS, () => NaN, this.flyS);
+        const out = this.riders.map((r, k) => {
+            const at = EndShot.trackAt(this.ride, k, this.t, {});
+            const on = EndShot.wayAt(r.way, at.m, {});
+            at.y = on.y;
+            at.s = on.s;
+            at.shown = true;
+            at.parked = this.t >= r.parkedAt;
+            at.stand = at.parked && this.t - r.parkedAt >= StopScene.GET_OFF_S;
+            return at;
+        });
+        const lead = out[this.playerIndex];
+        if (lead) this.hintS = lead.s;
+        const hold = this.hold;
+        const held = { eye: hold.eye, yaw: hold.yaw, pitch: hold.pitch, roll: 0, fov: hold.fov };
+        const camera = this.camera && !this.skipped && lead
+            ? this.camera.at(this.t, { x: lead.x, y: lead.y, z: lead.z, heading: lead.heading }, dt, this.playerAt(this.t + EndShot.TUNING.foreseeS))
+            : held;
         return { riders: out, camera, card: this.t >= this.cardAt, held: this.t >= this.flyS };
     }
 

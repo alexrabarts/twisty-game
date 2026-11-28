@@ -1,8 +1,9 @@
 /**
  * @jest-environment node
  */
-// The scene at a leg's end stop (js/world/stopscene.js), without a page: the bars' size, the stop of a stage, each
-// rider's way in and its slot, the camera's path, the card, a skip, and the tables a new stop or rider needs.
+// The scene at a leg's end stop (js/world/stopscene.js, js/world/endshot.js), without a page: the bars' size, the stop
+// of a stage, who comes in, the bays, each rider's ride into its bay, the camera's one shot, the composed view, the
+// card, a skip, and the tables a new stop or rider needs. tests/unit/world-end-shot.test.js rides into every leg's end.
 import { describe, test, expect } from '@jest/globals';
 import fs from 'node:fs';
 import path from 'node:path';
@@ -11,7 +12,7 @@ import { loadScript, realThree } from '../helpers/load-game.js';
 
 const REPO = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..', '..');
 const THREE = realThree();
-const StopScene = new Function('THREE', `${loadScript('world/stopscene.js')}\nreturn StopScene;`)(THREE);
+const { EndShot, StopScene } = new Function('THREE', `${loadScript('world/endshot.js')}\n${loadScript('world/stopscene.js')}\nreturn { EndShot, StopScene };`)(THREE);
 const CHARACTERS = new Function('THREE', 'document', `${loadScript('vehicle.js')}\nreturn CHARACTERS;`)(THREE, { createElement: () => ({ getContext: () => null }) });
 
 // A straight ride north along +z, 10 m wide, and a stop beside it at s 500 with its slots in a row 20 m out
@@ -33,6 +34,29 @@ describe('the bars', () => {
     });
 });
 
+// Two bikes ({x, z, heading}, 2.2 by 0.8 m) overlap in plan
+function overlap(a, b) {
+    const half = [1.1, 0.4];
+    const corners = p => [[1, 1], [1, -1], [-1, 1], [-1, -1]].map(([u, v]) => [p.x + Math.sin(p.heading) * u * half[0] + Math.cos(p.heading) * v * half[1], p.z + Math.cos(p.heading) * u * half[0] - Math.sin(p.heading) * v * half[1]]);
+    const ca = corners(a), cb = corners(b);
+    for (const h of [a.heading, a.heading + Math.PI / 2, b.heading, b.heading + Math.PI / 2]) {
+        const pa = ca.map(([x, z]) => x * Math.sin(h) + z * Math.cos(h)), pb = cb.map(([x, z]) => x * Math.sin(h) + z * Math.cos(h));
+        if (Math.max(...pa) < Math.min(...pb) || Math.max(...pb) < Math.min(...pa)) return false;
+    }
+    return true;
+}
+
+const forward = c => [-Math.sin(c.yaw) * Math.cos(c.pitch), Math.sin(c.pitch), -Math.cos(c.yaw) * Math.cos(c.pitch)];
+const turnDeg = (a, b) => { const p = forward(a), q = forward(b); return Math.acos(Math.min(1, p[0] * q[0] + p[1] * q[1] + p[2] * q[2])) * 180 / Math.PI; };
+
+// The player at the line 60 m before the turn-in at 18 m/s, its chase camera 6 m behind and 3 m over it, and the group
+// behind it at `gaps` metres
+const chase = { offset: { x: 0, y: 3, z: -6 }, yaw: Math.PI, pitch: -0.15, roll: 0.03, fov: 72 };
+const ridersOf = (gaps, s = 440) => [
+    { bike: { character: { id: 'player' } }, s, player: true, at: { x: -2.5, z: s }, speed: 18, yaw: 0, lean: 0.04 },
+    ...gaps.map((g, k) => ({ bike: { character: { id: `r${k}` } }, s: s - g, at: { x: -2.5 + (k % 2 ? 0.8 : -0.8), z: s - g }, speed: 14, yaw: 0, lean: 0 }))
+];
+
 describe('the scene', () => {
     test('a stage with a stop at its end has it; one without, or the whole ride, has none', () => {
         expect(StopScene.stopAt({ stage: { id: 'a' }, stops: [stop] })).toBe(stop);
@@ -40,246 +64,218 @@ describe('the scene', () => {
         expect(StopScene.stopAt({ stage: null, stops: [stop] })).toBeNull();
     });
 
-    test('each rider rides in along the ride, the stop\'s path and into its own slot, and stops there facing its slot', () => {
-        const riders = [0, 1, 2].map(k => ({ bike: { character: { id: `r${k}` } }, s: 470 - k * 20, player: k === 0 }));
-        const scene = new StopScene({ stop, route, riders, ground: flat });
-        scene.riders.forEach((r, k) => {
-            expect(r.slot).toBe(stop.slots[k]);
-            const at = StopScene.along(r.way, 1e9, r.slot);
-            expect(at.parked).toBe(true);
-            expect(Math.hypot(at.x - r.slot.x, at.z - r.slot.z)).toBeLessThan(1e-6);
-            expect(at.heading).toBe(r.slot.heading);
-            expect(at.speed).toBe(0);
-        });
-        // One after the other, ARRIVE_GAP_S apart
-        expect(scene.riders[1].start - scene.riders[0].start).toBe(StopScene.ARRIVE_GAP_S);
-        // At ride speed until the last BRAKE_M, then slowing: never faster than RIDE_MS, and slower each step at the end
-        const way = scene.riders[0].way;
-        let last = Infinity;
-        for (let t = 0; t < 30; t += 0.25) {
-            const at = StopScene.along(way, t, scene.riders[0].slot);
-            expect(at.speed).toBeLessThanOrEqual(StopScene.RIDE_MS);
-            if (at.speed < StopScene.RIDE_MS) { expect(at.speed).toBeLessThanOrEqual(last); last = at.speed; }
-        }
+    // The owner: "hopefully with the others if they've kept up". Kept up: behind the player at the line within keepM
+    // and keepS of its own pace, or ahead of it and not far past the turn-in
+    test('the riders that kept up come in; the ones far behind or far past the stop do not', () => {
+        const T = EndShot.TUNING;
+        const player = { s: 440, speed: 18 };
+        const kept = EndShot.keep(stop, player, [
+            { s: 430, speed: 14 }, { s: 440 - 250, speed: 14 }, { s: 440 - 290, speed: 14 }, { s: 440 - 310, speed: 20 },
+            { s: 440 - 150, speed: 5 }, { s: 470, speed: 14 }, { s: stop.s + T.aheadPastM + 10, speed: 14 }, { s: NaN, speed: 0 }
+        ]);
+        // (290 m at 14 m/s is 21 s: not kept; 150 m at 5 m/s is 30 s, but keepLeastMs counts it at 8 m/s: 19 s)
+        expect(kept).toEqual([true, true, false, false, true, true, false, false]);
+        const scene = new StopScene({ stop, route, riders: ridersOf([15, 30, 600]), ground: flat });
+        expect(scene.riders.length).toBe(3);
+        expect(scene.left.map(r => r.bike.character.id)).toEqual(['r2']);
     });
 
-    test('a stop that keeps its line, behind the player: it turns round past the line and rides back on the other half', () => {
-        const behind = { ...stop, keepLine: true };
-        const scene = new StopScene({ stop: behind, route, riders: [{ bike: {}, s: 1140, player: true }], ground: flat });
-        const way = scene.riders[0].way;
-        // (on past where it was on its own half of the road, -x here as every way in rides, across the road, then back
-        // on the other half: +x)
-        expect(Math.max(...way.points.map(p => p.z))).toBeGreaterThan(1140 + StopScene.TURN_M - 1);
-        const back = way.points.filter(p => p.z < 1100 && p.z > 600);
-        expect(back.length).toBeGreaterThan(50);
-        for (const p of back) expect(p.x).toBeCloseTo(2.5, 5);
-        expect(way.points[0].x).toBeCloseTo(-2.5, 5);
-        const end = StopScene.along(way, 1e9, scene.riders[0].slot);
-        expect(end.parked).toBe(true);
-        expect(Math.hypot(end.x - scene.riders[0].slot.x, end.z - scene.riders[0].slot.z)).toBeLessThan(0.01);
-        // (a long way in is ridden in WAY_MOST_S at the most)
-        expect(end.arriveS).toBeLessThan(StopScene.WAY_MOST_S + 10);
-        // A stop that does not keep its line puts the player at most BACK_M before it, as before
-        const ahead = new StopScene({ stop, route, riders: [{ bike: {}, s: 1140, player: true }], ground: flat });
-        expect(ahead.riders[0].way.points[0].z).toBeLessThanOrEqual(500);
+    // The bays are the stop's own slots (manifest.stops[].slots, the table the next leg's start reads), a tidy row,
+    // faced toward the view where the area has room behind the row for the aisle
+    test('the bays: a row of the stop\'s slots side by side, faced to the view, filled from the far end of the aisle', () => {
+        const plan = EndShot.bays(stop, 5, { x: 1, z: 0 });
+        expect(plan.fallback).toBe(false);
+        expect(plan.bays).toHaveLength(5);
+        for (const b of plan.bays) {
+            expect(stop.slots.some(s => s.x === b.x && s.z === b.z)).toBe(true);
+            // (the view lies +x: the bikes face it)
+            expect(Math.sin(b.heading)).toBeCloseTo(1, 6);
+        }
+        const zs = plan.bays.map(b => b.z).sort((a, b) => a - b);
+        for (let k = 1; k < zs.length; k++) expect(zs[k] - zs[k - 1]).toBeCloseTo(2.2, 6);
+        // (the way in reaches the aisle at its z 500 end: the first to come takes the far bay)
+        expect(plan.bays[0].z).toBe(Math.max(...zs));
+        // Every way into a bay is inside the area by marginM from where it meets the aisle
+        plan.bays.forEach((b, k) => expect(EndShot.within(stop.ring, plan.approach(k).slice(1), EndShot.TUNING.marginM)).toBe(true));
+        // A view the other way turns the bikes round
+        expect(Math.sin(EndShot.bays(stop, 5, { x: -1, z: 0 }).bays[0].heading)).toBeCloseTo(-1, 6);
     });
 
-    test('the player rides on from its own place at the speed it crossed the line, with no jump, and parks', () => {
-        const at = { x: 1.3, z: 445 };
-        const scene = new StopScene({ stop, route, riders: [{ bike: {}, s: 445, player: true, at, speed: 24 }], ground: flat });
-        const r = scene.riders[0];
-        expect(r.way.points[0].x).toBe(at.x);
-        expect(r.way.points[0].z).toBe(at.z);
-        const first = StopScene.along(r.way, 0, r.slot);
-        expect(first.speed).toBeCloseTo(24, 6);
-        let last = Infinity, prev = first;
-        for (let t = 1 / 60; t < r.way.arriveS + 1; t += 1 / 60) {
-            const now = StopScene.along(r.way, t, r.slot);
-            expect(now.speed).toBeLessThanOrEqual(last + 1e-9);
-            // (never more than its speed's worth of way in a frame: no jump)
-            expect(Math.hypot(now.x - prev.x, now.z - prev.z)).toBeLessThanOrEqual(24 / 60 + 1e-6);
-            last = now.speed;
-            prev = now;
-        }
-        expect(prev.parked).toBe(true);
-        expect(Math.hypot(prev.x - r.slot.x, prev.z - r.slot.z)).toBeLessThan(1e-6);
-        // A slow crossing speeds up to the ride speed and still stops in its slot
-        const slow = new StopScene({ stop, route, riders: [{ bike: {}, s: 445, player: true, at, speed: 2 }], ground: flat });
-        const end = StopScene.along(slow.riders[0].way, 1e9, slow.riders[0].slot);
-        expect(end.parked).toBe(true);
-        expect(StopScene.along(slow.riders[0].way, 0, slow.riders[0].slot).speed).toBeCloseTo(2, 6);
-    });
-
-    // The owner: "smoothly transition the camera into cinematic mode with the black bars and we fly the camera into the
-    // ultimate lookout spot". No step in place, aim or lens from the chase camera's last frame to the hold
-    test('the camera flies from the chase camera to the hold with no step in place, aim or lens', () => {
-        const at = { x: -1.5, z: 450 };
-        // A chase camera 7 m behind and 3 m over the bike, looking ahead and a little down, banked, at a wide lens
-        const from = { offset: { x: 0.4, y: 3, z: -7 }, yaw: Math.PI - 0.05, pitch: -0.12, roll: 0.06, fov: 82 };
-        const scene = new StopScene({ stop, route, riders: [{ bike: {}, s: 450, player: true, at, speed: 18 }], ground: flat, camera: from, aspect: 16 / 9 });
-        const first = scene.step(0).camera;
-        expect(first.eye.x).toBeCloseTo(at.x + from.offset.x, 9);
-        expect(first.eye.y).toBeCloseTo(100 + from.offset.y, 9);
-        expect(first.eye.z).toBeCloseTo(at.z + from.offset.z, 9);
-        expect(first.yaw).toBeCloseTo(from.yaw, 9);
-        expect(first.pitch).toBeCloseTo(from.pitch, 9);
-        expect(first.roll).toBeCloseTo(from.roll, 9);
-        expect(first.fov).toBeCloseTo(from.fov, 9);
-        const dt = 1 / 60;
-        const frames = [first];
-        while (scene.t < scene.flyS + 2) frames.push(scene.step(dt).camera);
-        const steps = frames.slice(1).map((c, k) => {
-            const p = frames[k];
-            return { move: Math.hypot(c.eye.x - p.eye.x, c.eye.y - p.eye.y, c.eye.z - p.eye.z), aim: Math.max(Math.abs(StopScene.turn(p.yaw, c.yaw)), Math.abs(c.pitch - p.pitch), Math.abs(StopScene.turn(p.roll, c.roll))), lens: Math.abs(c.fov - p.fov) };
-        });
-        // Each frame moves the eye no more than the bike rides in one plus the fly's own share, turns it under a degree and
-        // changes the lens by under a fifth of a degree; and each frame's move is close to the one before (no kink)
-        for (const st of steps) {
-            expect(st.move).toBeLessThan(0.6);
-            expect(st.aim).toBeLessThan(Math.PI / 180);
-            expect(st.lens).toBeLessThan(0.2);
-        }
-        for (let k = 1; k < steps.length; k++) {
-            expect(Math.abs(steps[k].move - steps[k - 1].move)).toBeLessThan(0.05);
-            // (the camera rides the bike's own way past it: where the bike stops slowing, so does its turn, 0.005 rad a frame)
-            expect(Math.abs(steps[k].aim - steps[k - 1].aim)).toBeLessThan(0.005);
-            expect(Math.abs(steps[k].lens - steps[k - 1].lens)).toBeLessThan(0.01);
-        }
-        // From flyS on it is the hold, and the hold stands EYE_CLEAR_M over the ground at least
-        const hold = StopScene.holdOf(stop, flat, 16 / 9);
-        const last = frames[frames.length - 1];
-        expect(last.eye.x).toBeCloseTo(hold.eye.x, 9);
-        expect(last.eye.z).toBeCloseTo(hold.eye.z, 9);
-        expect(last.fov).toBeCloseTo(hold.fov, 9);
-        expect(last.eye.y).toBeGreaterThanOrEqual(100 + StopScene.EYE_CLEAR_M - 1e-9);
-        // A lookout's frame faces its view, and its hold is at the rail (`edge`: 10 m out from the middle at x 20, on +x)
-        const f = StopScene.frame(stop);
-        expect(f.outX).toBeCloseTo(1, 6);
-        expect(f.edge).toBeGreaterThan(9);
-        expect(f.edge).toBeLessThanOrEqual(10);
-        expect(hold.eye.x).toBeCloseTo(f.ox + f.edge + StopScene.KINDS.lookout.hold.eye[2], 6);
-        // and it looks out (east, +x: yaw -90 degrees) and down
-        expect(hold.yaw).toBeCloseTo(-Math.PI / 2, 1);
-        expect(hold.pitch).toBeLessThan(0);
-    });
-
-    // The owner: "i want the chase camera to overtake the bike so it's not in view anymore and land at the edge of the
-    // hill for the photo". The camera keeps the chase, passes the bike along its way in a little faster than it, and
-    // then settles on the hold, clearly slower than before (9 s): about 15 to 20 s on a short way in
-    test('the camera overtakes the bike, the bike leaves the view behind it, and it settles on the hold', () => {
-        const O = StopScene.OVERTAKE;
-        const at = { x: -2.5, z: 380 };
-        const from = { offset: { x: 0, y: 2.8, z: -7 }, yaw: Math.PI, pitch: -0.1, roll: 0, fov: 80 };
-        const scene = new StopScene({ stop, route, riders: [{ bike: {}, s: 380, player: true, at, speed: 14 }], ground: flat, camera: from, aspect: 16 / 9 });
-        expect(scene.flyS).toBeGreaterThanOrEqual(15);
-        expect(scene.flyS).toBeLessThanOrEqual(20);
-        expect(scene.cardAt).toBeGreaterThanOrEqual(scene.flyS + StopScene.HOLD_FIRST_S);
-        const dt = 1 / 60, passed = O.passFromS + O.passS;
-        let ahead = false;
-        const r = Math.PI / 180;
-        while (scene.t < scene.flyS) {
-            const frame = scene.step(dt), cam = frame.camera, bike = frame.riders[0];
-            // (never under the ground; over the road beside the bike as it passes, never in it)
-            expect(cam.eye.y).toBeGreaterThanOrEqual(100 + StopScene.EYE_CLEAR_M * StopScene.ease(scene.t / O.joinS) - 1e-6);
-            expect(Math.hypot(cam.eye.x - bike.x, cam.eye.y - 100, cam.eye.z - bike.z)).toBeGreaterThan(2);
-            if (scene.t < passed) continue;
-            // Past the bike: the bike is out of the view (behind the camera or outside its lens)
-            const dir = { x: -Math.sin(cam.yaw) * Math.cos(cam.pitch), y: Math.sin(cam.pitch), z: -Math.cos(cam.yaw) * Math.cos(cam.pitch) };
-            const to = { x: bike.x - cam.eye.x, y: 100.9 - cam.eye.y, z: bike.z - cam.eye.z };
-            const len = Math.hypot(to.x, to.y, to.z);
-            const angle = Math.acos((dir.x * to.x + dir.y * to.y + dir.z * to.z) / len) / r;
-            const half = Math.atan(Math.tan(cam.fov * r / 2) * Math.hypot(1, 16 / 9)) / r;
-            expect(angle).toBeGreaterThan(half);
-            ahead = true;
-        }
-        expect(ahead).toBe(true);
-        // and it rests on the hold
-        const hold = StopScene.holdOf(stop, flat, 16 / 9), end = scene.step(dt).camera;
-        expect(end.eye.x).toBeCloseTo(hold.eye.x, 6);
-        expect(end.eye.z).toBeCloseTo(hold.eye.z, 6);
-    });
-
-    // A hold may face any way from the way in: a car park's looks back at the group, and a leg ridden the other way
-    // comes in from the other side. The aim turns the way it started turning, and never a long way round in a frame
-    test('a hold facing any way from the way in is flown to with no jump of aim', () => {
-        const at = { x: -2.5, z: 380 };
-        const from = { offset: { x: 0, y: 2.8, z: -7 }, yaw: Math.PI, pitch: -0.1, roll: 0, fov: 80 };
-        for (let bearing = 0; bearing < 360; bearing += 7.5) {
-            const own = { ...stop, id: 'b-end', hold: { x: 25, z: 512, upM: 1.6, bearing, pitch: -5, hfov: 70 } };
-            const scene = new StopScene({ stop: own, route, riders: [{ bike: {}, s: 380, player: true, at, speed: 14 }], ground: flat, camera: from, aspect: 16 / 9 });
-            let last = scene.step(0).camera, most = 0;
-            while (scene.t < scene.flyS + 1) {
-                const cam = scene.step(1 / 60).camera;
-                most = Math.max(most, Math.abs(StopScene.turn(last.yaw, cam.yaw)));
-                last = cam;
+    test('every rider rides in from its own place, parks in its bay facing its way, and no two bikes overlap', () => {
+        const scene = new StopScene({ stop, route, riders: ridersOf([12, 25, 40, 70]), ground: flat });
+        expect(scene.riders).toHaveLength(5);
+        const player = scene.riders[scene.playerIndex];
+        // (from its own place at the speed it crossed the line)
+        const first = scene.step(0).riders[scene.playerIndex];
+        expect(first.x).toBeCloseTo(-2.5, 6);
+        expect(first.z).toBeCloseTo(440, 6);
+        expect(first.speed).toBeCloseTo(18, 6);
+        let prev = scene.step(0).riders, worstStep = 0;
+        while (scene.t < scene.cardAt + 0.5) {
+            const frame = scene.step(1 / 60);
+            const bikes = frame.riders;
+            for (let i = 0; i < bikes.length; i++) {
+                worstStep = Math.max(worstStep, Math.hypot(bikes[i].x - prev[i].x, bikes[i].z - prev[i].z));
+                for (let j = i + 1; j < bikes.length; j++) expect({ t: scene.t, i, j, overlap: overlap(bikes[i], bikes[j]) }).toEqual({ t: scene.t, i, j, overlap: false });
             }
-            expect({ bearing, most: most < Math.PI / 180 }).toEqual({ bearing, most: true });
-            expect(StopScene.turn(last.yaw, -bearing * Math.PI / 180)).toBeCloseTo(0, 6);
+            prev = bikes;
         }
+        // (no bike jumps: no more than its own speed's worth in a frame)
+        expect(worstStep).toBeLessThan(18 / 60 + 1e-6);
+        const end = scene.step(0).riders;
+        scene.riders.forEach((r, k) => {
+            expect(end[k].parked).toBe(true);
+            expect(end[k].stand).toBe(true);
+            expect(end[k].speed).toBe(0);
+            expect(Math.hypot(end[k].x - r.slot.x, end[k].z - r.slot.z)).toBeLessThan(0.05);
+            expect(Math.abs(EndShot.turn(end[k].heading, r.slot.heading))).toBeLessThan(0.02);
+        });
+        // The player at a calm pace: never faster than it crossed the line, and calmMs once it has eased down
+        const T = EndShot.TUNING;
+        for (let t = 4; t < scene.playerParkedS; t += 0.25) expect(EndShot.trackAt(scene.ride, scene.playerIndex, t).speed).toBeLessThanOrEqual(Math.max(T.calmMs, T.leastMs) + 1e-6);
+        expect(player.slot).toBe(scene.plan.bays[scene.playerIndex]);
     });
 
-    // A car park's hold frames the group: every bike parked and its rider beside it inside the picture, whichever way
-    // the slots run from the camera (at Andermatt and Gadmen the nearest bike stood cut by the picture's edge)
-    test('a car park\'s hold has every parked bike inside the picture, whichever way its slots run', () => {
+    // The owner: "position the camera for the great view all in one smooth, continuous camera shot"
+    test('the camera: the chase camera at the line, the ride in behind the player, the crane to the view, no jump, then still', () => {
+        const scene = new StopScene({ stop, route, riders: ridersOf([15, 30]), ground: flat, camera: chase, aspect: 16 / 9 });
+        const first = scene.step(0).camera;
+        expect(first.eye.x).toBeCloseTo(-2.5 + chase.offset.x, 9);
+        expect(first.eye.y).toBeCloseTo(100 + chase.offset.y, 6);
+        expect(first.eye.z).toBeCloseTo(440 + chase.offset.z, 9);
+        expect(first.yaw).toBeCloseTo(chase.yaw, 9);
+        expect(first.pitch).toBeCloseTo(chase.pitch, 9);
+        expect(first.fov).toBeCloseTo(chase.fov, 9);
+        expect(scene.craneAt).toBeGreaterThan(EndShot.TUNING.joinS);
+        expect(scene.cardAt).toBeGreaterThanOrEqual(scene.flyS + EndShot.TUNING.holdFirstS);
+        let prev = first, held = null, inView = 0, frames = 0;
+        while (scene.t < scene.cardAt + 1) {
+            const frame = scene.step(1 / 60), c = frame.camera;
+            expect(Math.hypot(c.eye.x - prev.eye.x, c.eye.y - prev.eye.y, c.eye.z - prev.eye.z)).toBeLessThan(0.6);
+            expect(turnDeg(prev, c)).toBeLessThan(1.5);
+            expect(Math.abs(c.fov - prev.fov)).toBeLessThan(0.2);
+            expect(c.eye.y).toBeGreaterThan(100.3);
+            // (following the ride in, the player's bike is in the picture)
+            if (scene.t > 1 && scene.t < scene.craneAt) {
+                const bike = frame.riders[scene.playerIndex];
+                const q = EndShot.project(c.eye, c.yaw, c.pitch, c.fov, 16 / 9, { x: bike.x, y: 100.8, z: bike.z });
+                frames++;
+                if (q && Math.abs(q.x) < 0.9 && Math.abs(q.y) < 0.9) inView++;
+            }
+            if (frame.held) {
+                if (held) expect([c.eye.x, c.eye.y, c.eye.z, c.yaw, c.pitch]).toEqual([held.eye.x, held.eye.y, held.eye.z, held.yaw, held.pitch]);
+                else held = c;
+                expect(frame.card).toBe(scene.t >= scene.cardAt);
+            } else expect(frame.card).toBe(false);
+            prev = c;
+        }
+        expect(inView).toBe(frames);
+        expect(held.eye).toEqual(scene.hold.eye);
+    });
+
+    // The view: the parked bikes and riders in the foreground lower third, to one side (the card comes up on the
+    // other), the view beyond, whichever way the row of bays runs
+    test('the composed view holds every bike and rider low in the picture, to one side, on any row and screen', () => {
         for (let turn = 0; turn < 360; turn += 30) {
             const a = turn * Math.PI / 180;
-            const slots = [0, 1, 2, 3, 4, 5, 6, 7].map(k => ({ x: 20 + Math.sin(a) * k * 2.2, z: 510 + Math.cos(a) * k * 2.2, heading: a + Math.PI / 2 }));
-            const park = { ...stop, id: 'c-end', kind: 'carpark', slots };
-            for (const aspect of [16 / 9, 4 / 3, 9 / 16]) {
-                const hold = StopScene.holdOf(park, flat, aspect, 6);
-                const cam = new THREE.PerspectiveCamera(hold.fov, aspect, 0.1, 1000);
-                cam.position.set(hold.eye.x, hold.eye.y, hold.eye.z);
-                cam.rotation.set(hold.pitch, hold.yaw, hold.roll, 'YXZ');
-                cam.updateMatrixWorld(true);
-                for (const slot of slots.slice(0, 6)) for (const along of [-1.2, 1.2]) for (const up of [0, 1.8]) {
-                    const p = new THREE.Vector3(slot.x + Math.sin(slot.heading) * along, 100 + up, slot.z + Math.cos(slot.heading) * along).project(cam);
-                    expect({ turn, aspect, inside: Math.abs(p.x) <= 1 && Math.abs(p.y) <= 1 && p.z < 1 }).toEqual({ turn, aspect, inside: true });
+            const slots = [0, 1, -1, 2, -2, 3, -3, 4].map(k => ({ x: 20 + Math.sin(a) * k * 2.2, z: 510 + Math.cos(a) * k * 2.2, heading: a + Math.PI / 2 }));
+            const ring = [[-14, -14], [14, -14], [14, 14], [-14, 14], [-14, -14]].map(([x, z]) => [20 + x, 510 + z]);
+            const park = { ...stop, id: 'c-end', kind: 'carpark', slots, ring, path: [[0, 500]] };
+            for (const aspect of [16 / 9, 4 / 3]) {
+                const plan = EndShot.bays(park, 6, null);
+                const hold = EndShot.compose(park, plan.bays, flat, aspect);
+                expect({ turn, aspect, composed: !!hold }).toEqual({ turn, aspect, composed: true });
+                const ys = [];
+                for (const b of plan.bays) for (const along of [-1.1, 1.1]) for (const up of [0, 1.2]) {
+                    const q = EndShot.project(hold.eye, hold.yaw, hold.pitch, hold.fov, aspect, { x: b.x + Math.sin(b.heading) * along, y: 100 + up, z: b.z + Math.cos(b.heading) * along });
+                    expect({ turn, aspect, inside: !!q && Math.abs(q.x) <= 0.95 && q.y >= -0.76 && q.y <= 0.1 }).toEqual({ turn, aspect, inside: true });
+                    expect(q.x * hold.side).toBeGreaterThan(-0.09);
+                    ys.push(q.y);
                 }
+                // (low in the picture: their middle in the lower third)
+                expect(ys.reduce((n, y) => n + y, 0) / ys.length).toBeLessThan(-1 / 3 + 0.1);
+                expect(hold.pitch).toBeGreaterThanOrEqual(EndShot.TUNING.pitchLeastDeg * Math.PI / 180 - 1e-9);
             }
         }
     });
 
-    test('a hold far away is flown to at FLY_MOST_MS on average at the most, with the card after it', () => {
-        const hold = { eye: { x: 0, y: 0, z: 0 } };
-        expect(StopScene.flyTime({ x: 30, y: 0, z: 0 }, hold)).toBe(StopScene.FLY_S);
-        expect(StopScene.flyTime({ x: 0, y: 0, z: 650 }, hold)).toBeCloseTo(650 / StopScene.FLY_MOST_MS, 9);
+    test('a view blocked by a wall in front of the bays is not taken', () => {
+        const plan = EndShot.bays(stop, 4, { x: 1, z: 0 });
+        const open = EndShot.compose(stop, plan.bays, flat);
+        // A wall 12 m high across the composed view's line to the bays
+        const mx = plan.bays.reduce((n, b) => n + b.x, 0) / plan.bays.length, mz = plan.bays.reduce((n, b) => n + b.z, 0) / plan.bays.length;
+        const ex = (open.eye.x + mx) / 2, ez = (open.eye.z + mz) / 2, dx = mz - open.eye.z, dz = -(mx - open.eye.x), l = Math.hypot(dx, dz);
+        const faces = { data: Float64Array.from([ex - dx / l * 30, ez - dz / l * 30, ex + dx / l * 30, ez + dz / l * 30, 112, 112, 90, 90, 0]), count: 1 };
+        const other = EndShot.compose(stop, plan.bays, flat, 16 / 9, faces);
+        expect(other).toBeTruthy();
+        expect(Math.hypot(other.eye.x - open.eye.x, other.eye.z - open.eye.z)).toBeGreaterThan(1);
+        for (const b of plan.bays) expect(EndShot.faceShare(faces, other.eye, { x: b.x, y: 100.9, z: b.z }, 0)).toBe(1);
+    });
+
+    // Traffic parks a rider that rides off the end of the stage out of sight: it finished first, and waits in its bay
+    test('a rider out of sight ahead of the player at the line is parked in the furthest bay from the start', () => {
+        const riders = ridersOf([15]);
+        riders.push({ bike: { character: { id: 'first' } }, s: 470, at: { x: -2.5, z: 470 }, speed: 0, yaw: 0, lean: 0, hidden: true });
+        const scene = new StopScene({ stop, route, riders, ground: flat, camera: chase });
+        const k = scene.riders.findIndex(r => r.bike.character.id === 'first');
+        expect(k).toBe(0);
+        const at = scene.step(0).riders[k];
+        expect(at.parked).toBe(true);
+        expect(Math.hypot(at.x - scene.riders[k].slot.x, at.z - scene.riders[k].slot.z)).toBeLessThan(0.05);
+        expect(Math.abs(EndShot.turn(at.heading, scene.riders[k].slot.heading))).toBeLessThan(0.02);
+    });
+
+    test('a stop that keeps its line, behind the player: it turns round, rides back and parks', () => {
         const behind = { ...stop, keepLine: true };
-        const from = { offset: { x: 0, y: 3, z: -7 }, yaw: 0, pitch: 0, roll: 0, fov: 75 };
-        const scene = new StopScene({ stop: behind, route, riders: [{ bike: {}, s: 1140, player: true, at: { x: -2, z: 1140 }, speed: 14 }], ground: flat, camera: from });
-        expect(scene.flyS).toBeGreaterThan(StopScene.FLY_S);
-        expect(scene.cardAt).toBeGreaterThanOrEqual(scene.flyS + StopScene.HOLD_FIRST_S);
-        // and still no kink in its frames
-        let prev = scene.step(0).camera, move = null;
-        while (scene.t < scene.flyS + 1) {
+        const scene = new StopScene({ stop: behind, route, riders: [{ bike: {}, s: 1140, player: true, at: { x: -2.5, z: 1140 }, speed: 14, yaw: 0 }], ground: flat, camera: chase });
+        const way = scene.riders[0].way;
+        expect(Math.max(...way.z)).toBeGreaterThan(1140 + 11);
+        const end = EndShot.trackAt(scene.ride, 0, 1e9);
+        expect(Math.hypot(end.x - scene.riders[0].slot.x, end.z - scene.riders[0].slot.z)).toBeLessThan(0.05);
+        expect(scene.cardAt).toBeGreaterThanOrEqual(scene.flyS + EndShot.TUNING.holdFirstS);
+        let prev = scene.step(0).camera;
+        while (scene.t < scene.cardAt) {
             const c = scene.step(1 / 60).camera;
-            const m = Math.hypot(c.eye.x - prev.eye.x, c.eye.y - prev.eye.y, c.eye.z - prev.eye.z);
-            if (move !== null) expect(Math.abs(m - move)).toBeLessThan(0.05);
-            move = m;
+            expect(Math.hypot(c.eye.x - prev.eye.x, c.eye.y - prev.eye.y, c.eye.z - prev.eye.z)).toBeLessThan(0.8);
+            expect(turnDeg(prev, c)).toBeLessThan(1.5);
             prev = c;
         }
     });
 
-    test('a hold with its own air eases the haze from the ride\'s with the camera, never in one frame', () => {
+    test('a stop with a hand-set shot holds that place, bearing, pitch and lens; a photo\'s hold sets the way it looks', () => {
+        const own = { ...stop, id: 'd-end', shot: { x: 5, z: 520, upM: 4, bearing: 80, pitch: -6, hfov: 66 } };
+        const hold = EndShot.compose(own, EndShot.bays(own, 3).bays, flat, 16 / 9);
+        expect([hold.eye.x, hold.eye.y, hold.eye.z]).toEqual([5, 104, 520]);
+        expect(hold.yaw).toBeCloseTo(-80 * Math.PI / 180, 9);
+        expect(hold.pitch).toBeCloseTo(-6 * Math.PI / 180, 9);
+        // A photo's hold (bearing 90: east, +x): the composed view looks within yawMostDeg of it
+        const photo = { ...stop, id: 'e-end', hold: { x: 31, z: 510, upM: 1.6, bearing: 90, pitch: -6, hfov: 70 } };
+        const views = EndShot.views(photo, { x: 20, z: 510 }, flat);
+        expect(views[0].x).toBeCloseTo(1, 6);
+        const held = EndShot.compose(photo, EndShot.bays(photo, 4, views[0]).bays, flat, 16 / 9);
+        expect(Math.abs(EndShot.turn(held.yaw, -Math.PI / 2))).toBeLessThanOrEqual(EndShot.TUNING.yawMostDeg * Math.PI / 180 + 1e-9);
+    });
+
+    test('a hold with its own air eases the haze from the ride\'s with the crane, never in one frame', () => {
         const base = { perM: 1 / 4400, most: 0.94 };
         const hold = { haze: { perM: 1 / 7500 } };
-        expect(StopScene.hazeAt(hold, 0, base).perM).toBeCloseTo(base.perM, 12);
-        expect(StopScene.hazeAt(hold, StopScene.FLY_S, base).perM).toBeCloseTo(1 / 7500, 12);
-        expect(StopScene.hazeAt(hold, 1, base).most).toBe(0.94);
-        expect(StopScene.hazeAt({}, 1, base)).toBeNull();
+        expect(StopScene.hazeAt(hold, 5, base, 15, 5).perM).toBeCloseTo(base.perM, 12);
+        expect(StopScene.hazeAt(hold, 15, base, 15, 5).perM).toBeCloseTo(1 / 7500, 12);
+        expect(StopScene.hazeAt(hold, 6, base, 15, 5).most).toBe(0.94);
+        expect(StopScene.hazeAt({}, 1, base, 15, 5)).toBeNull();
         let last = base.perM;
-        for (let t = 1 / 60; t <= StopScene.FLY_S; t += 1 / 60) {
-            const now = StopScene.hazeAt(hold, t, base).perM;
+        for (let t = 5; t <= 15; t += 1 / 60) {
+            const now = StopScene.hazeAt(hold, t, base, 15, 5).perM;
             expect(Math.abs(now - last)).toBeLessThan((base.perM - 1 / 7500) / 100);
             last = now;
         }
     });
 
-    test('a stop with its own hold flies to that place, bearing, pitch and lens', () => {
+    test('a stop with its own photo hold keeps it as the fallback, at that place, bearing, pitch and lens', () => {
         const manifest = JSON.parse(fs.readFileSync(path.join(REPO, 'worlds/gotthard/manifest.json'), 'utf8'));
         const lookout = manifest.stops.find(s => s.id === 'gotthard-north-end');
         const row = StopScene.HOLDS[lookout.id];
         expect(row).toBeTruthy();
-        // (the hold stands on the lookout's own area or within a few metres of its outline)
         const ground = (x, z) => StopScene.planeY(lookout, x, z);
         const hold = StopScene.holdOf(lookout, ground, 2.39);
         expect(hold.eye.x).toBe(row.x);
@@ -287,23 +283,22 @@ describe('the scene', () => {
         expect(hold.eye.y).toBeCloseTo(ground(row.x, row.z) + row.upM, 6);
         expect(hold.yaw).toBeCloseTo(-row.bearing * Math.PI / 180, 9);
         expect(hold.pitch).toBeCloseTo(row.pitch * Math.PI / 180, 9);
-        // The lens shows the photo's width across a wide screen, and no more than vfovMost up and down on a tall one
         expect(StopScene.vfovOf(row.hfov, 1, row.vfovMost)).toBe(row.vfovMost);
         const wide = hold.fov * Math.PI / 180;
         expect(2 * Math.atan(Math.tan(wide / 2) * 2.39) * 180 / Math.PI).toBeCloseTo(row.hfov, 6);
-        const f = StopScene.frame(lookout);
-        expect(Math.hypot(row.x - f.ox, row.z - f.oz)).toBeLessThan(60);
     });
 
-    test('the card comes up CARD_AFTER_S after the player parks; a skip puts everyone parked and off, the card up', () => {
-        const riders = [0, 1, 2, 3, 4, 5].map(k => ({ bike: { character: { id: `r${k}` } }, s: 400, player: k === 0 }));
-        const scene = new StopScene({ stop, route, riders, ground: flat });
+    test('the card waits for the held view and every rider off; a skip puts everyone parked and off, the card up', () => {
+        const riders = ridersOf([10, 20, 30, 40, 50]);
+        const scene = new StopScene({ stop, route, riders, ground: flat, camera: chase });
+        expect(scene.cardAt).toBeGreaterThanOrEqual(scene.allParkedS + StopScene.GET_OFF_S);
         expect(scene.step(scene.cardAt - 0.1).card).toBe(false);
         expect(scene.step(0.2).card).toBe(true);
-        const fresh = new StopScene({ stop, route, riders, ground: flat });
+        const fresh = new StopScene({ stop, route, riders, ground: flat, camera: chase });
         fresh.skip();
         const frame = fresh.step(0);
         expect(frame.card).toBe(true);
+        expect(frame.camera.eye).toEqual(fresh.hold.eye);
         frame.riders.forEach(r => { expect(r.parked).toBe(true); expect(r.stand).toBe(true); });
     });
 });

@@ -6818,10 +6818,13 @@ const stepsRide = async (page) => page.evaluate(async (every, deep) => {
     return { frames, tasks: tasks.length, byKind, slowest, slowestByKind };
 }, Number(option('every') || STEPS_M), option('parts') === 'deep');
 
-// world-shot: the held shot at a leg's end (StopScene.flyAt, StopScene.holdOf, Game.raiseShot). The ride is ridden
-// into its finish line by the autopilot at SHOT_RIDE_MS with the chase camera, and the scene starts there as in a ride.
-// It saves the fly at each moment (--fly seconds), measures the step from the chase camera's last frame to the
-// scene's first (place, aim, lens) and the worst frame of the fly, and the held shot. With --levels it fixes each
+// world-shot: the one shot at a leg's end (EndShot, StopScene, Game.raiseShot). The ride is ridden into its finish
+// line by the autopilot at SHOT_RIDE_MS with the chase camera and the group, and the scene starts there as in a ride:
+// the game rides the player into its bay, the camera follows and cranes to the composed view. It saves the shot at
+// each moment (--fly seconds; into ~/Library/Caches/twisty-world/end-shots by default), measures the step from the
+// chase camera's last frame to the scene's first (place, aim, lens) and the worst frame of the shot, and the held
+// view with the card and without. It fails on a frame of the follow with the player's bike out of the picture, and
+// on the card before the camera has held. With --levels it fixes each
 // graphics level in turn and times the held shot without and with the raise (SHOT_FRAMES frames: the update, the
 // draw and its wait, the GPU timer), and saves the held shot at each. --phone is world-quality's phone (390 x 844 at
 // 3, touch, the CPU 4 times slower). It fails on a step from the chase camera (SHOT_STEP), no bars, or a held shot
@@ -6836,7 +6839,7 @@ const SHOT_FRAME_MS = 50;
 // A step is a frame whose move (or turn, or change of lens) differs from the frame before's by more than this: the fly may
 // be fast (the Tremola's hold is 644 m back), never sudden. The first frame is held to the chase camera's own move
 const SHOT_STEP = { moveM: 0.1, aimDeg: 0.05, lensDeg: 0.02 };
-const SHOT_OUT = join(process.env.HOME || '.', 'Library/Caches/twisty-world/lookout-shots');
+const SHOT_OUT = join(process.env.HOME || '.', 'Library/Caches/twisty-world/end-shots');
 WORLD_PROBES.push('world-shot');
 WORLD['world-shot'] = async (page) => {
     const phone = flag('phone');
@@ -6852,8 +6855,8 @@ WORLD['world-shot'] = async (page) => {
     const out = option('out') || SHOT_OUT;
     mkdirSync(out, { recursive: true });
     const tag = `${option('tag') || option('world') || 'tremola'}${phone ? '-phone' : ''}`;
-    const moments = (option('fly') || '0,1,2,3,4,5,6,8,10,12,14,16,18').split(',').map(Number);
-    await page.addStyleTag({ content: '#finishBanner, .modal-backdrop { visibility: hidden !important; }' });
+    const moments = (option('fly') || '0,1,2,3,4,6,8,10,12,14,16,18,20,22,24').split(',').map(Number);
+    const hidden = await page.addStyleTag({ content: '#finishBanner, .modal-backdrop { visibility: hidden !important; }' });
     // --hold x,z,upM,bearing,pitch,hfov tries another hold for the stop (a candidate pose; the shipped table is not changed)
     const tryHold = option('hold') ? option('hold').split(',').map(Number) : null;
     // --no-raise: the scene with no raise at any level, to tell the raise's cost from the scene's own
@@ -6978,14 +6981,13 @@ WORLD['world-shot'] = async (page) => {
                 return best ? mine.map((v, i) => v !== best[i] ? `${i}:${best[i]}->${v}` : null).filter(Boolean).join(' ') : 'none alike';
             }), t: Math.round(scene.t * 100) / 100, ms: Math.round(t4 - t0), stepMs: Math.round(t1 - t0), updateMs: Math.round(t2 - t1), cullMs: Math.round(t3 - t2), renderMs: Math.round(t4 - t3), newPrograms: (renderer.info.programs ? renderer.info.programs.length : 0) - programs, newGeometries: renderer.info.memory.geometries - memory0.geometries, newTextures: renderer.info.memory.textures - memory0.textures, drawCalls: renderer.info.render.calls, drawTriangles: renderer.info.render.triangles, tasks: [...tasks].sort((a, b) => b.ms - a.ms).slice(0, 4).map(k => `${k.id} ${Math.round(k.ms)}`) });
             poses.push(pose());
-            // (once the camera has passed the bike, the bike is out of the picture: StopScene.OVERTAKE; to the end at a
-            // stop held on a view of its own, a photo's (HOLDS), and until the hold is flown to at one that looks back at
-            // the group)
-            const O = StopScene.OVERTAKE;
-            if (scene.t > O.passFromS + O.passS && scene.t < (StopScene.HOLDS[scene.stop.id] ? scene.flyS + 1 : scene.holdFrom)) {
+            // (while the camera follows the ride in, the player's bike is in the picture; and the card comes only once
+            // the camera has held)
+            if (scene.t > 1 && scene.t < scene.craneAt) {
                 const v = game.vehicle.group.getWorldPosition(new THREE.Vector3()).add(new THREE.Vector3(0, 0.9, 0)).project(cam);
-                if (v.z < 1 && Math.abs(v.x) <= 1 && Math.abs(v.y) <= 1) inView.push(Math.round(scene.t * 100) / 100);
+                if (!(v.z < 1 && Math.abs(v.x) <= 1 && Math.abs(v.y) <= 1)) inView.push(Math.round(scene.t * 100) / 100);
             }
+            if (scene.card && st.cardAt === undefined) st.cardAt = scene.t;
             if (next < moments.length && scene.t >= moments[next] - 1e-6) {
                 const bike = game.vehicle.position;
                 marks.push({ t: moments[next], k: poses.length - 1, camToBikeM: Math.round(Math.hypot(cam.position.x - bike.x, cam.position.z - bike.z) * 10) / 10, back: Math.round(scene.back * 10) / 10 });
@@ -7004,7 +7006,7 @@ WORLD['world-shot'] = async (page) => {
         const slowest = frames.indexOf(Math.max(...frames));
         const top = frames.map((ms, k) => ({ t: Math.round((k + 1) * 100 / 60) / 100, ms: Math.round(ms * 10) / 10 })).sort((a, b) => b.ms - a.ms).slice(0, 6);
         streamer.enqueue = st.enqueue;
-        return { poses, marks, slow, turns, inView: inView.slice(0, 10), inViewFrames: inView.length, flyS: scene.flyS, worstStep: { moveM: worst('moveM'), aimDeg: worst('aimDeg'), lensDeg: worst('lensDeg') }, frameWorstAtS: Math.round((slowest + 1) * 100 / 60) / 100, slowestFrames: top, biggestSteps: big, frameMedianMs: Math.round(sorted[Math.floor(sorted.length / 2)] * 100) / 100, frameWorstMs: Math.round(sorted[sorted.length - 1] * 100) / 100, frames: frames.length };
+        return { poses, marks, slow, turns, outOfView: inView.slice(0, 10), outOfViewFrames: inView.length, cardSeenAt: st.cardAt === undefined ? null : st.cardAt, craneAt: scene.craneAt, flyS: scene.flyS, worstStep: { moveM: worst('moveM'), aimDeg: worst('aimDeg'), lensDeg: worst('lensDeg') }, frameWorstAtS: Math.round((slowest + 1) * 100 / 60) / 100, slowestFrames: top, biggestSteps: big, frameMedianMs: Math.round(sorted[Math.floor(sorted.length / 2)] * 100) / 100, frameWorstMs: Math.round(sorted[sorted.length - 1] * 100) / 100, frames: frames.length };
     };
     const shots = [], profiles = [];
     for (const t of moments) {
@@ -7049,6 +7051,13 @@ WORLD['world-shot'] = async (page) => {
     const heldFile = join(out, `${tag}-held.png`);
     await page.screenshot({ path: heldFile });
     shots.push({ t: 'held', file: heldFile });
+    // (and with the card, faded in over the held view)
+    await hidden.evaluate(node => node.remove());
+    await new Promise(done => setTimeout(done, 1200));
+    const cardFile = join(out, `${tag}-card.png`);
+    await page.screenshot({ path: cardFile });
+    shots.push({ t: 'card', file: cardFile });
+    await page.addStyleTag({ content: '#finishBanner, .modal-backdrop { visibility: hidden !important; }' });
     // --hazes 4400,7000: the held shot again under each haze depth (metres of LandShade.HAZE.perM's 1 / m), to set a
     // hold's own `haze` against the photos; the shot's own haze is put back after
     for (const m of (option('hazes') || '').split(',').filter(Boolean).map(Number)) {
@@ -7092,7 +7101,7 @@ WORLD['world-shot'] = async (page) => {
         }
         await page.evaluate(() => game.quality.release(performance.now()));
     }
-    const result = { ...begun, jump, worstStep: fly.worstStep, flyFrameMedianMs: fly.frameMedianMs, flyFrameWorstMs: fly.frameWorstMs, flyFrameWorstAtS: fly.frameWorstAtS, flySlowest: fly.slowestFrames, flyBiggestSteps: fly.biggestSteps, flySlow: fly.slow, flyS: fly.flyS, flyMarks: fly.marks, flyKinks: fly.turns, profiles, bikeInViewAfterPass: fly.inViewFrames, bikeInViewAt: fly.inView, flyFrames: fly.frames, held, shots, levels, phone };
+    const result = { ...begun, jump, worstStep: fly.worstStep, flyFrameMedianMs: fly.frameMedianMs, flyFrameWorstMs: fly.frameWorstMs, flyFrameWorstAtS: fly.frameWorstAtS, flySlowest: fly.slowestFrames, flyBiggestSteps: fly.biggestSteps, flySlow: fly.slow, flyS: fly.flyS, flyMarks: fly.marks, flyKinks: fly.turns, profiles, bikeOutOfFollow: fly.outOfViewFrames, bikeOutAt: fly.outOfView, cardSeenAt: fly.cardSeenAt, craneAt: fly.craneAt, composed: await page.evaluate(() => game.stopScene ? game.stopScene.composed : null), flyFrames: fly.frames, held, shots, levels, phone };
     writeFileSync(join(out, `${tag}-shot.json`), JSON.stringify(result, null, 1));
     return result;
 };
@@ -7151,7 +7160,8 @@ function shotChecks(results, failures) {
         if (!(shot.worstStep[key] <= most)) failures.push(`world-shot: a frame of the fly changes its ${key} by ${shot.worstStep[key].toFixed(3)} from the frame before, over ${most}`);
     }
     if (!(shot.flyFrameWorstMs <= SHOT_FRAME_MS)) failures.push(`world-shot: a frame of the fly took ${shot.flyFrameWorstMs} ms, over ${SHOT_FRAME_MS}: ${JSON.stringify((shot.flySlow || []).slice(0, 3))}`);
-    if (shot.bikeInViewAfterPass) failures.push(`world-shot: the bike is in the picture in ${shot.bikeInViewAfterPass} frames after the camera passed it (at ${JSON.stringify(shot.bikeInViewAt)} s)`);
+    if (shot.bikeOutOfFollow) failures.push(`world-shot: the player's bike is out of the picture in ${shot.bikeOutOfFollow} frames of the follow (at ${JSON.stringify(shot.bikeOutAt)} s)`);
+    if (shot.cardSeenAt !== null && shot.cardSeenAt < shot.flyS) failures.push(`world-shot: the card came at ${shot.cardSeenAt} s, before the camera held at ${shot.flyS} s`);
     if (!shot.held.bars.every(h => h > 0)) failures.push(`world-shot: the bars are ${JSON.stringify(shot.held.bars)} px high`);
     if (!(shot.held.cameraOverGroundM > 0.2)) failures.push(`world-shot: the held camera is ${shot.held.cameraOverGroundM} m over the ground`);
 }

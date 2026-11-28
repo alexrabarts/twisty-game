@@ -3517,36 +3517,65 @@ class Game {
         this.showFinishScreen();
     }
 
-    // The scene at a leg's end stop (StopScene): bars in, the HUD out, the group pulls in and parks, the riders get off,
-    // and the card comes up in the lower bar. False when the stage has no stop at its end
+    // The scene at a leg's end stop (StopScene, EndShot): bars in, the HUD out, the game rides the player into a bay with
+    // the riders that kept up behind it, the camera in one shot from the chase camera to the composed view, the riders
+    // off, and the card fades in in the lower bar. False when the stage has no stop at its end
     startStopScene() {
-        if (typeof StopScene === 'undefined' || this.stopScene) return false;
+        if (typeof StopScene === 'undefined' || typeof EndShot === 'undefined' || this.stopScene) return false;
         const env = this.environment;
         const stop = StopScene.stopAt(env);
         if (!stop) return false;
         const route = env.route;
-        const crew = this.traffic ? this.traffic.motorcycles.filter(bike => bike.direction === 1 && bike.bikeGroup && bike.bikeGroup.visible && bike.rider) : [];
         const v = this.vehicle;
-        const riders = [{ bike: v, s: v.routeS, player: true, at: { x: v.position.x, z: v.position.z }, speed: v.speed }, ...crew
-            .map(bike => ({ bike, s: route.fromUnits(bike.currentSegment + bike.segmentProgress) }))
-            .sort((a, b) => b.s - a.s)];
+        // A bike down or on its back wheel at the line rides in upright (the clock has stopped: only the picture changes)
+        if (v.crashed || v.isWheelie || v.isJumping) {
+            v.crashed = false;
+            if (v.endFall) v.endFall();
+            v.isWheelie = false;
+            v.wheelieAngle = 0;
+            v.isJumping = false;
+            v.leanAngle = 0;
+        }
+        v.slideAngle = 0;
+        // Every rider of the group with its place on the ride, its own place, speed, heading and lean: the scene takes
+        // the ones that kept up (EndShot.keep), and the rest stay out of the shot
+        const crew = this.traffic ? this.traffic.motorcycles.filter(bike => bike.direction === 1 && bike.bikeGroup && bike.rider) : [];
+        const own = v.projection && Number.isFinite(v.projection.s) && v.projection.index >= 0 ? v.projection.s : v.routeS;
+        const riders = [{ bike: v, s: own, player: true, at: { x: v.position.x, z: v.position.z }, speed: v.speed, yaw: v.yawAngle, lean: v.leanAngle }, ...crew
+            .map(bike => ({ bike, s: route.fromUnits(bike.currentSegment + bike.segmentProgress), at: { x: bike.bikeGroup.position.x, z: bike.bikeGroup.position.z }, speed: bike.currentSpeed, yaw: bike.bikeGroup.rotation.y, lean: bike.leanAngle || 0, hidden: !bike.bikeGroup.visible }))];
         const ground = env.ground;
-        const groundY = (x, z) => ground.groundY(x, z, null);
-        // The fly starts on the chase camera as it was drawn last: its place beside the player, its aim, roll and lens
+        // (read near the ride's place s, where two roads or a road and the land stand one over the other)
+        const hint = {};
+        const groundY = (x, z, s) => {
+            if (!Number.isFinite(s) || !route.indexAt) return ground.groundY(x, z, null);
+            const i = route.indexAt(Math.max(0, Math.min(route.length, s)));
+            hint.start = i - StopScene.HINT_ROWS;
+            hint.end = i + StopScene.HINT_ROWS;
+            return ground.groundY(x, z, hint);
+        };
+        // The shot starts on the chase camera as it was drawn last: its place beside the player, its aim, roll and lens
         const cam = this.camera;
         const aim = new THREE.Euler().setFromQuaternion(cam.quaternion, 'YXZ');
-        const under = groundY(v.position.x, v.position.z);
+        const under = groundY(v.position.x, v.position.z, own);
         const lead = { x: v.position.x, y: Number.isFinite(under) ? under : 0, z: v.position.z };
         const from = { offset: { x: cam.position.x - lead.x, y: cam.position.y - lead.y, z: cam.position.z - lead.z }, yaw: aim.y, pitch: aim.x, roll: aim.z, fov: cam.fov };
-        this.stopScene = new StopScene({ stop, route, riders, ground: groundY, camera: from, aspect: cam.aspect });
+        const h = window.innerHeight || 1;
+        const visible = 1 - 2 * StopScene.barPx(window.innerWidth, h) / h;
+        const faces = (x, z, reach) => env.cameraFaces(x, z, reach);
+        this.stopScene = new StopScene({ stop, route, riders, ground: groundY, camera: from, aspect: cam.aspect, faces, visible });
+        // (the riders that did not keep up arrive later, out of the shot)
+        for (const r of this.stopScene.left) if (r.bike.bikeGroup) r.bike.bikeGroup.visible = false;
         this.raiseShot();
         this.stopScene.view = { bars: StopScene.showBars(document), puffs: [] };
         document.body.classList.add('stop-scene');
-        if (this.soundManager) this.soundManager.stopEngineSound();
-        // Any key or a tap skips to the card; the card's own keys (js/modals.js) take over once it is up
+        // Enter, Space, Escape or a tap skips to the card; a held riding key (and its repeats) does not. The card's own
+        // keys (js/modals.js) take over once it is up
         const skip = (event) => {
             if (!this.stopScene || this.stopScene.card) return;
-            if (event.type === 'keydown') event.preventDefault();
+            if (event.type === 'keydown') {
+                if (event.repeat || !['Enter', 'Space', 'Escape'].includes(event.code)) return;
+                event.preventDefault();
+            }
             this.skipStopScene();
         };
         this.stopScene.view.skip = skip;
@@ -3555,7 +3584,7 @@ class Game {
         return true;
     }
 
-    // Straight to where the scene rests: everyone parked and stood, the card up
+    // Straight to where the scene rests: everyone parked and stood, the camera held, the card up
     skipStopScene() {
         const scene = this.stopScene;
         if (!scene) return;
@@ -3565,52 +3594,75 @@ class Game {
         this.updatePerformanceCulling();
     }
 
-    // One frame of the stop scene: the bikes along their ways in, the riders off once parked, the camera on its path,
-    // the vape clouds, and the card once it is due
+    // One frame of the stop scene: the bikes along their ways in, leaned into the bends, the riders off once parked,
+    // the camera on its shot, the engine at the bike's pace and idling once stopped, the vape clouds, and the card once
+    // it is due
     stepStopScene(dt) {
         const scene = this.stopScene;
         const frame = scene.step(dt);
-        // The crew comes in from wherever it was: what the distance cull hid round it shows from its first frame here
+        // (the group comes in from wherever it was: what the distance cull hid round it shows from its first frame here)
         if (!scene.culled) {
             scene.culled = true;
             this.lastCullTime = 0;
         }
+        // (a rider out of sight at the line comes into the scene one a frame: a bike that took its model while hidden
+        // sends its geometry to the GPU on the frame it is first drawn, and two at once made a frame of 70 to 100 ms)
+        let reveal = 1;
         frame.riders.forEach((at, k) => {
             const r = scene.riders[k];
             const bike = r.bike;
             const group = r.player ? bike.group : bike.bikeGroup;
             if (!group) return;
+            if (r.unseen === undefined) r.unseen = !group.visible;
+            if (r.unseen && at.shown) {
+                if (reveal <= 0) return;
+                reveal--;
+                r.unseen = false;
+            }
             group.visible = at.shown;
             if (!at.shown || at.y === null) return;
             if (r.player) {
                 bike.position.set(at.x, at.y, at.z);
                 bike.yawAngle = at.heading;
                 bike.speed = at.speed;
-                bike.leanAngle = 0;
+                bike.leanAngle = at.lean;
+                bike.currentDeltaTime = dt;
                 if (!r.stood) bike.updateMesh();
                 // (on the stop's ground as the crew are: the ride's ground pose reads the roads, not a car park)
                 group.position.set(at.x, at.y, at.z);
                 group.rotation.x = 0;
-                group.rotation.z = 0;
+                group.rotation.y = at.heading;
+                group.rotation.z = r.stood ? 0 : at.lean;
             } else {
                 bike.currentSpeed = at.speed;
-                bike.leanAngle = 0;
+                bike.leanAngle = at.lean;
                 group.position.set(at.x, at.y, at.z);
-                group.rotation.set(0, at.heading, 0);
+                group.rotation.set(0, at.heading, r.stood ? 0 : at.lean);
             }
             if (at.stand && !r.stood) {
                 r.stood = StopScene.stand(r, (x, z) => this.environment.ground.groundY(x, z, null));
+                group.rotation.z = 0;
                 group.updateMatrixWorld(true);
             }
             if (r.stood && r.actions.includes('vape')) StopScene.puff(this.scene, scene, r, dt);
         });
         StopScene.stepPuffs(this.scene, scene, dt);
-        // The camera on the fly (StopScene.flyAt): its place, aim, roll and lens, with no step from the chase camera
-        const cam = frame.camera, camera = this.camera;
-        if (camera.aspect !== scene.aspect) {
-            scene.aspect = camera.aspect;
-            scene.resize(camera.aspect);
+        // The engine: the bike's pace on a light throttle, idling once it stops, off once the rider gets off
+        const player = scene.riders[scene.playerIndex], at = frame.riders[scene.playerIndex];
+        if (this.soundManager && player && at) {
+            if (player.stood || scene.skipped) this.soundManager.stopEngineSound();
+            else if (this.gearbox && dt > 0) {
+                const share = at.speed / Math.max(1, this.vehicle.maxSpeed);
+                const throttle = at.parked ? 0 : 0.25;
+                this.gearbox.update(dt, share, throttle, 0);
+                const sound = this.soundFrame(dt, throttle, 0);
+                sound.engineOff = false;
+                this.soundManager.update(sound);
+            }
         }
+        // The camera on its shot (EndShot.Camera): its place, aim, roll and lens, with no step from the chase camera
+        const cam = frame.camera, camera = this.camera;
+        if (camera.aspect !== scene.aspect) scene.resize(camera.aspect);
         camera.position.set(cam.eye.x, cam.eye.y, cam.eye.z);
         camera.up.set(0, 1, 0);
         camera.rotation.set(cam.pitch, cam.yaw, cam.roll, 'YXZ');
@@ -3618,11 +3670,23 @@ class Game {
             camera.fov = cam.fov;
             camera.updateProjectionMatrix();
         }
+        // The edge blur reads the bike's own pace in the shot (it held the speed at the line, and blurred the held view's
+        // edges, before), and the speed overlay with it
+        const ratio = at ? at.speed / Math.max(1, this.vehicle.maxSpeed) : 0;
+        if (this.graphics && this.graphics.update) this.graphics.update(dt, ratio, 0);
+        if (this.speedBlurOverlay) {
+            const opacity = Math.min(1, Math.max(0, (ratio - 0.45) / 0.55)).toFixed(2);
+            if (opacity !== this.lastBlurOpacity) {
+                this.lastBlurOpacity = opacity;
+                this.speedBlurOverlay.style.opacity = opacity;
+                this.speedBlurOverlay.style.display = opacity === '0.00' ? 'none' : 'block';
+            }
+        }
         // The sun's shadow box goes with the player into the stop, and the ladder holds its level through the scene
         this.updateShadowCamera();
         this.holdQuality(1000);
-        // The air eases to the hold's with the camera (StopScene.hazeAt), and the drawing raise comes once it holds
-        const haze = typeof LandShade !== 'undefined' ? StopScene.hazeAt(scene.hold, scene.t, LandShade.hazeNow(), scene.flyS) : null;
+        // The air eases to the hold's with the crane (StopScene.hazeAt), and the drawing raise comes once it holds
+        const haze = typeof LandShade !== 'undefined' ? StopScene.hazeAt(scene.hold, scene.t, LandShade.hazeNow(), scene.flyS, scene.craneAt) : null;
         if (haze) LandShade.writeHaze(haze);
         if (frame.held && !scene.drawRaised) {
             scene.drawRaised = true;
@@ -3643,7 +3707,9 @@ class Game {
         const restarts = this.restarts > 0 ? `<div class="finish-board">${this.restarts} ${this.restarts === 1 ? 'restart' : 'restarts'}, +${this.restarts * Game.RESTART_PENALTY_MS / 1000} s in your time</div>` : '';
         const banner = document.createElement('div');
         banner.id = 'finishBanner';
-        banner.className = 'finish-banner stop-card';
+        // (on the side of the picture the parked group is not on: EndShot.compose holds it to one side)
+        const side = scene.hold && scene.hold.side ? (scene.hold.side > 0 ? ' stop-card-left' : ' stop-card-right') : '';
+        banner.className = `finish-banner stop-card${side}`;
         banner.innerHTML = `
             <div class="finish-main">
                 <div class="finish-title">STAGE COMPLETE</div>
