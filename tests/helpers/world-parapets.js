@@ -9,7 +9,8 @@
 // the parapet's foot), the wall goes on past its parapet's end, and the metres it goes on, read along the line of the
 // parapet's end and on round a bend, are `pastM`. Where that coping runs into a structure (a bridge's deck or parapet, a viaduct's stone:
 // the road works' groups 1 and 4) within `structureM` of its end, the wall's last segment meets the structure, whose
-// own parapet is the guard there (RoadMesh.edgeWorks `abutsAt`): `structure`.
+// own parapet is the guard there (RoadMesh.edgeWorks `abutsAt`): `structure`. So is a parapet end where a steel rail
+// goes on from it (a wall whose style's guard is a rail, StructureStyles.WALLS): the rail guards the wall past it.
 // A cap with parapet on both sides of it is a joint inside one parapet (`joints`), not an end.
 // parapetReport(store) gives {ends, short, structure, joints}: every parapet end, those whose wall goes on more than
 // `flushM` past it to no structure, worst first, those whose wall goes on to a structure, and the joints.
@@ -23,31 +24,36 @@ export function parapetWindow(game, env, store, rules = PARAPET_RULES) {
     const v = new THREE.Vector3();
     const H = RoadMesh.PARAPET_H_M, deep = RoadMesh.PARAPET_W_M + RoadMesh.STONE_PROUD_M;
     // The structures drawn now, every corner of their triangles hashed in plan (a structure may be another section's)
-    const built = new Map(), cellS = 2;
+    // (and the steel rails a wall carries in its parapet's place, StructureStyles.WALLS `guard`: their panels' corners,
+    // marked as StructureShade's `rail` kind in wallFace x)
+    const built = new Map(), rails = new Map(), cellS = 2;
     for (const group of [...env.roadMeshes.values(), ...env.sideMeshes.values()]) {
         group.traverse(o => {
             if (!o.isMesh || o.name !== 'road-works') return;
             o.updateMatrixWorld(true);
-            const pos = o.geometry.attributes.position;
+            const pos = o.geometry.attributes.position, mark = o.geometry.attributes.wallFace;
+            const RAIL = game.StructureShade ? game.StructureShade.KIND.rail : -1;
             for (const part of o.geometry.groups) {
                 if (part.materialIndex !== 1 && part.materialIndex !== 4) continue;
                 for (let i = part.start; i < part.start + part.count; i++) {
                     v.fromBufferAttribute(pos, i).applyMatrix4(o.matrixWorld);
                     const h = Math.floor(v.x / cellS) * 65536 + Math.floor(v.z / cellS);
                     (built.get(h) || built.set(h, []).get(h)).push([v.x, v.y, v.z]);
+                    if (mark && part.materialIndex === 1 && Math.round(mark.getX(i)) % 16 === RAIL) (rails.get(h) || rails.set(h, []).get(h)).push([v.x, v.y, v.z]);
                 }
             }
         });
     }
-    const structureNear = (x, y, z) => {
+    const near = (map, x, y, z) => {
         const r = rules.structureM;
         for (let cx = Math.floor((x - r) / cellS); cx <= Math.floor((x + r) / cellS); cx++) {
             for (let cz = Math.floor((z - r) / cellS); cz <= Math.floor((z + r) / cellS); cz++) {
-                for (const q of built.get(cx * 65536 + cz) || []) if (Math.hypot(q[0] - x, q[2] - z) <= r && Math.abs(q[1] - y) <= 2) return true;
+                for (const q of map.get(cx * 65536 + cz) || []) if (Math.hypot(q[0] - x, q[2] - z) <= r && Math.abs(q[1] - y) <= 2) return true;
             }
         }
         return false;
     };
+    const structureNear = (x, y, z) => near(built, x, y, z);
     for (const group of [...env.roadMeshes.values(), ...env.sideMeshes.values()]) {
         group.traverse(o => {
             if (!o.isMesh || o.name !== 'road-works' || store.seen.has(o.geometry.uuid)) return;
@@ -122,7 +128,8 @@ export function parapetWindow(game, env, store, rules = PARAPET_RULES) {
                     pz += dz * step;
                     pastM = d;
                 }
-                const structure = pastM >= rules.flushM && structureNear(px, y0, pz);
+                // (a steel rail that takes the parapet's place from its end on guards the wall past it)
+                const structure = pastM >= rules.flushM && (structureNear(px, y0, pz) || near(rails, mx, y0, mz));
                 store.ends.set(id, { x: Math.round(mx * 100) / 100, y: Math.round(y0 * 100) / 100, z: Math.round(mz * 100) / 100, owner: owners ? owners[i / 3] ?? -1 : -1, s: Math.round(env.route.coldLookup(mx, mz, {}).s), pastM: Math.round(pastM * 100) / 100, structure });
             }
         });
