@@ -1583,6 +1583,13 @@ class RoadMesh {
             const id = `${key}${k}`;
             if (wallStyleMemo.has(id)) return wallStyleMemo.get(id);
             const fine = sides.plan && sides.plan.base !== undefined ? sides.plan : null;
+            // (with no plan at all, a foot that gives no `wall`, the wall's kind comes from each edge point alone: one
+            // segment, its own place, dressed masonry)
+            if (!fine && !plan) {
+                const style = StructureStyles.wall(Math.floor(sides[k][key][0] / RoadMesh.WALL_STYLE_M) * 7919 + Math.floor(sides[k][key][2] / RoadMesh.WALL_STYLE_M) * 31, 0);
+                wallStyleMemo.set(id, style);
+                return style;
+            }
             const segs = fine ? fine.seg[key] : plan.seg[key], ends = fine ? fine.end[key] : plan.end[key];
             let i = fine ? sides[k].i - fine.base : k;
             if (fine) while (i + 1 < sides[k + 1].i - fine.base && !segs[i]) i++;
